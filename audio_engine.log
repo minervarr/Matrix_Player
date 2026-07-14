@@ -1,0 +1,1302 @@
+[INFO] Opening USB device VID=32BB PID=0004
+[ERR] Device VID=32BB PID=0004 not found (check libusbK binding via Zadig)
+[INFO] Opening USB device VID=32BB PID=0004
+[ERR] Device VID=32BB PID=0004 not found (check libusbK binding via Zadig)
+[INFO] Opening USB device VID=32BB PID=0004
+[ERR] Device VID=32BB PID=0004 not found (check libusbK binding via Zadig)
+[INFO] Opening USB device VID=32BB PID=0004
+[ERR] Device VID=32BB PID=0004 not found (check libusbK binding via Zadig)
+[INFO] Opening USB device VID=32BB PID=0004
+[ERR] Device VID=32BB PID=0004 not found (check libusbK binding via Zadig)
+[INFO] Opening USB device VID=32BB PID=0004
+[ERR] Device VID=32BB PID=0004 not found (check libusbK binding via Zadig)
+[INFO] Opening USB device VID=32BB PID=0004
+[ERR] Device VID=32BB PID=0004 not found (check libusbK binding via Zadig)
+[INFO] stop() called: streaming=0 eventThreadUsers=0 activeTransfers=0
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] Opening USB device VID=32BB PID=0004
+[ERR] Device VID=32BB PID=0004 not found (check libusbK binding via Zadig)
+[INFO] stop() called: streaming=0 eventThreadUsers=0 activeTransfers=0
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] Opening USB device VID=32BB PID=0004
+[ERR] Device VID=32BB PID=0004 not found (check libusbK binding via Zadig)
+[INFO] Opening USB device VID=32BB PID=0004
+[ERR] Device VID=32BB PID=0004 not found (check libusbK binding via Zadig)
+[INFO] stop() called: streaming=0 eventThreadUsers=0 activeTransfers=0
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] Opening USB device VID=32BB PID=0004
+[ERR] Device VID=32BB PID=0004 not found (check libusbK binding via Zadig)
+[INFO] stop() called: streaming=0 eventThreadUsers=0 activeTransfers=0
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] Opening USB device VID=32BB PID=0004
+[ERR] Device VID=32BB PID=0004 not found (check libusbK binding via Zadig)
+[INFO] stop() called: streaming=0 eventThreadUsers=0 activeTransfers=0
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] Opening USB device VID=32BB PID=0004
+[ERR] Device VID=32BB PID=0004 not found (check libusbK binding via Zadig)
+[INFO] stop() called: streaming=0 eventThreadUsers=0 activeTransfers=0
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] Opening USB device VID=32BB PID=0004
+[ERR] Device VID=32BB PID=0004 not found (check libusbK binding via Zadig)
+[INFO] stop() called: streaming=0 eventThreadUsers=0 activeTransfers=0
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] Opening USB device VID=32BB PID=0004
+[ERR] Device VID=32BB PID=0004 not found (check libusbK binding via Zadig)
+[INFO] stop() called: streaming=0 eventThreadUsers=0 activeTransfers=0
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] Opening USB device VID=32BB PID=0004
+[ERR] Device VID=32BB PID=0004 not found (check libusbK binding via Zadig)
+[INFO] stop() called: streaming=0 eventThreadUsers=0 activeTransfers=0
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] Opening USB device VID=22E1 PID=E203
+[INFO] USB device speed: High
+[INFO] USB device opened: VID=22E1 PID=E203
+[INFO] UAC version: 2 (bcdADC=0x0200) on interface 1
+[DEBUG] UAC2 Clock Source ID: 1
+[DEBUG] UAC2 Input Terminal 3 (type 0x0101) -> Clock 1
+[DEBUG] UAC2 Output Terminal 4 (type 0x0302) -> Clock 1
+[DEBUG] UAC2 Feature Unit 10 <- src 3 ctrls=0x00000003 vol=0 mute=1
+[DEBUG] UAC2 Clock 1: 8 sub-range(s)
+[DEBUG]   sub-range 0: min=44100 max=44100 res=0
+[DEBUG]   sub-range 1: min=48000 max=48000 res=0
+[DEBUG]   sub-range 2: min=88200 max=88200 res=0
+[DEBUG]   sub-range 3: min=96000 max=96000 res=0
+[DEBUG]   sub-range 4: min=176400 max=176400 res=0
+[DEBUG]   sub-range 5: min=192000 max=192000 res=0
+[DEBUG]   sub-range 6: min=352800 max=352800 res=0
+[DEBUG]   sub-range 7: min=384000 max=384000 res=0
+[INFO] No usable Feature Unit with FU_VOLUME found -- software gain only
+[INFO] Parsed 32 format(s), UAC2
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=44100 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=48000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=88200 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=96000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=176400 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=192000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=352800 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=384000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=48000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=88200 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=96000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=176400 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=192000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=352800 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=384000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[INFO] Opening USB device VID=22E1 PID=E203
+[INFO] USB device speed: High
+[INFO] USB device opened: VID=22E1 PID=E203
+[INFO] UAC version: 2 (bcdADC=0x0200) on interface 1
+[DEBUG] UAC2 Clock Source ID: 1
+[DEBUG] UAC2 Input Terminal 3 (type 0x0101) -> Clock 1
+[DEBUG] UAC2 Output Terminal 4 (type 0x0302) -> Clock 1
+[DEBUG] UAC2 Feature Unit 10 <- src 3 ctrls=0x00000003 vol=0 mute=1
+[DEBUG] UAC2 Clock 1: 8 sub-range(s)
+[DEBUG]   sub-range 0: min=44100 max=44100 res=0
+[DEBUG]   sub-range 1: min=48000 max=48000 res=0
+[DEBUG]   sub-range 2: min=88200 max=88200 res=0
+[DEBUG]   sub-range 3: min=96000 max=96000 res=0
+[DEBUG]   sub-range 4: min=176400 max=176400 res=0
+[DEBUG]   sub-range 5: min=192000 max=192000 res=0
+[DEBUG]   sub-range 6: min=352800 max=352800 res=0
+[DEBUG]   sub-range 7: min=384000 max=384000 res=0
+[INFO] No usable Feature Unit with FU_VOLUME found -- software gain only
+[INFO] Parsed 32 format(s), UAC2
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=44100 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=48000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=88200 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=96000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=176400 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=192000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=352800 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=384000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=48000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=88200 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=96000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=176400 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=192000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=352800 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=384000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[INFO] Opening USB device VID=22E1 PID=E203
+[INFO] USB device speed: High
+[INFO] USB device opened: VID=22E1 PID=E203
+[INFO] UAC version: 2 (bcdADC=0x0200) on interface 1
+[DEBUG] UAC2 Clock Source ID: 1
+[DEBUG] UAC2 Input Terminal 3 (type 0x0101) -> Clock 1
+[DEBUG] UAC2 Output Terminal 4 (type 0x0302) -> Clock 1
+[DEBUG] UAC2 Feature Unit 10 <- src 3 ctrls=0x00000003 vol=0 mute=1
+[DEBUG] UAC2 Clock 1: 8 sub-range(s)
+[DEBUG]   sub-range 0: min=44100 max=44100 res=0
+[DEBUG]   sub-range 1: min=48000 max=48000 res=0
+[DEBUG]   sub-range 2: min=88200 max=88200 res=0
+[DEBUG]   sub-range 3: min=96000 max=96000 res=0
+[DEBUG]   sub-range 4: min=176400 max=176400 res=0
+[DEBUG]   sub-range 5: min=192000 max=192000 res=0
+[DEBUG]   sub-range 6: min=352800 max=352800 res=0
+[DEBUG]   sub-range 7: min=384000 max=384000 res=0
+[INFO] No usable Feature Unit with FU_VOLUME found -- software gain only
+[INFO] Parsed 32 format(s), UAC2
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=44100 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=48000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=88200 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=96000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=176400 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=192000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=352800 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=384000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=48000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=88200 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=96000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=176400 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=192000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=352800 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=384000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[INFO] Opening USB device VID=22E1 PID=E203
+[INFO] USB device speed: High
+[INFO] USB device opened: VID=22E1 PID=E203
+[INFO] UAC version: 2 (bcdADC=0x0200) on interface 1
+[DEBUG] UAC2 Clock Source ID: 1
+[DEBUG] UAC2 Input Terminal 3 (type 0x0101) -> Clock 1
+[DEBUG] UAC2 Output Terminal 4 (type 0x0302) -> Clock 1
+[DEBUG] UAC2 Feature Unit 10 <- src 3 ctrls=0x00000003 vol=0 mute=1
+[DEBUG] UAC2 Clock 1: 8 sub-range(s)
+[DEBUG]   sub-range 0: min=44100 max=44100 res=0
+[DEBUG]   sub-range 1: min=48000 max=48000 res=0
+[DEBUG]   sub-range 2: min=88200 max=88200 res=0
+[DEBUG]   sub-range 3: min=96000 max=96000 res=0
+[DEBUG]   sub-range 4: min=176400 max=176400 res=0
+[DEBUG]   sub-range 5: min=192000 max=192000 res=0
+[DEBUG]   sub-range 6: min=352800 max=352800 res=0
+[DEBUG]   sub-range 7: min=384000 max=384000 res=0
+[INFO] No usable Feature Unit with FU_VOLUME found -- software gain only
+[INFO] Parsed 32 format(s), UAC2
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=44100 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=48000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=88200 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=96000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=176400 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=192000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=352800 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=384000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=48000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=88200 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=96000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=176400 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=192000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=352800 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=384000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[INFO] Opening USB device VID=22E1 PID=E203
+[INFO] USB device speed: High
+[INFO] USB device opened: VID=22E1 PID=E203
+[INFO] UAC version: 2 (bcdADC=0x0200) on interface 1
+[DEBUG] UAC2 Clock Source ID: 1
+[DEBUG] UAC2 Input Terminal 3 (type 0x0101) -> Clock 1
+[DEBUG] UAC2 Output Terminal 4 (type 0x0302) -> Clock 1
+[DEBUG] UAC2 Feature Unit 10 <- src 3 ctrls=0x00000003 vol=0 mute=1
+[DEBUG] UAC2 Clock 1: 8 sub-range(s)
+[DEBUG]   sub-range 0: min=44100 max=44100 res=0
+[DEBUG]   sub-range 1: min=48000 max=48000 res=0
+[DEBUG]   sub-range 2: min=88200 max=88200 res=0
+[DEBUG]   sub-range 3: min=96000 max=96000 res=0
+[DEBUG]   sub-range 4: min=176400 max=176400 res=0
+[DEBUG]   sub-range 5: min=192000 max=192000 res=0
+[DEBUG]   sub-range 6: min=352800 max=352800 res=0
+[DEBUG]   sub-range 7: min=384000 max=384000 res=0
+[INFO] No usable Feature Unit with FU_VOLUME found -- software gain only
+[INFO] Parsed 32 format(s), UAC2
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=44100 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=48000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=88200 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=96000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=176400 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=192000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=352800 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=384000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=48000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=88200 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=96000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=176400 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=192000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=352800 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=384000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[INFO] Opening USB device VID=22E1 PID=E203
+[INFO] USB device speed: High
+[INFO] USB device opened: VID=22E1 PID=E203
+[INFO] UAC version: 2 (bcdADC=0x0200) on interface 1
+[DEBUG] UAC2 Clock Source ID: 1
+[DEBUG] UAC2 Input Terminal 3 (type 0x0101) -> Clock 1
+[DEBUG] UAC2 Output Terminal 4 (type 0x0302) -> Clock 1
+[DEBUG] UAC2 Feature Unit 10 <- src 3 ctrls=0x00000003 vol=0 mute=1
+[DEBUG] UAC2 Clock 1: 8 sub-range(s)
+[DEBUG]   sub-range 0: min=44100 max=44100 res=0
+[DEBUG]   sub-range 1: min=48000 max=48000 res=0
+[DEBUG]   sub-range 2: min=88200 max=88200 res=0
+[DEBUG]   sub-range 3: min=96000 max=96000 res=0
+[DEBUG]   sub-range 4: min=176400 max=176400 res=0
+[DEBUG]   sub-range 5: min=192000 max=192000 res=0
+[DEBUG]   sub-range 6: min=352800 max=352800 res=0
+[DEBUG]   sub-range 7: min=384000 max=384000 res=0
+[INFO] No usable Feature Unit with FU_VOLUME found -- software gain only
+[INFO] Parsed 32 format(s), UAC2
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=44100 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=48000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=88200 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=96000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=176400 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=192000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=352800 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=384000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=48000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=88200 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=96000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=176400 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=192000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=352800 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=384000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[INFO] Opening USB device VID=22E1 PID=E203
+[INFO] USB device speed: High
+[INFO] USB device opened: VID=22E1 PID=E203
+[INFO] UAC version: 2 (bcdADC=0x0200) on interface 1
+[DEBUG] UAC2 Clock Source ID: 1
+[DEBUG] UAC2 Input Terminal 3 (type 0x0101) -> Clock 1
+[DEBUG] UAC2 Output Terminal 4 (type 0x0302) -> Clock 1
+[DEBUG] UAC2 Feature Unit 10 <- src 3 ctrls=0x00000003 vol=0 mute=1
+[DEBUG] UAC2 Clock 1: 8 sub-range(s)
+[DEBUG]   sub-range 0: min=44100 max=44100 res=0
+[DEBUG]   sub-range 1: min=48000 max=48000 res=0
+[DEBUG]   sub-range 2: min=88200 max=88200 res=0
+[DEBUG]   sub-range 3: min=96000 max=96000 res=0
+[DEBUG]   sub-range 4: min=176400 max=176400 res=0
+[DEBUG]   sub-range 5: min=192000 max=192000 res=0
+[DEBUG]   sub-range 6: min=352800 max=352800 res=0
+[DEBUG]   sub-range 7: min=384000 max=384000 res=0
+[INFO] No usable Feature Unit with FU_VOLUME found -- software gain only
+[INFO] Parsed 32 format(s), UAC2
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=44100 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=48000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=88200 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=96000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=176400 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=192000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=352800 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=384000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=48000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=88200 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=96000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=176400 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=192000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=352800 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=384000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[INFO] Opening USB device VID=22E1 PID=E203
+[INFO] USB device speed: High
+[INFO] USB device opened: VID=22E1 PID=E203
+[INFO] UAC version: 2 (bcdADC=0x0200) on interface 1
+[DEBUG] UAC2 Clock Source ID: 1
+[DEBUG] UAC2 Input Terminal 3 (type 0x0101) -> Clock 1
+[DEBUG] UAC2 Output Terminal 4 (type 0x0302) -> Clock 1
+[DEBUG] UAC2 Feature Unit 10 <- src 3 ctrls=0x00000003 vol=0 mute=1
+[DEBUG] UAC2 Clock 1: 8 sub-range(s)
+[DEBUG]   sub-range 0: min=44100 max=44100 res=0
+[DEBUG]   sub-range 1: min=48000 max=48000 res=0
+[DEBUG]   sub-range 2: min=88200 max=88200 res=0
+[DEBUG]   sub-range 3: min=96000 max=96000 res=0
+[DEBUG]   sub-range 4: min=176400 max=176400 res=0
+[DEBUG]   sub-range 5: min=192000 max=192000 res=0
+[DEBUG]   sub-range 6: min=352800 max=352800 res=0
+[DEBUG]   sub-range 7: min=384000 max=384000 res=0
+[INFO] No usable Feature Unit with FU_VOLUME found -- software gain only
+[INFO] Parsed 32 format(s), UAC2
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=44100 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=48000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=88200 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=96000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=176400 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=192000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=352800 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=384000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=48000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=88200 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=96000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=176400 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=192000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=352800 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=384000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[INFO] stop() called: streaming=0 eventThreadUsers=0 activeTransfers=0
+[INFO] configure requested: rate=44100 ch=2 bits=24 preferDsd=0
+[INFO] Selected alt=2 (isDsd=0) for rate=44100 ch=2 bits=24
+[INFO] Configured: rate=44100 ch=2 bits=24 subslot=3 iface=2 alt=2 ep=0x03 UAC2
+[INFO] Ring buffer allocated in configure(): 793800 bytes (3000 ms)
+[INFO] Starting: iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 maxpkt=0x012c(eff=300) speed=High fpp=5 bpp=30 UAC2
+[INFO] Ring buffer reused from configure(): 793800 bytes, 362496 bytes pre-filled
+[DEBUG] mlock ring buffer failed: No error (non-fatal)
+[INFO] detach_kernel_driver(AC iface 1): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] detach_kernel_driver(AS iface 2): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] Claimed AC interface 1
+[INFO] UAC2: set sample rate 44100 Hz on clock source 1
+[ERR] UAC2: GET_CUR sample_rate=16777216 Hz but requested 44100 Hz — SET_CUR may have been ignored
+[ERR] UAC2: clock reports INVALID after rate change
+[INFO] Working set: min=67108864 max=268435456 (for VirtualLock budget)
+[INFO] Pre-fill: 64/64 transfers full, avg fill 100% (67734/67734 bytes), ring=726060 bytes remaining
+[INFO] 64/64 initial transfers submitted
+[INFO] USB audio streaming started (64 transfers, ring=793800 bytes)
+[INFO] Event thread: MMCSS Pro Audio
+[INFO] Event thread: THREAD_PRIORITY_TIME_CRITICAL
+[INFO] Event thread started
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] Opening USB device VID=32BB PID=0004
+[ERR] Device VID=32BB PID=0004 not found (check libusbK binding via Zadig)
+[INFO] Opening USB device VID=32BB PID=0004
+[ERR] Device VID=32BB PID=0004 not found (check libusbK binding via Zadig)
+[INFO] Opening USB device VID=22E1 PID=E203
+[INFO] USB device speed: High
+[INFO] USB device opened: VID=22E1 PID=E203
+[INFO] UAC version: 2 (bcdADC=0x0200) on interface 1
+[DEBUG] UAC2 Clock Source ID: 1
+[DEBUG] UAC2 Input Terminal 3 (type 0x0101) -> Clock 1
+[DEBUG] UAC2 Output Terminal 4 (type 0x0302) -> Clock 1
+[DEBUG] UAC2 Feature Unit 10 <- src 3 ctrls=0x00000003 vol=0 mute=1
+[DEBUG] UAC2 Clock 1: 8 sub-range(s)
+[DEBUG]   sub-range 0: min=44100 max=44100 res=0
+[DEBUG]   sub-range 1: min=48000 max=48000 res=0
+[DEBUG]   sub-range 2: min=88200 max=88200 res=0
+[DEBUG]   sub-range 3: min=96000 max=96000 res=0
+[DEBUG]   sub-range 4: min=176400 max=176400 res=0
+[DEBUG]   sub-range 5: min=192000 max=192000 res=0
+[DEBUG]   sub-range 6: min=352800 max=352800 res=0
+[DEBUG]   sub-range 7: min=384000 max=384000 res=0
+[INFO] No usable Feature Unit with FU_VOLUME found -- software gain only
+[INFO] Parsed 32 format(s), UAC2
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=44100 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=48000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=88200 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=96000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=176400 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=192000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=352800 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=384000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=48000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=88200 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=96000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=176400 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=192000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=352800 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=384000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[INFO] Opening USB device VID=22E1 PID=E203
+[INFO] USB device speed: High
+[INFO] USB device opened: VID=22E1 PID=E203
+[INFO] UAC version: 2 (bcdADC=0x0200) on interface 1
+[DEBUG] UAC2 Clock Source ID: 1
+[DEBUG] UAC2 Input Terminal 3 (type 0x0101) -> Clock 1
+[DEBUG] UAC2 Output Terminal 4 (type 0x0302) -> Clock 1
+[DEBUG] UAC2 Feature Unit 10 <- src 3 ctrls=0x00000003 vol=0 mute=1
+[DEBUG] UAC2 Clock 1: 8 sub-range(s)
+[DEBUG]   sub-range 0: min=44100 max=44100 res=0
+[DEBUG]   sub-range 1: min=48000 max=48000 res=0
+[DEBUG]   sub-range 2: min=88200 max=88200 res=0
+[DEBUG]   sub-range 3: min=96000 max=96000 res=0
+[DEBUG]   sub-range 4: min=176400 max=176400 res=0
+[DEBUG]   sub-range 5: min=192000 max=192000 res=0
+[DEBUG]   sub-range 6: min=352800 max=352800 res=0
+[DEBUG]   sub-range 7: min=384000 max=384000 res=0
+[INFO] No usable Feature Unit with FU_VOLUME found -- software gain only
+[INFO] Parsed 32 format(s), UAC2
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=44100 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=48000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=88200 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=96000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=176400 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=192000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=352800 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=384000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=48000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=88200 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=96000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=176400 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=192000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=352800 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=384000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[INFO] Opening USB device VID=22E1 PID=E203
+[INFO] USB device speed: High
+[INFO] USB device opened: VID=22E1 PID=E203
+[INFO] UAC version: 2 (bcdADC=0x0200) on interface 1
+[DEBUG] UAC2 Clock Source ID: 1
+[DEBUG] UAC2 Input Terminal 3 (type 0x0101) -> Clock 1
+[DEBUG] UAC2 Output Terminal 4 (type 0x0302) -> Clock 1
+[DEBUG] UAC2 Feature Unit 10 <- src 3 ctrls=0x00000003 vol=0 mute=1
+[DEBUG] UAC2 Clock 1: 8 sub-range(s)
+[DEBUG]   sub-range 0: min=44100 max=44100 res=0
+[DEBUG]   sub-range 1: min=48000 max=48000 res=0
+[DEBUG]   sub-range 2: min=88200 max=88200 res=0
+[DEBUG]   sub-range 3: min=96000 max=96000 res=0
+[DEBUG]   sub-range 4: min=176400 max=176400 res=0
+[DEBUG]   sub-range 5: min=192000 max=192000 res=0
+[DEBUG]   sub-range 6: min=352800 max=352800 res=0
+[DEBUG]   sub-range 7: min=384000 max=384000 res=0
+[INFO] No usable Feature Unit with FU_VOLUME found -- software gain only
+[INFO] Parsed 32 format(s), UAC2
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=44100 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=48000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=88200 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=96000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=176400 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=192000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=352800 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=384000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=48000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=88200 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=96000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=176400 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=192000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=352800 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=384000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[INFO] Opening USB device VID=22E1 PID=E203
+[INFO] USB device speed: High
+[INFO] USB device opened: VID=22E1 PID=E203
+[INFO] UAC version: 2 (bcdADC=0x0200) on interface 1
+[DEBUG] UAC2 Clock Source ID: 1
+[DEBUG] UAC2 Input Terminal 3 (type 0x0101) -> Clock 1
+[DEBUG] UAC2 Output Terminal 4 (type 0x0302) -> Clock 1
+[DEBUG] UAC2 Feature Unit 10 <- src 3 ctrls=0x00000003 vol=0 mute=1
+[DEBUG] UAC2 Clock 1: 8 sub-range(s)
+[DEBUG]   sub-range 0: min=44100 max=44100 res=0
+[DEBUG]   sub-range 1: min=48000 max=48000 res=0
+[DEBUG]   sub-range 2: min=88200 max=88200 res=0
+[DEBUG]   sub-range 3: min=96000 max=96000 res=0
+[DEBUG]   sub-range 4: min=176400 max=176400 res=0
+[DEBUG]   sub-range 5: min=192000 max=192000 res=0
+[DEBUG]   sub-range 6: min=352800 max=352800 res=0
+[DEBUG]   sub-range 7: min=384000 max=384000 res=0
+[INFO] No usable Feature Unit with FU_VOLUME found -- software gain only
+[INFO] Parsed 32 format(s), UAC2
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=44100 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=48000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=88200 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=96000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=176400 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=192000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=352800 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=384000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=48000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=88200 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=96000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=176400 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=192000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=352800 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=384000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[INFO] Opening USB device VID=22E1 PID=E203
+[INFO] USB device speed: High
+[INFO] USB device opened: VID=22E1 PID=E203
+[INFO] UAC version: 2 (bcdADC=0x0200) on interface 1
+[DEBUG] UAC2 Clock Source ID: 1
+[DEBUG] UAC2 Input Terminal 3 (type 0x0101) -> Clock 1
+[DEBUG] UAC2 Output Terminal 4 (type 0x0302) -> Clock 1
+[DEBUG] UAC2 Feature Unit 10 <- src 3 ctrls=0x00000003 vol=0 mute=1
+[DEBUG] UAC2 Clock 1: 8 sub-range(s)
+[DEBUG]   sub-range 0: min=44100 max=44100 res=0
+[DEBUG]   sub-range 1: min=48000 max=48000 res=0
+[DEBUG]   sub-range 2: min=88200 max=88200 res=0
+[DEBUG]   sub-range 3: min=96000 max=96000 res=0
+[DEBUG]   sub-range 4: min=176400 max=176400 res=0
+[DEBUG]   sub-range 5: min=192000 max=192000 res=0
+[DEBUG]   sub-range 6: min=352800 max=352800 res=0
+[DEBUG]   sub-range 7: min=384000 max=384000 res=0
+[INFO] No usable Feature Unit with FU_VOLUME found -- software gain only
+[INFO] Parsed 32 format(s), UAC2
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=44100 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=48000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=88200 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=96000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=176400 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=192000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=352800 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=384000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=48000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=88200 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=96000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=176400 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=192000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=352800 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=384000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[INFO] Opening USB device VID=22E1 PID=E203
+[INFO] USB device speed: High
+[INFO] USB device opened: VID=22E1 PID=E203
+[INFO] UAC version: 2 (bcdADC=0x0200) on interface 1
+[DEBUG] UAC2 Clock Source ID: 1
+[DEBUG] UAC2 Input Terminal 3 (type 0x0101) -> Clock 1
+[DEBUG] UAC2 Output Terminal 4 (type 0x0302) -> Clock 1
+[DEBUG] UAC2 Feature Unit 10 <- src 3 ctrls=0x00000003 vol=0 mute=1
+[DEBUG] UAC2 Clock 1: 8 sub-range(s)
+[DEBUG]   sub-range 0: min=44100 max=44100 res=0
+[DEBUG]   sub-range 1: min=48000 max=48000 res=0
+[DEBUG]   sub-range 2: min=88200 max=88200 res=0
+[DEBUG]   sub-range 3: min=96000 max=96000 res=0
+[DEBUG]   sub-range 4: min=176400 max=176400 res=0
+[DEBUG]   sub-range 5: min=192000 max=192000 res=0
+[DEBUG]   sub-range 6: min=352800 max=352800 res=0
+[DEBUG]   sub-range 7: min=384000 max=384000 res=0
+[INFO] No usable Feature Unit with FU_VOLUME found -- software gain only
+[INFO] Parsed 32 format(s), UAC2
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=44100 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=48000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=88200 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=96000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=176400 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=192000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=352800 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=384000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=48000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=88200 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=96000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=176400 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=192000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=352800 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=384000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[INFO] stop() called: streaming=0 eventThreadUsers=0 activeTransfers=0
+[INFO] configure requested: rate=44100 ch=2 bits=24 preferDsd=0
+[INFO] Selected alt=2 (isDsd=0) for rate=44100 ch=2 bits=24
+[INFO] Configured: rate=44100 ch=2 bits=24 subslot=3 iface=2 alt=2 ep=0x03 UAC2
+[INFO] Ring buffer allocated in configure(): 793800 bytes (3000 ms)
+[INFO] Starting: iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 maxpkt=0x012c(eff=300) speed=High fpp=5 bpp=30 UAC2
+[INFO] Ring buffer reused from configure(): 793800 bytes, 712704 bytes pre-filled
+[DEBUG] mlock ring buffer failed: No error (non-fatal)
+[INFO] detach_kernel_driver(AC iface 1): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] detach_kernel_driver(AS iface 2): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] Claimed AC interface 1
+[INFO] UAC2: set sample rate 44100 Hz on clock source 1
+[ERR] UAC2: GET_CUR sample_rate=16777216 Hz but requested 44100 Hz — SET_CUR may have been ignored
+[ERR] UAC2: clock reports INVALID after rate change
+[INFO] Working set: min=67108864 max=268435456 (for VirtualLock budget)
+[INFO] Pre-fill: 64/64 transfers full, avg fill 100% (67734/67734 bytes), ring=726060 bytes remaining
+[INFO] 64/64 initial transfers submitted
+[INFO] USB audio streaming started (64 transfers, ring=793800 bytes)
+[INFO] Event thread: MMCSS Pro Audio
+[INFO] Event thread: THREAD_PRIORITY_TIME_CRITICAL
+[INFO] Event thread started
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] stop() called: streaming=1 eventThreadUsers=1 activeTransfers=64
+[INFO] Event thread exited
+[INFO] USB audio streaming stopped
+[INFO] configure requested: rate=44100 ch=2 bits=24 preferDsd=0
+[INFO] Selected alt=2 (isDsd=0) for rate=44100 ch=2 bits=24
+[INFO] Configured: rate=44100 ch=2 bits=24 subslot=3 iface=2 alt=2 ep=0x03 UAC2
+[INFO] Ring buffer allocated in configure(): 793800 bytes (3000 ms)
+[INFO] Starting: iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 maxpkt=0x012c(eff=300) speed=High fpp=5 bpp=30 UAC2
+[INFO] Ring buffer reused from configure(): 793800 bytes, 400896 bytes pre-filled
+[DEBUG] mlock ring buffer: 793800 bytes locked
+[INFO] detach_kernel_driver(AC iface 1): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] detach_kernel_driver(AS iface 2): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] Claimed AC interface 1
+[INFO] UAC2: set sample rate 44100 Hz on clock source 1
+[ERR] UAC2: GET_CUR sample_rate=16777216 Hz but requested 44100 Hz — SET_CUR may have been ignored
+[ERR] UAC2: clock reports INVALID after rate change
+[INFO] Working set: min=67108864 max=268435456 (for VirtualLock budget)
+[INFO] Pre-fill: 64/64 transfers full, avg fill 100% (67734/67734 bytes), ring=726060 bytes remaining
+[INFO] 64/64 initial transfers submitted
+[INFO] USB audio streaming started (64 transfers, ring=793800 bytes)
+[INFO] Event thread: MMCSS Pro Audio
+[INFO] Event thread: THREAD_PRIORITY_TIME_CRITICAL
+[INFO] Event thread started
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] stop() called: streaming=1 eventThreadUsers=1 activeTransfers=64
+[INFO] Event thread exited
+[INFO] USB audio streaming stopped
+[INFO] configure requested: rate=44100 ch=2 bits=24 preferDsd=0
+[INFO] Selected alt=2 (isDsd=0) for rate=44100 ch=2 bits=24
+[INFO] Configured: rate=44100 ch=2 bits=24 subslot=3 iface=2 alt=2 ep=0x03 UAC2
+[INFO] Ring buffer allocated in configure(): 793800 bytes (3000 ms)
+[INFO] Starting: iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 maxpkt=0x012c(eff=300) speed=High fpp=5 bpp=30 UAC2
+[INFO] Ring buffer reused from configure(): 793800 bytes, 540672 bytes pre-filled
+[DEBUG] mlock ring buffer: 793800 bytes locked
+[INFO] detach_kernel_driver(AC iface 1): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] detach_kernel_driver(AS iface 2): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] Claimed AC interface 1
+[INFO] UAC2: set sample rate 44100 Hz on clock source 1
+[ERR] UAC2: GET_CUR sample_rate=16777216 Hz but requested 44100 Hz — SET_CUR may have been ignored
+[ERR] UAC2: clock reports INVALID after rate change
+[INFO] Working set: min=67108864 max=268435456 (for VirtualLock budget)
+[INFO] Pre-fill: 64/64 transfers full, avg fill 100% (67734/67734 bytes), ring=726060 bytes remaining
+[INFO] 64/64 initial transfers submitted
+[INFO] USB audio streaming started (64 transfers, ring=793800 bytes)
+[INFO] Event thread: MMCSS Pro Audio
+[INFO] Event thread: THREAD_PRIORITY_TIME_CRITICAL
+[INFO] Event thread started
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] stop() called: streaming=1 eventThreadUsers=1 activeTransfers=64
+[INFO] Event thread exited
+[INFO] USB audio streaming stopped
+[INFO] configure requested: rate=44100 ch=2 bits=24 preferDsd=0
+[INFO] Selected alt=2 (isDsd=0) for rate=44100 ch=2 bits=24
+[INFO] Configured: rate=44100 ch=2 bits=24 subslot=3 iface=2 alt=2 ep=0x03 UAC2
+[INFO] Ring buffer allocated in configure(): 793800 bytes (3000 ms)
+[INFO] Starting: iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 maxpkt=0x012c(eff=300) speed=High fpp=5 bpp=30 UAC2
+[INFO] Ring buffer reused from configure(): 793800 bytes, 516096 bytes pre-filled
+[DEBUG] mlock ring buffer: 793800 bytes locked
+[INFO] detach_kernel_driver(AC iface 1): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] detach_kernel_driver(AS iface 2): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] Claimed AC interface 1
+[INFO] UAC2: set sample rate 44100 Hz on clock source 1
+[ERR] UAC2: GET_CUR sample_rate=16777216 Hz but requested 44100 Hz — SET_CUR may have been ignored
+[ERR] UAC2: clock reports INVALID after rate change
+[INFO] Working set: min=67108864 max=268435456 (for VirtualLock budget)
+[INFO] Pre-fill: 64/64 transfers full, avg fill 100% (67734/67734 bytes), ring=726060 bytes remaining
+[INFO] 64/64 initial transfers submitted
+[INFO] USB audio streaming started (64 transfers, ring=793800 bytes)
+[INFO] Event thread: MMCSS Pro Audio
+[INFO] Event thread: THREAD_PRIORITY_TIME_CRITICAL
+[INFO] Event thread started
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] stop() called: streaming=1 eventThreadUsers=1 activeTransfers=64
+[INFO] Event thread exited
+[INFO] USB audio streaming stopped
+[INFO] configure requested: rate=44100 ch=2 bits=24 preferDsd=0
+[INFO] Selected alt=2 (isDsd=0) for rate=44100 ch=2 bits=24
+[INFO] Configured: rate=44100 ch=2 bits=24 subslot=3 iface=2 alt=2 ep=0x03 UAC2
+[INFO] Ring buffer allocated in configure(): 793800 bytes (3000 ms)
+[INFO] Starting: iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 maxpkt=0x012c(eff=300) speed=High fpp=5 bpp=30 UAC2
+[INFO] Ring buffer reused from configure(): 793800 bytes, 589824 bytes pre-filled
+[DEBUG] mlock ring buffer: 793800 bytes locked
+[INFO] detach_kernel_driver(AC iface 1): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] detach_kernel_driver(AS iface 2): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] Claimed AC interface 1
+[INFO] UAC2: set sample rate 44100 Hz on clock source 1
+[ERR] UAC2: GET_CUR sample_rate=16777216 Hz but requested 44100 Hz — SET_CUR may have been ignored
+[ERR] UAC2: clock reports INVALID after rate change
+[INFO] Working set: min=67108864 max=268435456 (for VirtualLock budget)
+[INFO] Pre-fill: 64/64 transfers full, avg fill 100% (67734/67734 bytes), ring=726060 bytes remaining
+[INFO] 64/64 initial transfers submitted
+[INFO] USB audio streaming started (64 transfers, ring=793800 bytes)
+[INFO] Event thread: MMCSS Pro Audio
+[INFO] Event thread: THREAD_PRIORITY_TIME_CRITICAL
+[INFO] Event thread started
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] stop() called: streaming=1 eventThreadUsers=1 activeTransfers=64
+[INFO] Event thread exited
+[INFO] USB audio streaming stopped
+[INFO] configure requested: rate=44100 ch=2 bits=24 preferDsd=0
+[INFO] Selected alt=2 (isDsd=0) for rate=44100 ch=2 bits=24
+[INFO] Configured: rate=44100 ch=2 bits=24 subslot=3 iface=2 alt=2 ep=0x03 UAC2
+[INFO] Ring buffer allocated in configure(): 793800 bytes (3000 ms)
+[INFO] Starting: iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 maxpkt=0x012c(eff=300) speed=High fpp=5 bpp=30 UAC2
+[INFO] Ring buffer reused from configure(): 793800 bytes, 516096 bytes pre-filled
+[DEBUG] mlock ring buffer: 793800 bytes locked
+[INFO] detach_kernel_driver(AC iface 1): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] detach_kernel_driver(AS iface 2): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] Claimed AC interface 1
+[INFO] UAC2: set sample rate 44100 Hz on clock source 1
+[ERR] UAC2: GET_CUR sample_rate=16777216 Hz but requested 44100 Hz — SET_CUR may have been ignored
+[ERR] UAC2: clock reports INVALID after rate change
+[INFO] Working set: min=67108864 max=268435456 (for VirtualLock budget)
+[INFO] Pre-fill: 64/64 transfers full, avg fill 100% (67734/67734 bytes), ring=726060 bytes remaining
+[INFO] 64/64 initial transfers submitted
+[INFO] USB audio streaming started (64 transfers, ring=793800 bytes)
+[INFO] Event thread: MMCSS Pro Audio
+[INFO] Event thread: THREAD_PRIORITY_TIME_CRITICAL
+[INFO] Event thread started
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] stop() called: streaming=1 eventThreadUsers=1 activeTransfers=64
+[INFO] Event thread exited
+[INFO] USB audio streaming stopped
+[INFO] close() called, streaming=0 capStreaming=0 opened=1
+[INFO] USB audio device closed
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] Opening USB device VID=22E1 PID=E203
+[INFO] USB device speed: High
+[INFO] USB device opened: VID=22E1 PID=E203
+[INFO] UAC version: 2 (bcdADC=0x0200) on interface 1
+[DEBUG] UAC2 Clock Source ID: 1
+[DEBUG] UAC2 Input Terminal 3 (type 0x0101) -> Clock 1
+[DEBUG] UAC2 Output Terminal 4 (type 0x0302) -> Clock 1
+[DEBUG] UAC2 Feature Unit 10 <- src 3 ctrls=0x00000003 vol=0 mute=1
+[DEBUG] UAC2 Clock 1: 8 sub-range(s)
+[DEBUG]   sub-range 0: min=44100 max=44100 res=0
+[DEBUG]   sub-range 1: min=48000 max=48000 res=0
+[DEBUG]   sub-range 2: min=88200 max=88200 res=0
+[DEBUG]   sub-range 3: min=96000 max=96000 res=0
+[DEBUG]   sub-range 4: min=176400 max=176400 res=0
+[DEBUG]   sub-range 5: min=192000 max=192000 res=0
+[DEBUG]   sub-range 6: min=352800 max=352800 res=0
+[DEBUG]   sub-range 7: min=384000 max=384000 res=0
+[INFO] No usable Feature Unit with FU_VOLUME found -- software gain only
+[INFO] Parsed 32 format(s), UAC2
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=44100 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=48000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=88200 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=96000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=176400 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=192000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=352800 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=384000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=48000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=88200 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=96000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=176400 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=192000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=352800 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=384000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[INFO] stop() called: streaming=0 eventThreadUsers=0 activeTransfers=0
+[INFO] configure requested: rate=44100 ch=2 bits=24 preferDsd=0
+[INFO] Selected alt=2 (isDsd=0) for rate=44100 ch=2 bits=24
+[INFO] Configured: rate=44100 ch=2 bits=24 subslot=3 iface=2 alt=2 ep=0x03 UAC2
+[INFO] Ring buffer allocated in configure(): 793800 bytes (3000 ms)
+[INFO] Starting: iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 maxpkt=0x012c(eff=300) speed=High fpp=5 bpp=30 UAC2
+[INFO] Ring buffer reused from configure(): 793800 bytes, 793794 bytes pre-filled
+[DEBUG] mlock ring buffer failed: No error (non-fatal)
+[INFO] detach_kernel_driver(AC iface 1): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] detach_kernel_driver(AS iface 2): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] Claimed AC interface 1
+[INFO] UAC2: set sample rate 44100 Hz on clock source 1
+[ERR] UAC2: GET_CUR sample_rate=16777216 Hz but requested 44100 Hz — SET_CUR may have been ignored
+[ERR] UAC2: clock reports INVALID after rate change
+[INFO] Working set: min=67108864 max=268435456 (for VirtualLock budget)
+[INFO] Pre-fill: 64/64 transfers full, avg fill 100% (67734/67734 bytes), ring=726060 bytes remaining
+[INFO] 64/64 initial transfers submitted
+[INFO] USB audio streaming started (64 transfers, ring=793800 bytes)
+[INFO] Event thread: MMCSS Pro Audio
+[INFO] Event thread: THREAD_PRIORITY_TIME_CRITICAL
+[INFO] Event thread started
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] stop() called: streaming=1 eventThreadUsers=1 activeTransfers=64
+[INFO] Event thread exited
+[INFO] USB audio streaming stopped
+[INFO] configure requested: rate=44100 ch=2 bits=24 preferDsd=0
+[INFO] Selected alt=2 (isDsd=0) for rate=44100 ch=2 bits=24
+[INFO] Configured: rate=44100 ch=2 bits=24 subslot=3 iface=2 alt=2 ep=0x03 UAC2
+[INFO] Ring buffer allocated in configure(): 793800 bytes (3000 ms)
+[INFO] Starting: iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 maxpkt=0x012c(eff=300) speed=High fpp=5 bpp=30 UAC2
+[INFO] Ring buffer reused from configure(): 793800 bytes, 712704 bytes pre-filled
+[DEBUG] mlock ring buffer: 793800 bytes locked
+[INFO] detach_kernel_driver(AC iface 1): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] detach_kernel_driver(AS iface 2): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] Claimed AC interface 1
+[INFO] UAC2: set sample rate 44100 Hz on clock source 1
+[ERR] UAC2: GET_CUR sample_rate=16777216 Hz but requested 44100 Hz — SET_CUR may have been ignored
+[ERR] UAC2: clock reports INVALID after rate change
+[INFO] Working set: min=67108864 max=268435456 (for VirtualLock budget)
+[INFO] Pre-fill: 64/64 transfers full, avg fill 100% (67734/67734 bytes), ring=726060 bytes remaining
+[INFO] 64/64 initial transfers submitted
+[INFO] USB audio streaming started (64 transfers, ring=793800 bytes)
+[INFO] Event thread: MMCSS Pro Audio
+[INFO] Event thread: THREAD_PRIORITY_TIME_CRITICAL
+[INFO] Event thread started
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] stop() called: streaming=1 eventThreadUsers=1 activeTransfers=64
+[INFO] iso queue: min in-flight over last interval = 43 / 64
+[INFO] Event thread exited
+[INFO] USB audio streaming stopped
+[INFO] configure requested: rate=44100 ch=2 bits=24 preferDsd=0
+[INFO] Selected alt=2 (isDsd=0) for rate=44100 ch=2 bits=24
+[INFO] Configured: rate=44100 ch=2 bits=24 subslot=3 iface=2 alt=2 ep=0x03 UAC2
+[INFO] Ring buffer allocated in configure(): 793800 bytes (3000 ms)
+[INFO] Starting: iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 maxpkt=0x012c(eff=300) speed=High fpp=5 bpp=30 UAC2
+[INFO] Ring buffer reused from configure(): 793800 bytes, 565248 bytes pre-filled
+[DEBUG] mlock ring buffer: 793800 bytes locked
+[INFO] detach_kernel_driver(AC iface 1): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] detach_kernel_driver(AS iface 2): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] Claimed AC interface 1
+[INFO] UAC2: set sample rate 44100 Hz on clock source 1
+[ERR] UAC2: GET_CUR sample_rate=16777216 Hz but requested 44100 Hz — SET_CUR may have been ignored
+[ERR] UAC2: clock reports INVALID after rate change
+[INFO] Working set: min=67108864 max=268435456 (for VirtualLock budget)
+[INFO] Pre-fill: 64/64 transfers full, avg fill 100% (67734/67734 bytes), ring=726060 bytes remaining
+[INFO] 64/64 initial transfers submitted
+[INFO] USB audio streaming started (64 transfers, ring=793800 bytes)
+[INFO] Event thread: MMCSS Pro Audio
+[INFO] Event thread: THREAD_PRIORITY_TIME_CRITICAL
+[INFO] Event thread started
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] stop() called: streaming=1 eventThreadUsers=1 activeTransfers=64
+[INFO] Event thread exited
+[INFO] USB audio streaming stopped
+[INFO] configure requested: rate=44100 ch=2 bits=24 preferDsd=0
+[INFO] Selected alt=2 (isDsd=0) for rate=44100 ch=2 bits=24
+[INFO] Configured: rate=44100 ch=2 bits=24 subslot=3 iface=2 alt=2 ep=0x03 UAC2
+[INFO] Ring buffer allocated in configure(): 793800 bytes (3000 ms)
+[INFO] Starting: iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 maxpkt=0x012c(eff=300) speed=High fpp=5 bpp=30 UAC2
+[INFO] Ring buffer reused from configure(): 793800 bytes, 793794 bytes pre-filled
+[DEBUG] mlock ring buffer: 793800 bytes locked
+[INFO] detach_kernel_driver(AC iface 1): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] detach_kernel_driver(AS iface 2): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] Claimed AC interface 1
+[INFO] UAC2: set sample rate 44100 Hz on clock source 1
+[ERR] UAC2: GET_CUR sample_rate=16777216 Hz but requested 44100 Hz — SET_CUR may have been ignored
+[ERR] UAC2: clock reports INVALID after rate change
+[INFO] Working set: min=67108864 max=268435456 (for VirtualLock budget)
+[INFO] Pre-fill: 64/64 transfers full, avg fill 100% (67734/67734 bytes), ring=726060 bytes remaining
+[INFO] 64/64 initial transfers submitted
+[INFO] USB audio streaming started (64 transfers, ring=793800 bytes)
+[INFO] Event thread: MMCSS Pro Audio
+[INFO] Event thread: THREAD_PRIORITY_TIME_CRITICAL
+[INFO] Event thread started
+[INFO] stop() called: streaming=1 eventThreadUsers=1 activeTransfers=64
+[INFO] Event thread exited
+[INFO] USB audio streaming stopped
+[INFO] configure requested: rate=44100 ch=2 bits=24 preferDsd=0
+[INFO] Selected alt=2 (isDsd=0) for rate=44100 ch=2 bits=24
+[INFO] Configured: rate=44100 ch=2 bits=24 subslot=3 iface=2 alt=2 ep=0x03 UAC2
+[INFO] Ring buffer allocated in configure(): 793800 bytes (3000 ms)
+[INFO] Starting: iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 maxpkt=0x012c(eff=300) speed=High fpp=5 bpp=30 UAC2
+[INFO] Ring buffer reused from configure(): 793800 bytes, 793794 bytes pre-filled
+[DEBUG] mlock ring buffer: 793800 bytes locked
+[INFO] detach_kernel_driver(AC iface 1): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] detach_kernel_driver(AS iface 2): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] Claimed AC interface 1
+[INFO] UAC2: set sample rate 44100 Hz on clock source 1
+[ERR] UAC2: GET_CUR sample_rate=16777216 Hz but requested 44100 Hz — SET_CUR may have been ignored
+[ERR] UAC2: clock reports INVALID after rate change
+[INFO] Working set: min=67108864 max=268435456 (for VirtualLock budget)
+[INFO] Pre-fill: 64/64 transfers full, avg fill 100% (67734/67734 bytes), ring=726060 bytes remaining
+[INFO] 64/64 initial transfers submitted
+[INFO] USB audio streaming started (64 transfers, ring=793800 bytes)
+[INFO] Event thread: MMCSS Pro Audio
+[INFO] Event thread: THREAD_PRIORITY_TIME_CRITICAL
+[INFO] Event thread started
+[INFO] stop() called: streaming=1 eventThreadUsers=1 activeTransfers=64
+[INFO] Event thread exited
+[INFO] USB audio streaming stopped
+[INFO] configure requested: rate=44100 ch=2 bits=24 preferDsd=0
+[INFO] Selected alt=2 (isDsd=0) for rate=44100 ch=2 bits=24
+[INFO] Configured: rate=44100 ch=2 bits=24 subslot=3 iface=2 alt=2 ep=0x03 UAC2
+[INFO] Ring buffer allocated in configure(): 793800 bytes (3000 ms)
+[INFO] Starting: iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 maxpkt=0x012c(eff=300) speed=High fpp=5 bpp=30 UAC2
+[INFO] Ring buffer reused from configure(): 793800 bytes, 614400 bytes pre-filled
+[DEBUG] mlock ring buffer: 793800 bytes locked
+[INFO] detach_kernel_driver(AC iface 1): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] detach_kernel_driver(AS iface 2): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] Claimed AC interface 1
+[INFO] UAC2: set sample rate 44100 Hz on clock source 1
+[ERR] UAC2: GET_CUR sample_rate=16777216 Hz but requested 44100 Hz — SET_CUR may have been ignored
+[ERR] UAC2: clock reports INVALID after rate change
+[INFO] Working set: min=67108864 max=268435456 (for VirtualLock budget)
+[INFO] Pre-fill: 64/64 transfers full, avg fill 100% (67734/67734 bytes), ring=726060 bytes remaining
+[INFO] 64/64 initial transfers submitted
+[INFO] USB audio streaming started (64 transfers, ring=793800 bytes)
+[INFO] Event thread: MMCSS Pro Audio
+[INFO] Event thread: THREAD_PRIORITY_TIME_CRITICAL
+[INFO] Event thread started
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] stop() called: streaming=1 eventThreadUsers=1 activeTransfers=64
+[INFO] Event thread exited
+[INFO] USB audio streaming stopped
+[INFO] configure requested: rate=44100 ch=2 bits=24 preferDsd=0
+[INFO] Selected alt=2 (isDsd=0) for rate=44100 ch=2 bits=24
+[INFO] Configured: rate=44100 ch=2 bits=24 subslot=3 iface=2 alt=2 ep=0x03 UAC2
+[INFO] Ring buffer allocated in configure(): 793800 bytes (3000 ms)
+[INFO] Starting: iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 maxpkt=0x012c(eff=300) speed=High fpp=5 bpp=30 UAC2
+[INFO] Ring buffer reused from configure(): 793800 bytes, 793794 bytes pre-filled
+[DEBUG] mlock ring buffer: 793800 bytes locked
+[INFO] detach_kernel_driver(AC iface 1): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] detach_kernel_driver(AS iface 2): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] Claimed AC interface 1
+[INFO] UAC2: set sample rate 44100 Hz on clock source 1
+[ERR] UAC2: GET_CUR sample_rate=16777216 Hz but requested 44100 Hz — SET_CUR may have been ignored
+[ERR] UAC2: clock reports INVALID after rate change
+[INFO] Working set: min=67108864 max=268435456 (for VirtualLock budget)
+[INFO] Pre-fill: 64/64 transfers full, avg fill 100% (67734/67734 bytes), ring=726060 bytes remaining
+[INFO] 64/64 initial transfers submitted
+[INFO] USB audio streaming started (64 transfers, ring=793800 bytes)
+[INFO] Event thread: MMCSS Pro Audio
+[INFO] Event thread: THREAD_PRIORITY_TIME_CRITICAL
+[INFO] Event thread started
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] stop() called: streaming=1 eventThreadUsers=1 activeTransfers=64
+[INFO] Event thread exited
+[INFO] USB audio streaming stopped
+[INFO] configure requested: rate=44100 ch=2 bits=24 preferDsd=0
+[INFO] Selected alt=2 (isDsd=0) for rate=44100 ch=2 bits=24
+[INFO] Configured: rate=44100 ch=2 bits=24 subslot=3 iface=2 alt=2 ep=0x03 UAC2
+[INFO] Ring buffer allocated in configure(): 793800 bytes (3000 ms)
+[INFO] Starting: iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 maxpkt=0x012c(eff=300) speed=High fpp=5 bpp=30 UAC2
+[INFO] Ring buffer reused from configure(): 793800 bytes, 771072 bytes pre-filled
+[DEBUG] mlock ring buffer: 793800 bytes locked
+[INFO] detach_kernel_driver(AC iface 1): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] detach_kernel_driver(AS iface 2): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] Claimed AC interface 1
+[INFO] UAC2: set sample rate 44100 Hz on clock source 1
+[ERR] UAC2: GET_CUR sample_rate=16777216 Hz but requested 44100 Hz — SET_CUR may have been ignored
+[ERR] UAC2: clock reports INVALID after rate change
+[INFO] Working set: min=67108864 max=268435456 (for VirtualLock budget)
+[INFO] Pre-fill: 64/64 transfers full, avg fill 100% (67734/67734 bytes), ring=726060 bytes remaining
+[INFO] 64/64 initial transfers submitted
+[INFO] USB audio streaming started (64 transfers, ring=793800 bytes)
+[INFO] Event thread: MMCSS Pro Audio
+[INFO] Event thread: THREAD_PRIORITY_TIME_CRITICAL
+[INFO] Event thread started
+[INFO] stop() called: streaming=1 eventThreadUsers=1 activeTransfers=64
+[INFO] Event thread exited
+[INFO] USB audio streaming stopped
+[INFO] configure requested: rate=44100 ch=2 bits=24 preferDsd=0
+[INFO] Selected alt=2 (isDsd=0) for rate=44100 ch=2 bits=24
+[INFO] Configured: rate=44100 ch=2 bits=24 subslot=3 iface=2 alt=2 ep=0x03 UAC2
+[INFO] Ring buffer allocated in configure(): 793800 bytes (3000 ms)
+[INFO] Starting: iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 maxpkt=0x012c(eff=300) speed=High fpp=5 bpp=30 UAC2
+[INFO] Ring buffer reused from configure(): 793800 bytes, 663552 bytes pre-filled
+[DEBUG] mlock ring buffer: 793800 bytes locked
+[INFO] detach_kernel_driver(AC iface 1): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] detach_kernel_driver(AS iface 2): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] Claimed AC interface 1
+[INFO] UAC2: set sample rate 44100 Hz on clock source 1
+[ERR] UAC2: GET_CUR sample_rate=16777216 Hz but requested 44100 Hz — SET_CUR may have been ignored
+[ERR] UAC2: clock reports INVALID after rate change
+[INFO] Working set: min=67108864 max=268435456 (for VirtualLock budget)
+[INFO] Pre-fill: 64/64 transfers full, avg fill 100% (67734/67734 bytes), ring=726060 bytes remaining
+[INFO] 64/64 initial transfers submitted
+[INFO] USB audio streaming started (64 transfers, ring=793800 bytes)
+[INFO] Event thread: MMCSS Pro Audio
+[INFO] Event thread: THREAD_PRIORITY_TIME_CRITICAL
+[INFO] Event thread started
+[INFO] stop() called: streaming=1 eventThreadUsers=1 activeTransfers=64
+[INFO] Event thread exited
+[INFO] USB audio streaming stopped
+[INFO] configure requested: rate=44100 ch=2 bits=24 preferDsd=0
+[INFO] Selected alt=2 (isDsd=0) for rate=44100 ch=2 bits=24
+[INFO] Configured: rate=44100 ch=2 bits=24 subslot=3 iface=2 alt=2 ep=0x03 UAC2
+[INFO] Ring buffer allocated in configure(): 793800 bytes (3000 ms)
+[INFO] Starting: iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 maxpkt=0x012c(eff=300) speed=High fpp=5 bpp=30 UAC2
+[INFO] Ring buffer reused from configure(): 793800 bytes, 761856 bytes pre-filled
+[DEBUG] mlock ring buffer: 793800 bytes locked
+[INFO] detach_kernel_driver(AC iface 1): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] detach_kernel_driver(AS iface 2): LIBUSB_ERROR_NOT_SUPPORTED
+[INFO] Claimed AC interface 1
+[INFO] UAC2: set sample rate 44100 Hz on clock source 1
+[ERR] UAC2: GET_CUR sample_rate=16777216 Hz but requested 44100 Hz — SET_CUR may have been ignored
+[ERR] UAC2: clock reports INVALID after rate change
+[INFO] Working set: min=67108864 max=268435456 (for VirtualLock budget)
+[INFO] Pre-fill: 64/64 transfers full, avg fill 100% (67734/67734 bytes), ring=726060 bytes remaining
+[INFO] 64/64 initial transfers submitted
+[INFO] USB audio streaming started (64 transfers, ring=793800 bytes)
+[INFO] Event thread: MMCSS Pro Audio
+[INFO] Event thread: THREAD_PRIORITY_TIME_CRITICAL
+[INFO] Event thread started
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] iso queue: min in-flight over last interval = 63 / 64
+[INFO] stop() called: streaming=1 eventThreadUsers=1 activeTransfers=64
+[INFO] Event thread exited
+[INFO] USB audio streaming stopped
+[INFO] stop() called: streaming=0 eventThreadUsers=0 activeTransfers=0
+[INFO] close() called, streaming=0 capStreaming=0 opened=1
+[INFO] USB audio device closed
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed

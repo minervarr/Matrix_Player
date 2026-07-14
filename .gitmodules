@@ -1,0 +1,12 @@
+[submodule "libs/thirdparty/soxr"]
+	path = libs/thirdparty/soxr
+	url = https://github.com/chirlu/soxr.git
+[submodule "libs/firstparty/audio_engine"]
+	path = libs/firstparty/audio_engine
+	url = https://github.com/minervarr/audio_engine.git
+[submodule "libs/firstparty/vk_canvas"]
+	path = libs/firstparty/vk_canvas
+	url = https://github.com/minervarr/Vk_Canvas_Lb_LAW.git
+[submodule "libs/thirdparty/libjpeg-turbo"]
+	path = libs/thirdparty/libjpeg-turbo
+	url = https://github.com/libjpeg-turbo/libjpeg-turbo.git
