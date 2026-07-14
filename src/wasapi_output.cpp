@@ -576,13 +576,22 @@ void WasapiOutput::flush() {
 void WasapiOutput::close() {
     stop();
     started_.store(false, std::memory_order_release);
-    if (pRenderClient_) { pRenderClient_->Release(); pRenderClient_ = nullptr; }
-    if (pAudioClient_)  { pAudioClient_->Release();  pAudioClient_  = nullptr; }
+    // A faulted client just proved its internal state is corrupt (it crashed
+    // inside AUDIOKSE.dll). Release() on the same object can hang instead of
+    // crashing — kernel-streaming Release often waits on a driver-side event
+    // that a wedged session never signals. Leak the COM object instead of
+    // risking a freeze; the process reclaims it on exit either way.
+    bool faulted = deviceFaulted_.load(std::memory_order_acquire);
+    if (pRenderClient_) { if (!faulted) pRenderClient_->Release(); pRenderClient_ = nullptr; }
+    if (pAudioClient_)  { if (!faulted) pAudioClient_->Release();  pAudioClient_  = nullptr; }
     if (pDevice_)       { pDevice_->Release();        pDevice_       = nullptr; }
     if (hEvent_)        { CloseHandle(hEvent_);       hEvent_        = nullptr; }
     ring_.clear();
     ringMask_ = 0;
     rate_ = channels_ = 0;
+    // The next configure() call creates brand-new client/render objects that
+    // deserve a clean slate.
+    deviceFaulted_.store(false, std::memory_order_release);
 }
 
 // ── writeFloat32 ─────────────────────────────────────────────────────────────
@@ -718,6 +727,7 @@ void WasapiOutput::renderLoop() {
                 printf("[%s][WASAPI][ERROR] Driver crash caught in GetCurrentPadding — stopping stream\n", logTs());
                 fflush(stdout);
                 deviceFaulted_.store(true, std::memory_order_release);
+                running_.store(false, std::memory_order_release);
                 break;
             }
         }
@@ -731,6 +741,7 @@ void WasapiOutput::renderLoop() {
             printf("[%s][WASAPI][ERROR] Driver crash caught in GetBuffer — stopping stream\n", logTs());
             fflush(stdout);
             deviceFaulted_.store(true, std::memory_order_release);
+            running_.store(false, std::memory_order_release);
             break;
         }
         if (FAILED(hrBuf)) continue;
@@ -756,6 +767,7 @@ void WasapiOutput::renderLoop() {
             printf("[%s][WASAPI][ERROR] Driver crash caught in ReleaseBuffer — stopping stream\n", logTs());
             fflush(stdout);
             deviceFaulted_.store(true, std::memory_order_release);
+            running_.store(false, std::memory_order_release);
             break;
         }
 
