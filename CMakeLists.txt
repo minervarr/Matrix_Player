@@ -21,7 +21,7 @@ endif()
 option(MATRIX_BUILD_AB_TEST "Build the standalone audio A/B comparison tool (tools/ab_test.cpp)" OFF)
 
 # ---------- audio_engine static lib (firstparty submodule) ----------
-add_subdirectory(libs/firstparty/audio_engine/src/main/cpp/windows engine_build)
+add_subdirectory(libs/firstparty/audio_engine)
 
 # ---------- sqlite3 (vendored amalgamation) ----------
 add_library(sqlite3 STATIC libs/thirdparty/sqlite3.c)
@@ -162,8 +162,6 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     libs/thirdparty
     libs/thirdparty/soxr/src
     ${CMAKE_BINARY_DIR}/generated
-    libs/firstparty/audio_engine/src/main/cpp
-    libs/firstparty/audio_engine/src/main/cpp/libusb/libusb
     libs/firstparty/vk_canvas/platform/windows)
 
 # No hardcoded /O2 here: CMAKE_CXX_FLAGS_RELEASE/_DEBUG (set by
@@ -193,11 +191,13 @@ add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
 
 add_dependencies(${CMAKE_PROJECT_NAME} compile_shared_shaders compile_vk_canvas_shaders generate_ui_min_text_size)
 
+if(WIN32)
+    set(MATRIX_WIN32_USB_LIBS winusb setupapi)
+endif()
+
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE
-    audio_engine_windows
-    usb1
-    winusb
-    setupapi
+    ae_usb
+    ${MATRIX_WIN32_USB_LIBS}
     sqlite3
     soxr
     turbojpeg-static

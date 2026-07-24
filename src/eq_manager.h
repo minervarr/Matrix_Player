@@ -1,6 +1,6 @@
 #pragma once
 #include "eq_profiles.h"
-#include "eq_processor.h"
+#include "core/dsp/eq_processor.h"
 #include <atomic>
 
 class EqManager {
