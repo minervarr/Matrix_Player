@@ -22,5 +22,5 @@ cmake -S . -B build/linux -G Ninja "${SLANGC_ARG[@]}" "$@"
 cmake --build build/linux
 echo
 echo "Binaries in build/linux/:"
-echo "  matrix_core, vk_canvas_core, vk_canvas_wayland (matrix_player GUI"
-echo "  executable is Windows-only until the host-abstraction phase lands)"
+echo "  gui/matrix_player -- the full GUI, real Wayland window"
+echo "  matrix_core, vk_canvas_core, vk_canvas_wayland -- static libs it links"
