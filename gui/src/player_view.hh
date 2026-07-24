@@ -16,6 +16,13 @@
 #include "audio_output.h"
 #ifdef _WIN32
 #include "wasapi_output.hh"
+#else
+#ifdef MATRIX_HAVE_ALSA
+#include "os/alsa_output.hh"
+#endif
+#ifdef MATRIX_HAVE_JACK
+#include "os/jack_output.hh"
+#endif
 #endif
 #include "core/eq_profiles.h"
 #include "core/eq_manager.h"
@@ -31,25 +38,8 @@
 #include "msdf.hh"
 #include "responsive_text.hh"
 #include "ui_min_text_size.gen.h"
-
-// Theme colors
-static constexpr ColorRef CLR_BG_MAIN        = RGB(10, 10, 10);
-static constexpr ColorRef CLR_BG_SIDEBAR     = RGB(18, 18, 18);
-static constexpr ColorRef CLR_BG_TRANSPORT   = RGB(22, 22, 22);
-static constexpr ColorRef CLR_BG_TRACKPANEL  = RGB(14, 14, 14);
-static constexpr ColorRef CLR_TEXT_PRIMARY    = RGB(242, 242, 242);
-static constexpr ColorRef CLR_TEXT_SECONDARY  = RGB(128, 128, 128);
-// 140 (was 80): rgb(80) on the rgb(10) background was ~2.4:1 contrast —
-// below WCAG AA's 4.5:1 for the real information it carries (quality badge,
-// REF EQ, hints). 140 ≈ 5.6:1, still clearly de-emphasized vs SECONDARY.
-static constexpr ColorRef CLR_TEXT_DIM        = RGB(140, 140, 140);
-static constexpr ColorRef CLR_ACCENT          = RGB(0, 200, 83);
-static constexpr ColorRef CLR_HOVER           = RGB(38, 38, 38);
-static constexpr ColorRef CLR_SEPARATOR       = RGB(36, 36, 36);
-static constexpr ColorRef CLR_SEEKBAR_TRACK   = RGB(55, 55, 55);
-static constexpr ColorRef CLR_SEEKBAR_FILL    = RGB(0, 200, 83);
-static constexpr ColorRef CLR_TILE_PLACEHOLDER = RGB(28, 28, 28);
-static constexpr ColorRef CLR_TEXT_ALBUM_TITLE = RGB(255, 255, 255);
+#include "theme.hh"
+#include "panels/settings_panels.hh"
 
 // ── UI text sizing: window-relative, floored at a geometric minimum ────────
 //
@@ -113,6 +103,12 @@ struct UiTextSizes {
 // too): Complete = today's full browsing UI, true fullscreen; Essential = a
 // minimal "now playing" widget for monitors too short for Complete.
 
+// Output backend selection (Audio Settings panel / db "audio_backend" key).
+// Usb is primary/bit-perfect on both platforms; Wasapi is Windows' secondary
+// backend, Alsa/Jack are Linux's — mirroring WASAPI's role there (see
+// CLAUDE.md's design-decisions table).
+enum class AudioBackend { Usb, Wasapi, Alsa, Jack };
+
 class PlayerWindow {
 public:
     bool create();
@@ -166,7 +162,32 @@ private:
     void toggleBitperfectMode();
     void setupWatchers();
     std::string getActiveDeviceKey();
+    std::string audioBackendLabel() const;
     void applyDeviceEq(int sampleRate, int channels);
+
+    // ── Settings panels (Phase 7) — vk_canvas-native replacements for the
+    // four native dialogs, identical on both platforms. See
+    // panels/settings_panels.hh for the shared row-list/button/header
+    // widgets these draw with.
+    void closeActivePanel();
+    void onPanelMouseMove(int x, int y);
+    void onPanelClick(int x, int y);
+    void onPanelWheel(int x, int y, int delta);
+    bool onPanelKeyDown(int keyCode);   // true = consumed (a panel is open)
+    void onPanelChar(uint32_t codepoint);
+    void drawActivePanel(Canvas& canvas, const LayoutRect& area);
+
+    void drawManageFolders(Canvas& canvas, const LayoutRect& area);
+
+    void drawAudioSettings(Canvas& canvas, const LayoutRect& area);
+    void applyAudioSettingsPanel();
+
+    void drawEqSettings(Canvas& canvas, const LayoutRect& area);
+    void eqRefilter();
+
+    void drawFolderPicker(Canvas& canvas, const LayoutRect& area);
+    void fpLoadDir(const std::string& dir);
+    void commitAddFolder(const std::string& root);
 
     // Layout
     void recalcLayout();
@@ -273,6 +294,62 @@ private:
     LayoutRect rcSettingsAudio_        = {};
     LayoutRect rcSettingsEq_           = {};
     LayoutRect rcSettingsBitperfect_   = {};
+
+    // ── Settings panels state (Phase 7) ──────────────────────────────────
+    SettingsPanel activePanel_ = SettingsPanel::None;
+    static constexpr int kPanelRowH = 44;
+
+    // Manage Folders
+    std::vector<std::string> mfRoots_;
+    int  mfHoverRow_    = -1;
+    int  mfSelectedRow_ = -1;
+    int  mfScrollY_     = 0;
+    bool mfChanged_     = false;
+    LayoutRect mfListArea_ = {}, mfCloseRc_ = {}, mfBtnRemove_ = {}, mfBtnDone_ = {};
+    bool mfHoverClose_ = false, mfHoverRemove_ = false, mfHoverDone_ = false;
+
+    // Audio Settings. asBackendOptions_ lists whichever backends this build
+    // actually has (USB always; WASAPI on Windows; ALSA/JACK on Linux, each
+    // only if audio_engine found the library — see MATRIX_HAVE_ALSA/_JACK),
+    // so row indices never need per-platform special-casing at the call site.
+    std::vector<AudioBackend> asBackendOptions_;
+    int  asBackendSelIdx_   = 0;
+    std::vector<LayoutRect> asBackendRowRects_;  // parallel to asBackendOptions_
+    int  asHoverBackendRow_ = -1;
+    std::vector<UsbAudioDeviceInfo> asUsbDevices_;
+    int  asUsbSel_      = -1;
+    int  asHoverDeviceRow_ = -1;
+    LayoutRect asDeviceListArea_ = {};
+#ifdef _WIN32
+    std::vector<WasapiDeviceInfo> asWasapiDevices_;  // index 0 shown as "(Default device)"
+    int  asWasapiSel_   = 0;
+    bool asExclusive_   = false;
+    LayoutRect asModeRows_[2] = {};
+    int  asHoverModeRow_ = -1;
+#endif
+    LayoutRect asCloseRc_ = {}, asBtnApply_ = {};
+    bool asHoverClose_ = false, asHoverApply_ = false;
+
+    // EQ Settings
+    std::string eqSearch_;
+    bool eqSearchFocused_ = false;
+    std::vector<int> eqFilteredIndices_;
+    int  eqHoverRow_    = -1;
+    int  eqSelectedRow_ = -1;
+    int  eqScrollY_     = 0;
+    std::string eqDeviceKey_;
+    bool eqBitperfectActive_ = false;
+    LayoutRect eqSearchRc_ = {}, eqListArea_ = {}, eqCloseRc_ = {}, eqBtnAssign_ = {}, eqBtnClear_ = {};
+    bool eqHoverClose_ = false, eqHoverAssign_ = false, eqHoverClear_ = false;
+
+    // Folder picker (also reached via "Add Music Folder")
+    std::string fpCurrentDir_;
+    std::vector<std::string> fpEntries_;   // subfolder names only, sorted
+    bool fpHasParent_  = false;
+    int  fpHoverRow_   = -1;
+    int  fpScrollY_    = 0;
+    LayoutRect fpListArea_ = {}, fpCloseRc_ = {}, fpBtnSelect_ = {}, fpBtnCancel_ = {};
+    bool fpHoverClose_ = false, fpHoverSelect_ = false, fpHoverCancel_ = false;
 
     // Grid state. gridTileSize_/gridArtSize_ are recomputed every recalcLayout()
     // from a fixed target column count and the available width (see
@@ -428,7 +505,7 @@ private:
     bool             usbOpen_  = false;
 
     std::unique_ptr<AudioOutput> output_;
-    bool             useWasapi_     = false;
+    AudioBackend     audioBackend_  = AudioBackend::Usb;
     std::atomic<bool> bitperfectMode_{false};
 #ifdef _WIN32
     std::wstring     wasapiDeviceId_;

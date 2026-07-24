@@ -4,13 +4,6 @@
 #include "img_decode.hh"
 #include "text_util.hh"
 #include "utf8.hh"
-#ifdef _WIN32
-#include <commdlg.h>
-#include <shlobj.h>
-#pragma comment(lib, "comctl32.lib")
-#pragma comment(lib, "comdlg32.lib")
-#pragma comment(lib, "shell32.lib")
-#endif
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -60,10 +53,9 @@ static void ditherAndQuantize(const double* in, int32_t* out, int n, int bits) {
 }
 
 #ifdef _WIN32
-// Only used for wasapiDeviceId_ and the still-native (Windows-only, Phase 7
-// replaces them) Manage Folders/Audio Settings/EQ Settings/folder-picker
-// dialogs' Win32 listbox/edit controls — everything else uses UTF-8
-// std::string directly now (see currentTitle_/currentArtist_).
+// Only used for wasapiDeviceId_ (WASAPI device IDs are wchar_t at the OS
+// boundary) — everything else uses UTF-8 std::string directly (see
+// currentTitle_/currentArtist_ and the Audio Settings panel).
 static std::wstring utf8ToWide(const std::string& s) {
     if (s.empty()) return {};
     int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
@@ -72,7 +64,59 @@ static std::wstring utf8ToWide(const std::string& s) {
     if (!w.empty() && w.back() == L'\0') w.pop_back();
     return w;
 }
+static std::string wideToUtf8(const std::wstring& w) {
+    if (w.empty()) return {};
+    int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::string s(n, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, s.data(), n, nullptr, nullptr);
+    if (!s.empty() && s.back() == '\0') s.pop_back();
+    return s;
+}
 #endif
+
+// Encode one Unicode codepoint as UTF-8, appended to out. Shared by
+// onCharPortable() (album search) and onPanelChar() (EQ profile search) —
+// both receive codepoints the same way (see onCharPortable's own comment on
+// why no wide-char detour is needed here).
+static void appendUtf8(std::string& out, uint32_t codepoint) {
+    char u8[4]; int n = 0;
+    if (codepoint < 0x80) {
+        u8[n++] = (char)codepoint;
+    } else if (codepoint < 0x800) {
+        u8[n++] = (char)(0xC0 | (codepoint >> 6));
+        u8[n++] = (char)(0x80 | (codepoint & 0x3F));
+    } else if (codepoint < 0x10000) {
+        u8[n++] = (char)(0xE0 | (codepoint >> 12));
+        u8[n++] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        u8[n++] = (char)(0x80 | (codepoint & 0x3F));
+    } else {
+        u8[n++] = (char)(0xF0 | (codepoint >> 18));
+        u8[n++] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
+        u8[n++] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        u8[n++] = (char)(0x80 | (codepoint & 0x3F));
+    }
+    out.append(u8, n);
+}
+
+// Portable home directory, for the folder-picker panel's initial location.
+static std::string userHomeDir() {
+#ifdef _WIN32
+    const char* h = getenv("USERPROFILE");
+#else
+    const char* h = getenv("HOME");
+#endif
+    return h ? std::string(h) : std::string("/");
+}
+
+static const char* backendDisplayName(AudioBackend b) {
+    switch (b) {
+    case AudioBackend::Usb:    return "USB Direct";
+    case AudioBackend::Wasapi: return "WASAPI";
+    case AudioBackend::Alsa:   return "ALSA (system default device)";
+    case AudioBackend::Jack:   return "JACK (auto-connects to physical outputs)";
+    }
+    return "?";
+}
 
 // ── GDI -> Canvas bridges (Phase 6) ──────────────────────────────────────────
 // recalcLayout() keeps computing the same int LayoutRects it always did;
@@ -318,7 +362,20 @@ bool PlayerWindow::create() {
     bitperfectMode_.store(db_.loadSetting("audio_mode") == "bitperfect");
 
     // Load audio backend
-    useWasapi_ = (db_.loadSetting("audio_backend") == "wasapi");
+    {
+        std::string backend = db_.loadSetting("audio_backend");
+        audioBackend_ = AudioBackend::Usb;
+#ifdef _WIN32
+        if (backend == "wasapi") audioBackend_ = AudioBackend::Wasapi;
+#else
+#ifdef MATRIX_HAVE_ALSA
+        if (backend == "alsa") audioBackend_ = AudioBackend::Alsa;
+#endif
+#ifdef MATRIX_HAVE_JACK
+        if (backend == "jack") audioBackend_ = AudioBackend::Jack;
+#endif
+#endif
+    }
 #ifdef _WIN32
     wasapiMode_ = (db_.loadSetting("wasapi_mode") == "exclusive")
                   ? WasapiMode::Exclusive : WasapiMode::Shared;
@@ -326,13 +383,7 @@ bool PlayerWindow::create() {
     wasapiDeviceId_ = utf8ToWide(devIdUtf8);
 #endif
 
-    if (useWasapi_) {
-#ifdef _WIN32
-        output_ = std::make_unique<WasapiOutput>(wasapiDeviceId_, wasapiMode_);
-        printf("[Audio] WASAPI backend selected (%s mode)\n",
-               wasapiMode_ == WasapiMode::Exclusive ? "exclusive" : "shared");
-#endif
-    } else {
+    if (audioBackend_ == AudioBackend::Usb) {
         auto vidStr = db_.loadSetting("usb_vid");
         auto pidStr = db_.loadSetting("usb_pid");
         uint16_t vid = vidStr.empty() ? (uint16_t)0x32BB : (uint16_t)strtoul(vidStr.c_str(), nullptr, 16);
@@ -356,11 +407,31 @@ bool PlayerWindow::create() {
                 "3. Install libusbK driver\n"
                 "4. Restart this app\n\n"
                 "Use Audio Settings to select a different device\n"
-                "or switch to WASAPI.", vid, pid);
+                "or switch to a secondary backend.", vid, pid);
             host_->showErrorMessage("USB DAC not found", msgBuf);
         }
         output_ = std::make_unique<UsbAudioOutput>(usbDriver_);
     }
+#ifdef _WIN32
+    else if (audioBackend_ == AudioBackend::Wasapi) {
+        output_ = std::make_unique<WasapiOutput>(wasapiDeviceId_, wasapiMode_);
+        printf("[Audio] WASAPI backend selected (%s mode)\n",
+               wasapiMode_ == WasapiMode::Exclusive ? "exclusive" : "shared");
+    }
+#else
+#ifdef MATRIX_HAVE_ALSA
+    else if (audioBackend_ == AudioBackend::Alsa) {
+        output_ = std::make_unique<AlsaOutput>();
+        printf("[Audio] ALSA backend selected (default device)\n");
+    }
+#endif
+#ifdef MATRIX_HAVE_JACK
+    else if (audioBackend_ == AudioBackend::Jack) {
+        output_ = std::make_unique<JackOutput>();
+        printf("[Audio] JACK backend selected\n");
+    }
+#endif
+#endif
 
     host_->showWindow();
     return true;
@@ -831,6 +902,10 @@ void PlayerWindow::drawFrame() {
             }
             canvas.clearClip();
         }
+    } else if (activeNavItem_ != 0 && activePanel_ != SettingsPanel::None) {
+        // A settings panel (Phase 7) takes over the whole content area,
+        // replacing the settings-page row list below until closed.
+        drawActivePanel(canvas, rcGrid_);
     } else if (activeNavItem_ != 0) {
         Rect g = toRect(rcGrid_);
         canvas.rect(g.x, g.y, g.w, g.h, toColor(CLR_BG_MAIN));
@@ -1132,7 +1207,7 @@ void PlayerWindow::drawFrame() {
                 }
                 segs.push_back({dsp, dspClr});
                 segs.push_back({" \xC2\xBB ", CLR_TEXT_DIM});
-                segs.push_back({useWasapi_ ? "WASAPI" : "USB", CLR_TEXT_DIM});
+                segs.push_back({audioBackendLabel(), CLR_TEXT_DIM});
 
                 float total = 0;
                 for (auto& s : segs) total += canvas.textWidthStyled(s.text, textSizes_.badge, FontStyle::Math);
@@ -1677,6 +1752,7 @@ int PlayerWindow::settingsHitTest(int x, int y) const {
 // ── Mouse handling ───────────────────────────────────────────────────────────
 
 void PlayerWindow::onMouseMove(int x, int y) {
+    if (activePanel_ != SettingsPanel::None) { onPanelMouseMove(x, y); return; }
 #ifdef _WIN32
     // Win32 doesn't generate a "mouse left the window" event unless you ask
     // for it per-move; Wayland's wl_pointer.leave is unconditional (LinuxHost
@@ -1748,6 +1824,7 @@ void PlayerWindow::onMouseLeave() {
 }
 
 void PlayerWindow::onLButtonDown(int x, int y) {
+    if (activePanel_ != SettingsPanel::None) { onPanelClick(x, y); return; }
 
     if (uiMode_ == UiMode::Essential) {
         int btn = essentialHitTest(x, y);
@@ -1827,6 +1904,7 @@ void PlayerWindow::onLButtonDown(int x, int y) {
 }
 
 void PlayerWindow::onLButtonDblClk(int x, int y) {
+    if (activePanel_ != SettingsPanel::None) return;  // no double-click behavior inside panels
 
     // Double-click on grid tile: play first track
     if (activeNavItem_ == 0 && !trackPanelOpen_ && ptInRect(rcGrid_, x, y)) {
@@ -1857,6 +1935,7 @@ void PlayerWindow::onLButtonDblClk(int x, int y) {
 // and gets ScreenToClient()'d in windows_host.cc before calling this;
 // Wayland's pointer coords are already surface-relative).
 void PlayerWindow::onMouseWheel(int x, int y, int delta) {
+    if (activePanel_ != SettingsPanel::None) { onPanelWheel(x, y, delta); return; }
     if (trackPanelOpen_ && activeNavItem_ == 0 && ptInRect(rcTrackPanel_, x, y)) {
         // The album view scrolls as one page; its content height is
         // measured by the draw block (albumViewContentH_).
@@ -1941,657 +2020,660 @@ void PlayerWindow::toggleBitperfectMode() {
     invalidate();
 }
 
-// ── Manage Folders / Audio Settings / EQ Settings / folder-picker dialogs ───
-// Still real native Win32 dialogs (listbox/edit controls, SHBrowseForFolderW)
-// — Phase 7 replaces all four with vk_canvas panels on BOTH platforms. Until
-// then they're Windows-only; Linux gets stub bodies below that do nothing
-// when their sidebar row is clicked (a real, tracked gap, not a silent one).
-#ifdef _WIN32
+// ── Settings panels (Phase 7) ────────────────────────────────────────────────
+// vk_canvas-native replacements for the four native Win32 dialogs (Manage
+// Folders / Audio Settings / EQ Settings / SHBrowseForFolderW), identical on
+// both platforms — see panels/settings_panels.hh's header comment for why
+// (full-page overlay, not a modal popup: Wayland has no owned-window
+// primitive to build a real modal on).
 
-#define ID_DLG_LIST   301
-#define ID_DLG_REMOVE 302
-#define ID_DLG_DONE   303
-
-struct ManageDlgCtx {
-    Db*   db;
-    HWND  parent;
-    HWND  list;
-    bool  changed = false;
-};
-
-static LRESULT CALLBACK manageFoldersDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    auto* ctx = (ManageDlgCtx*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-    switch (msg) {
-    case WM_CREATE: {
-        ctx = (ManageDlgCtx*)((CREATESTRUCTW*)lp)->lpCreateParams;
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)ctx);
-        HINSTANCE hi = ((CREATESTRUCTW*)lp)->hInstance;
-        ctx->list = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
-            WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
-            8, 8, 484, 200, hwnd, (HMENU)ID_DLG_LIST, hi, nullptr);
-        for (auto& r : ctx->db->loadMusicRoots()) {
-            SendMessageW(ctx->list, LB_ADDSTRING, 0, (LPARAM)utf8ToWide(r).c_str());
-        }
-        CreateWindowExW(0, L"BUTTON", L"Remove Selected",
-            WS_CHILD | WS_VISIBLE, 8, 216, 150, 28, hwnd, (HMENU)ID_DLG_REMOVE, hi, nullptr);
-        CreateWindowExW(0, L"BUTTON", L"Done",
-            WS_CHILD | WS_VISIBLE, 422, 216, 70, 28, hwnd, (HMENU)ID_DLG_DONE, hi, nullptr);
-        return 0;
-    }
-    case WM_COMMAND:
-        if (LOWORD(wp) == ID_DLG_REMOVE) {
-            int sel = (int)SendMessageW(ctx->list, LB_GETCURSEL, 0, 0);
-            if (sel == LB_ERR) break;
-            wchar_t buf[MAX_PATH] = {};
-            SendMessageW(ctx->list, LB_GETTEXT, sel, (LPARAM)buf);
-            int pLen = WideCharToMultiByte(CP_UTF8, 0, buf, -1, nullptr, 0, nullptr, nullptr);
-            std::string path(pLen, '\0');
-            WideCharToMultiByte(CP_UTF8, 0, buf, -1, path.data(), pLen, nullptr, nullptr);
-            if (!path.empty() && path.back() == '\0') path.pop_back();
-            ctx->db->removeMusicRoot(path);
-            SendMessageW(ctx->list, LB_DELETESTRING, sel, 0);
-            ctx->changed = true;
-        } else if (LOWORD(wp) == ID_DLG_DONE) {
-            DestroyWindow(hwnd);
-        }
-        break;
-    case WM_CLOSE:
-        DestroyWindow(hwnd);
-        break;
-    case WM_DESTROY:
-        PostMessageW(ctx->parent, WM_NULL, 0, 0);
-        break;
-    }
-    return DefWindowProcW(hwnd, msg, wp, lp);
+void PlayerWindow::closeActivePanel() {
+    activePanel_ = SettingsPanel::None;
+    invalidate();
 }
+
+void PlayerWindow::drawActivePanel(Canvas& canvas, const LayoutRect& area) {
+    LayoutRect* closeRc = nullptr;
+    bool hoverClose = false;
+    switch (activePanel_) {
+    case SettingsPanel::ManageFolders:
+        drawManageFolders(canvas, area);
+        closeRc = &mfCloseRc_; hoverClose = mfHoverClose_;
+        break;
+    case SettingsPanel::AudioSettings:
+        drawAudioSettings(canvas, area);
+        closeRc = &asCloseRc_; hoverClose = asHoverClose_;
+        break;
+    case SettingsPanel::EqSettings:
+        drawEqSettings(canvas, area);
+        closeRc = &eqCloseRc_; hoverClose = eqHoverClose_;
+        break;
+    case SettingsPanel::FolderPicker:
+        drawFolderPicker(canvas, area);
+        closeRc = &fpCloseRc_; hoverClose = fpHoverClose_;
+        break;
+    case SettingsPanel::None:
+        break;
+    }
+    if (closeRc)
+        panels::drawButton(canvas, *closeRc, "Close", hoverClose, textSizes_.nav);
+}
+
+void PlayerWindow::onPanelMouseMove(int x, int y) {
+    bool changed = false;
+    switch (activePanel_) {
+    case SettingsPanel::ManageFolders: {
+        bool hc = ptInRect(mfCloseRc_, x, y);  if (hc != mfHoverClose_)  { mfHoverClose_  = hc; changed = true; }
+        bool hr = ptInRect(mfBtnRemove_, x, y); if (hr != mfHoverRemove_) { mfHoverRemove_ = hr; changed = true; }
+        bool hd = ptInRect(mfBtnDone_, x, y);   if (hd != mfHoverDone_)   { mfHoverDone_   = hd; changed = true; }
+        int row = panels::hitTestRows(mfListArea_, kPanelRowH, mfScrollY_, (int)mfRoots_.size(), x, y);
+        if (row != mfHoverRow_) { mfHoverRow_ = row; changed = true; }
+        break;
+    }
+    case SettingsPanel::AudioSettings: {
+        bool hc = ptInRect(asCloseRc_, x, y); if (hc != asHoverClose_) { asHoverClose_ = hc; changed = true; }
+        bool ha = ptInRect(asBtnApply_, x, y); if (ha != asHoverApply_) { asHoverApply_ = ha; changed = true; }
+        int hb = -1;
+        for (int i = 0; i < (int)asBackendRowRects_.size(); i++)
+            if (ptInRect(asBackendRowRects_[i], x, y)) { hb = i; break; }
+        if (hb != asHoverBackendRow_) { asHoverBackendRow_ = hb; changed = true; }
+
+        AudioBackend sel = asBackendOptions_.empty() ? AudioBackend::Usb : asBackendOptions_[asBackendSelIdx_];
+        int rowCount = 0;
+        if (sel == AudioBackend::Usb) rowCount = (int)asUsbDevices_.size();
+#ifdef _WIN32
+        else if (sel == AudioBackend::Wasapi) rowCount = (int)asWasapiDevices_.size() + 1;
+#endif
+        int hdv = panels::hitTestRows(asDeviceListArea_, kPanelRowH, 0, rowCount, x, y);
+        if (hdv != asHoverDeviceRow_) { asHoverDeviceRow_ = hdv; changed = true; }
+#ifdef _WIN32
+        int hm = -1;
+        if (sel == AudioBackend::Wasapi)
+            for (int i = 0; i < 2; i++) if (ptInRect(asModeRows_[i], x, y)) { hm = i; break; }
+        if (hm != asHoverModeRow_) { asHoverModeRow_ = hm; changed = true; }
+#endif
+        break;
+    }
+    case SettingsPanel::EqSettings: {
+        bool hc = ptInRect(eqCloseRc_, x, y); if (hc != eqHoverClose_) { eqHoverClose_ = hc; changed = true; }
+        bool ha = ptInRect(eqBtnAssign_, x, y); if (ha != eqHoverAssign_) { eqHoverAssign_ = ha; changed = true; }
+        bool hcl = ptInRect(eqBtnClear_, x, y); if (hcl != eqHoverClear_) { eqHoverClear_ = hcl; changed = true; }
+        int row = panels::hitTestRows(eqListArea_, kPanelRowH, eqScrollY_, (int)eqFilteredIndices_.size(), x, y);
+        if (row != eqHoverRow_) { eqHoverRow_ = row; changed = true; }
+        break;
+    }
+    case SettingsPanel::FolderPicker: {
+        bool hc = ptInRect(fpCloseRc_, x, y);   if (hc != fpHoverClose_)  { fpHoverClose_  = hc; changed = true; }
+        bool hs = ptInRect(fpBtnSelect_, x, y); if (hs != fpHoverSelect_) { fpHoverSelect_ = hs; changed = true; }
+        bool ha = ptInRect(fpBtnCancel_, x, y); if (ha != fpHoverCancel_) { fpHoverCancel_ = ha; changed = true; }
+        int rowCount = (int)fpEntries_.size() + (fpHasParent_ ? 1 : 0);
+        int row = panels::hitTestRows(fpListArea_, kPanelRowH, fpScrollY_, rowCount, x, y);
+        if (row != fpHoverRow_) { fpHoverRow_ = row; changed = true; }
+        break;
+    }
+    case SettingsPanel::None:
+        break;
+    }
+    if (changed) invalidate();
+}
+
+void PlayerWindow::onPanelClick(int x, int y) {
+    switch (activePanel_) {
+    case SettingsPanel::ManageFolders: {
+        if (ptInRect(mfCloseRc_, x, y) || ptInRect(mfBtnDone_, x, y)) {
+            if (mfChanged_) { watcher_.unwatchAll(); setupWatchers(); startBackgroundScan(); }
+            closeActivePanel();
+            return;
+        }
+        if (ptInRect(mfBtnRemove_, x, y)) {
+            if (mfSelectedRow_ >= 0 && mfSelectedRow_ < (int)mfRoots_.size()) {
+                db_.removeMusicRoot(mfRoots_[mfSelectedRow_]);
+                mfRoots_.erase(mfRoots_.begin() + mfSelectedRow_);
+                mfSelectedRow_ = -1;
+                mfChanged_ = true;
+                invalidate();
+            }
+            return;
+        }
+        int row = panels::hitTestRows(mfListArea_, kPanelRowH, mfScrollY_, (int)mfRoots_.size(), x, y);
+        if (row >= 0) { mfSelectedRow_ = row; invalidate(); }
+        return;
+    }
+    case SettingsPanel::AudioSettings: {
+        if (ptInRect(asCloseRc_, x, y)) { closeActivePanel(); return; }  // cancel, no apply
+        for (int i = 0; i < (int)asBackendRowRects_.size(); i++)
+            if (ptInRect(asBackendRowRects_[i], x, y)) { asBackendSelIdx_ = i; invalidate(); return; }
+
+        AudioBackend sel = asBackendOptions_.empty() ? AudioBackend::Usb : asBackendOptions_[asBackendSelIdx_];
+        if (sel == AudioBackend::Usb) {
+            int row = panels::hitTestRows(asDeviceListArea_, kPanelRowH, 0, (int)asUsbDevices_.size(), x, y);
+            if (row >= 0) { asUsbSel_ = row; invalidate(); return; }
+        }
+#ifdef _WIN32
+        else if (sel == AudioBackend::Wasapi) {
+            int row = panels::hitTestRows(asDeviceListArea_, kPanelRowH, 0, (int)asWasapiDevices_.size() + 1, x, y);
+            if (row >= 0) { asWasapiSel_ = row; invalidate(); return; }
+            for (int i = 0; i < 2; i++)
+                if (ptInRect(asModeRows_[i], x, y)) { asExclusive_ = (i == 1); invalidate(); return; }
+        }
+#endif
+        if (ptInRect(asBtnApply_, x, y)) { applyAudioSettingsPanel(); return; }
+        return;
+    }
+    case SettingsPanel::EqSettings: {
+        if (ptInRect(eqCloseRc_, x, y)) { closeActivePanel(); return; }
+        bool wasFocused = eqSearchFocused_;
+        eqSearchFocused_ = ptInRect(eqSearchRc_, x, y);
+        if (eqSearchFocused_ != wasFocused) invalidate();
+        if (eqSearchFocused_) return;
+
+        if (ptInRect(eqBtnAssign_, x, y)) {
+            if (eqSelectedRow_ >= 0 && eqSelectedRow_ < (int)eqFilteredIndices_.size()) {
+                int idx = eqFilteredIndices_[eqSelectedRow_];
+                auto& p = eqProfiles_.getAll()[idx];
+                db_.saveEqAssignment(eqDeviceKey_, p.name, p.source, p.form);
+                if (!eqBitperfectActive_) {
+                    auto* profile = eqProfiles_.findByKey(p.name, p.source, p.form);
+                    int sr = 44100, ch = 2;
+                    if (output_) {
+                        int r = output_->getConfiguredRate(), c2 = output_->getConfiguredChannels();
+                        if (r > 0) sr = r;
+                        if (c2 > 0) ch = c2;
+                    }
+                    if (profile) eqManager_.applyProfile(profile, sr, ch);
+                }
+                invalidate();
+            }
+            return;
+        }
+        if (ptInRect(eqBtnClear_, x, y)) {
+            db_.clearEqAssignment(eqDeviceKey_);
+            eqManager_.clear();
+            invalidate();
+            return;
+        }
+        int row = panels::hitTestRows(eqListArea_, kPanelRowH, eqScrollY_, (int)eqFilteredIndices_.size(), x, y);
+        if (row >= 0) { eqSelectedRow_ = row; invalidate(); }
+        return;
+    }
+    case SettingsPanel::FolderPicker: {
+        if (ptInRect(fpCloseRc_, x, y) || ptInRect(fpBtnCancel_, x, y)) { closeActivePanel(); return; }
+        if (ptInRect(fpBtnSelect_, x, y)) {
+            commitAddFolder(fpCurrentDir_);
+            closeActivePanel();
+            return;
+        }
+        std::vector<std::string> labels;
+        if (fpHasParent_) labels.push_back("..");
+        labels.insert(labels.end(), fpEntries_.begin(), fpEntries_.end());
+        int row = panels::hitTestRows(fpListArea_, kPanelRowH, fpScrollY_, (int)labels.size(), x, y);
+        if (row < 0) return;
+        if (fpHasParent_ && row == 0) {
+            fpLoadDir(std::filesystem::path(fpCurrentDir_).parent_path().string());
+        } else {
+            int idx = fpHasParent_ ? row - 1 : row;
+            fpLoadDir((std::filesystem::path(fpCurrentDir_) / fpEntries_[idx]).string());
+        }
+        invalidate();
+        return;
+    }
+    case SettingsPanel::None:
+        break;
+    }
+}
+
+void PlayerWindow::onPanelWheel(int x, int y, int delta) {
+    switch (activePanel_) {
+    case SettingsPanel::ManageFolders: {
+        int listH = mfListArea_.bottom - mfListArea_.top;
+        int contentH = (int)mfRoots_.size() * kPanelRowH;
+        mfScrollY_ = std::clamp(mfScrollY_ - delta, 0, std::max(0, contentH - listH));
+        invalidate();
+        return;
+    }
+    case SettingsPanel::EqSettings: {
+        int listH = eqListArea_.bottom - eqListArea_.top;
+        int contentH = (int)eqFilteredIndices_.size() * kPanelRowH;
+        eqScrollY_ = std::clamp(eqScrollY_ - delta, 0, std::max(0, contentH - listH));
+        invalidate();
+        return;
+    }
+    case SettingsPanel::FolderPicker: {
+        int rowCount = (int)fpEntries_.size() + (fpHasParent_ ? 1 : 0);
+        int listH = fpListArea_.bottom - fpListArea_.top;
+        int contentH = rowCount * kPanelRowH;
+        fpScrollY_ = std::clamp(fpScrollY_ - delta, 0, std::max(0, contentH - listH));
+        invalidate();
+        return;
+    }
+    case SettingsPanel::AudioSettings:
+    case SettingsPanel::None:
+        (void)x; (void)y;
+        return;
+    }
+}
+
+// ── Manage Folders panel ─────────────────────────────────────────────────────
 
 void PlayerWindow::onManageFolders() {
-    static bool registered = false;
-    if (!registered) {
-        WNDCLASSW wc = {};
-        wc.lpfnWndProc   = manageFoldersDlgProc;
-        wc.hInstance     = host_->nativeInstance();
-        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
-        wc.lpszClassName = L"MatrixManageFolders";
-        wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
-        RegisterClassW(&wc);
-        registered = true;
-    }
-
-    ManageDlgCtx ctx{ &db_, host_->nativeHandle(), nullptr, false };
-    HWND dlg = CreateWindowExW(
-        WS_EX_DLGMODALFRAME, L"MatrixManageFolders", L"Music Folders",
-        WS_POPUP | WS_CAPTION | WS_SYSMENU,
-        0, 0, 510, 290, host_->nativeHandle(), nullptr, host_->nativeInstance(), &ctx);
-
-    RECT pr; GetWindowRect(host_->nativeHandle(), &pr);
-    RECT dr; GetWindowRect(dlg, &dr);
-    int dw = dr.right - dr.left, dh = dr.bottom - dr.top;
-    SetWindowPos(dlg, nullptr,
-        pr.left + (pr.right - pr.left - dw) / 2,
-        pr.top  + (pr.bottom - pr.top - dh) / 2,
-        0, 0, SWP_NOSIZE | SWP_NOZORDER);
-
-    EnableWindow(host_->nativeHandle(), FALSE);
-    ShowWindow(dlg, SW_SHOW);
-
-    MSG msg;
-    while (IsWindow(dlg) && GetMessageW(&msg, nullptr, 0, 0)) {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
-    }
-
-    EnableWindow(host_->nativeHandle(), TRUE);
-    SetForegroundWindow(host_->nativeHandle());
-    markDirty();  // repaint the main window, obscured/disabled while the dialog was up
-
-    if (!ctx.changed) return;
-    watcher_.unwatchAll();
-    setupWatchers();
-    startBackgroundScan();
+    mfRoots_ = db_.loadMusicRoots();
+    mfSelectedRow_ = -1;
+    mfHoverRow_ = -1;
+    mfScrollY_ = 0;
+    mfChanged_ = false;
+    mfHoverClose_ = mfHoverRemove_ = mfHoverDone_ = false;
+    activePanel_ = SettingsPanel::ManageFolders;
+    invalidate();
 }
 
-// ── Audio Settings dialog ─────────────────────────────────────────────────────
+void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
+    LayoutRect content = panels::drawHeader(canvas, area, "Music Folders", uiScale_, textSizes_.header, mfCloseRc_);
+    float pad = 20.0f * uiScale_;
+    float btnH = 36.0f * uiScale_;
 
-#define ID_AUDIO_USB       401
-#define ID_AUDIO_WASAPI    402
-#define ID_AUDIO_DEVICE    403
-#define ID_AUDIO_SHARED    404
-#define ID_AUDIO_EXCLUSIVE 405
-#define ID_AUDIO_APPLY     406
-#define ID_AUDIO_USB_DEV   407
+    LayoutRect listArea = { content.left, (int)(content.top + pad),
+                            content.right, (int)(content.bottom - (btnH + pad * 2)) };
+    mfListArea_ = listArea;
+    panels::drawRowList(canvas, listArea, mfRoots_, kPanelRowH, mfScrollY_,
+                         mfHoverRow_, mfSelectedRow_, textSizes_.nav, uiScale_);
+    if (mfRoots_.empty()) {
+        Rect a = toRect(listArea);
+        canvas.textStyled("No music folders added yet.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,
+                          textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+    }
 
-struct AudioSettingsDlgCtx {
-    Db*    db;
-    HWND   parent;
-    HWND   rdoUsb, rdoWasapi;
-    HWND   cmbDevice;
-    HWND   cmbUsbDevice;
-    HWND   rdoShared, rdoExclusive;
-    HWND   lblDevice, lblMode;
-    HWND   lblUsbDevice;
-    std::vector<WasapiDeviceInfo> devices;
-    std::vector<UsbAudioDeviceInfo> usbDevices;
-    bool   applied = false;
-};
-
-static void audioSetBackendControls(AudioSettingsDlgCtx* ctx, bool wasapi) {
-    EnableWindow(ctx->cmbDevice,    wasapi);
-    EnableWindow(ctx->rdoShared,    wasapi);
-    EnableWindow(ctx->rdoExclusive, wasapi);
-    EnableWindow(ctx->lblDevice,    wasapi);
-    EnableWindow(ctx->lblMode,      wasapi);
-    EnableWindow(ctx->cmbUsbDevice, !wasapi);
-    EnableWindow(ctx->lblUsbDevice, !wasapi);
+    float btnW = 170.0f * uiScale_;
+    int by = (int)(content.bottom - (btnH + pad));
+    mfBtnRemove_ = { content.left + (int)pad, by, (int)(content.left + pad + btnW), (int)(by + btnH) };
+    mfBtnDone_   = { (int)(content.right - pad - btnW), by, content.right - (int)pad, (int)(by + btnH) };
+    panels::drawButton(canvas, mfBtnRemove_, "Remove Selected", mfHoverRemove_, textSizes_.nav);
+    panels::drawButton(canvas, mfBtnDone_, "Done", mfHoverDone_, textSizes_.nav, true);
 }
 
-static LRESULT CALLBACK audioSettingsDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    auto* ctx = (AudioSettingsDlgCtx*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-    switch (msg) {
-    case WM_CREATE: {
-        ctx = (AudioSettingsDlgCtx*)((CREATESTRUCTW*)lp)->lpCreateParams;
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)ctx);
-        HINSTANCE hi = ((CREATESTRUCTW*)lp)->hInstance;
-        int x = 12, y = 10;
+// ── Audio Settings panel ─────────────────────────────────────────────────────
 
-        CreateWindowExW(0, L"STATIC", L"Output backend:",
-            WS_CHILD | WS_VISIBLE, x, y, 200, 18, hwnd, nullptr, hi, nullptr);
-        y += 22;
-        ctx->rdoUsb = CreateWindowExW(0, L"BUTTON", L"USB Direct (libusbK)",
-            WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_GROUP,
-            x + 8, y, 250, 20, hwnd, (HMENU)ID_AUDIO_USB, hi, nullptr);
-        y += 24;
-        ctx->rdoWasapi = CreateWindowExW(0, L"BUTTON", L"WASAPI",
-            WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
-            x + 8, y, 250, 20, hwnd, (HMENU)ID_AUDIO_WASAPI, hi, nullptr);
-        y += 32;
-
-        ctx->lblUsbDevice = CreateWindowExW(0, L"STATIC", L"USB DAC:",
-            WS_CHILD | WS_VISIBLE, x, y, 60, 18, hwnd, nullptr, hi, nullptr);
-        ctx->cmbUsbDevice = CreateWindowExW(0, L"COMBOBOX", nullptr,
-            WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-            x + 64, y - 2, 370, 200, hwnd, (HMENU)ID_AUDIO_USB_DEV, hi, nullptr);
-        y += 32;
-
-        ctx->lblDevice = CreateWindowExW(0, L"STATIC", L"Device:",
-            WS_CHILD | WS_VISIBLE, x, y, 60, 18, hwnd, nullptr, hi, nullptr);
-        ctx->cmbDevice = CreateWindowExW(0, L"COMBOBOX", nullptr,
-            WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-            x + 64, y - 2, 370, 200, hwnd, (HMENU)ID_AUDIO_DEVICE, hi, nullptr);
-        y += 32;
-
-        ctx->lblMode = CreateWindowExW(0, L"STATIC", L"Mode:",
-            WS_CHILD | WS_VISIBLE, x, y, 200, 18, hwnd, nullptr, hi, nullptr);
-        y += 22;
-        ctx->rdoShared = CreateWindowExW(0, L"BUTTON",
-            L"Shared  \x2014  other apps can play simultaneously",
-            WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_GROUP,
-            x + 8, y, 420, 20, hwnd, (HMENU)ID_AUDIO_SHARED, hi, nullptr);
-        y += 24;
-        ctx->rdoExclusive = CreateWindowExW(0, L"BUTTON",
-            L"Exclusive  \x2014  lower latency, blocks other apps",
-            WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
-            x + 8, y, 420, 20, hwnd, (HMENU)ID_AUDIO_EXCLUSIVE, hi, nullptr);
-        y += 36;
-
-        CreateWindowExW(0, L"BUTTON", L"Apply",
-            WS_CHILD | WS_VISIBLE, 346, y, 80, 28, hwnd, (HMENU)ID_AUDIO_APPLY, hi, nullptr);
-        CreateWindowExW(0, L"BUTTON", L"Cancel",
-            WS_CHILD | WS_VISIBLE, 434, y, 80, 28, hwnd, (HMENU)IDCANCEL, hi, nullptr);
-
-        // Populate USB device list
-        ctx->usbDevices = UsbAudioDriver::enumerateUsbAudioDevices();
-        for (auto& ud : ctx->usbDevices) {
-            std::wstring wname(utf8ToWide(ud.name));
-            SendMessageW(ctx->cmbUsbDevice, CB_ADDSTRING, 0, (LPARAM)wname.c_str());
-        }
-        auto savedVid = ctx->db->loadSetting("usb_vid");
-        auto savedPid = ctx->db->loadSetting("usb_pid");
-        int usbSel = 0;
+void PlayerWindow::onAudioSettings() {
+    asUsbDevices_ = UsbAudioDriver::enumerateUsbAudioDevices();
+    asUsbSel_ = 0;
+    {
+        auto savedVid = db_.loadSetting("usb_vid");
+        auto savedPid = db_.loadSetting("usb_pid");
         if (!savedVid.empty() && !savedPid.empty()) {
             uint16_t sv = (uint16_t)strtoul(savedVid.c_str(), nullptr, 16);
             uint16_t sp = (uint16_t)strtoul(savedPid.c_str(), nullptr, 16);
-            for (int i = 0; i < (int)ctx->usbDevices.size(); i++) {
-                if (ctx->usbDevices[i].vid == sv && ctx->usbDevices[i].pid == sp) {
-                    usbSel = i; break;
-                }
-            }
+            for (int i = 0; i < (int)asUsbDevices_.size(); i++)
+                if (asUsbDevices_[i].vid == sv && asUsbDevices_[i].pid == sp) { asUsbSel_ = i; break; }
         }
-        if (!ctx->usbDevices.empty())
-            SendMessageW(ctx->cmbUsbDevice, CB_SETCURSEL, usbSel, 0);
-
-        // Populate WASAPI device list
-        SendMessageW(ctx->cmbDevice, CB_ADDSTRING, 0, (LPARAM)L"(Default device)");
-        ctx->devices = WasapiOutput::enumerateDevices();
-        for (auto& d : ctx->devices)
-            SendMessageW(ctx->cmbDevice, CB_ADDSTRING, 0, (LPARAM)d.name.c_str());
-
-        bool wasapi = (ctx->db->loadSetting("audio_backend") == "wasapi");
-        SendMessageW(wasapi ? ctx->rdoWasapi : ctx->rdoUsb, BM_SETCHECK, BST_CHECKED, 0);
-        audioSetBackendControls(ctx, wasapi);
-
-        auto savedId = ctx->db->loadSetting("wasapi_device_id");
-        int devSel = 0;
-        for (int i = 0; i < (int)ctx->devices.size(); i++) {
-            int idLen = WideCharToMultiByte(CP_UTF8, 0, ctx->devices[i].id.c_str(), -1, nullptr, 0, nullptr, nullptr);
-            std::string id(idLen, '\0');
-            WideCharToMultiByte(CP_UTF8, 0, ctx->devices[i].id.c_str(), -1, id.data(), idLen, nullptr, nullptr);
-            if (!id.empty() && id.back() == '\0') id.pop_back();
-            if (id == savedId) { devSel = i + 1; break; }
-        }
-        SendMessageW(ctx->cmbDevice, CB_SETCURSEL, devSel, 0);
-
-        bool exclusive = (ctx->db->loadSetting("wasapi_mode") == "exclusive");
-        SendMessageW(exclusive ? ctx->rdoExclusive : ctx->rdoShared, BM_SETCHECK, BST_CHECKED, 0);
-        return 0;
     }
-    case WM_COMMAND:
-        switch (LOWORD(wp)) {
-        case ID_AUDIO_USB:
-            audioSetBackendControls(ctx, false);
-            break;
-        case ID_AUDIO_WASAPI:
-            audioSetBackendControls(ctx, true);
-            break;
-        case ID_AUDIO_APPLY: {
-            bool wasapi = (SendMessageW(ctx->rdoWasapi, BM_GETCHECK, 0, 0) == BST_CHECKED);
-            ctx->db->saveSetting("audio_backend", wasapi ? "wasapi" : "usb");
-            if (wasapi) {
-                int sel = (int)SendMessageW(ctx->cmbDevice, CB_GETCURSEL, 0, 0);
-                std::string devId;
-                if (sel > 0 && sel <= (int)ctx->devices.size()) {
-                    auto& ws = ctx->devices[sel - 1].id;
-                    int dLen = WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), -1, nullptr, 0, nullptr, nullptr);
-                    devId.assign(dLen, '\0');
-                    WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), -1, devId.data(), dLen, nullptr, nullptr);
-                    if (!devId.empty() && devId.back() == '\0') devId.pop_back();
-                }
-                ctx->db->saveSetting("wasapi_device_id", devId);
-                bool excl = (SendMessageW(ctx->rdoExclusive, BM_GETCHECK, 0, 0) == BST_CHECKED);
-                ctx->db->saveSetting("wasapi_mode", excl ? "exclusive" : "shared");
-            } else {
-                int usel = (int)SendMessageW(ctx->cmbUsbDevice, CB_GETCURSEL, 0, 0);
-                if (usel >= 0 && usel < (int)ctx->usbDevices.size()) {
-                    char buf[8];
-                    snprintf(buf, sizeof(buf), "%04X", ctx->usbDevices[usel].vid);
-                    ctx->db->saveSetting("usb_vid", buf);
-                    snprintf(buf, sizeof(buf), "%04X", ctx->usbDevices[usel].pid);
-                    ctx->db->saveSetting("usb_pid", buf);
-                }
-            }
-            ctx->applied = true;
-            DestroyWindow(hwnd);
-            break;
-        }
-        case IDCANCEL:
-            DestroyWindow(hwnd);
-            break;
-        }
-        break;
-    case WM_CLOSE:
-        DestroyWindow(hwnd);
-        break;
-    case WM_DESTROY:
-        PostMessageW(ctx->parent, WM_NULL, 0, 0);
-        break;
+
+    asBackendOptions_.clear();
+    asBackendOptions_.push_back(AudioBackend::Usb);
+#ifdef _WIN32
+    asBackendOptions_.push_back(AudioBackend::Wasapi);
+    asWasapiDevices_ = WasapiOutput::enumerateDevices();
+    asWasapiSel_ = 0;
+    {
+        auto savedId = db_.loadSetting("wasapi_device_id");
+        for (int i = 0; i < (int)asWasapiDevices_.size(); i++)
+            if (wideToUtf8(asWasapiDevices_[i].id) == savedId) { asWasapiSel_ = i + 1; break; }
     }
-    return DefWindowProcW(hwnd, msg, wp, lp);
+    asExclusive_ = (db_.loadSetting("wasapi_mode") == "exclusive");
+#else
+#ifdef MATRIX_HAVE_ALSA
+    asBackendOptions_.push_back(AudioBackend::Alsa);
+#endif
+#ifdef MATRIX_HAVE_JACK
+    asBackendOptions_.push_back(AudioBackend::Jack);
+#endif
+#endif
+
+    std::string backend = db_.loadSetting("audio_backend");
+    asBackendSelIdx_ = 0;
+    for (int i = 0; i < (int)asBackendOptions_.size(); i++) {
+        AudioBackend b = asBackendOptions_[i];
+        if ((b == AudioBackend::Wasapi && backend == "wasapi") ||
+            (b == AudioBackend::Alsa   && backend == "alsa")   ||
+            (b == AudioBackend::Jack   && backend == "jack")) {
+            asBackendSelIdx_ = i;
+            break;
+        }
+    }
+
+    asHoverBackendRow_ = -1;
+    asHoverDeviceRow_  = -1;
+    asHoverClose_ = asHoverApply_ = false;
+#ifdef _WIN32
+    asHoverModeRow_ = -1;
+#endif
+    activePanel_ = SettingsPanel::AudioSettings;
+    invalidate();
 }
 
-void PlayerWindow::onAudioSettings() {
-    static bool registered = false;
-    if (!registered) {
-        WNDCLASSW wc = {};
-        wc.lpfnWndProc   = audioSettingsDlgProc;
-        wc.hInstance     = host_->nativeInstance();
-        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
-        wc.lpszClassName = L"MatrixAudioSettings";
-        wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
-        RegisterClassW(&wc);
-        registered = true;
+void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
+    LayoutRect content = panels::drawHeader(canvas, area, "Audio Output Settings", uiScale_, textSizes_.header, asCloseRc_);
+    Rect c = toRect(content);
+    float pad = 20.0f * uiScale_;
+    float y = c.y + pad;
+
+    canvas.textStyled("Output backend:", c.x + pad, y, textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+    y += textSizes_.nav * 1.8f;
+
+    float rowH = 34.0f * uiScale_;
+    asBackendRowRects_.assign(asBackendOptions_.size(), LayoutRect{});
+    for (int i = 0; i < (int)asBackendOptions_.size(); i++) {
+        LayoutRect rc = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + rowH) };
+        asBackendRowRects_[i] = rc;
+        bool sel = (i == asBackendSelIdx_);
+        if (i == asHoverBackendRow_) {
+            Rect r = toRect(rc);
+            canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), 6.0f);
+        }
+        std::string bullet = sel ? "( * )  " : "(   )  ";
+        canvas.textStyled(bullet + backendDisplayName(asBackendOptions_[i]),
+                          c.x + pad + 8.0f * uiScale_, y + rowH * 0.5f - textSizes_.nav * 0.5f,
+                          textSizes_.nav, toColor(sel ? CLR_ACCENT : CLR_TEXT_PRIMARY), FontStyle::Roman);
+        y += rowH;
     }
+    y += 12.0f * uiScale_;
 
-    AudioSettingsDlgCtx ctx{ &db_, host_->nativeHandle() };
-    HWND dlg = CreateWindowExW(
-        WS_EX_DLGMODALFRAME, L"MatrixAudioSettings", L"Audio Settings",
-        WS_POPUP | WS_CAPTION | WS_SYSMENU,
-        0, 0, 530, 297, host_->nativeHandle(), nullptr, host_->nativeInstance(), &ctx);
+    AudioBackend sel = asBackendOptions_.empty() ? AudioBackend::Usb : asBackendOptions_[asBackendSelIdx_];
+    float listH = 6.0f * kPanelRowH;
 
-    RECT pr; GetWindowRect(host_->nativeHandle(), &pr);
-    RECT dr; GetWindowRect(dlg, &dr);
-    int dw = dr.right - dr.left, dh = dr.bottom - dr.top;
-    SetWindowPos(dlg, nullptr,
-        pr.left + (pr.right - pr.left - dw) / 2,
-        pr.top  + (pr.bottom - pr.top  - dh) / 2,
-        0, 0, SWP_NOSIZE | SWP_NOZORDER);
-
-    EnableWindow(host_->nativeHandle(), FALSE);
-    ShowWindow(dlg, SW_SHOW);
-
-    MSG msg;
-    while (IsWindow(dlg) && GetMessageW(&msg, nullptr, 0, 0)) {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
+    if (sel == AudioBackend::Usb) {
+        canvas.textStyled("USB DAC:", c.x + pad, y, textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+        y += textSizes_.nav * 1.6f;
+        asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
+        std::vector<std::string> labels;
+        for (auto& d : asUsbDevices_) labels.push_back(d.name);
+        panels::drawRowList(canvas, asDeviceListArea_, labels, kPanelRowH, 0, asHoverDeviceRow_, asUsbSel_,
+                            textSizes_.nav, uiScale_);
+        if (labels.empty()) {
+            Rect a = toRect(asDeviceListArea_);
+            canvas.textStyled("No USB audio devices found.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,
+                              textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        }
+        y += listH + 12.0f * uiScale_;
     }
+#ifdef _WIN32
+    else if (sel == AudioBackend::Wasapi) {
+        canvas.textStyled("Device:", c.x + pad, y, textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+        y += textSizes_.nav * 1.6f;
+        asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
+        std::vector<std::string> labels;
+        labels.push_back("(Default device)");
+        for (auto& d : asWasapiDevices_) labels.push_back(wideToUtf8(d.name));
+        panels::drawRowList(canvas, asDeviceListArea_, labels, kPanelRowH, 0, asHoverDeviceRow_, asWasapiSel_,
+                            textSizes_.nav, uiScale_);
+        y += listH + 12.0f * uiScale_;
 
-    EnableWindow(host_->nativeHandle(), TRUE);
-    SetForegroundWindow(host_->nativeHandle());
-    markDirty();  // repaint the main window, obscured/disabled while the dialog was up
+        canvas.textStyled("Mode:", c.x + pad, y, textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+        y += textSizes_.nav * 1.6f;
+        static const char* kModeLabels[2] = {
+            "Shared \xE2\x80\x94 other apps can play simultaneously",
+            "Exclusive \xE2\x80\x94 lower latency, blocks other apps" };
+        for (int i = 0; i < 2; i++) {
+            LayoutRect rc = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + rowH) };
+            asModeRows_[i] = rc;
+            bool s2 = (asExclusive_ == (i == 1));
+            if (i == asHoverModeRow_) {
+                Rect r = toRect(rc);
+                canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), 6.0f);
+            }
+            std::string bullet = s2 ? "( * )  " : "(   )  ";
+            canvas.textStyled(bullet + std::string(kModeLabels[i]), c.x + pad + 8.0f * uiScale_,
+                              y + rowH * 0.5f - textSizes_.nav * 0.5f,
+                              textSizes_.nav, toColor(s2 ? CLR_ACCENT : CLR_TEXT_PRIMARY), FontStyle::Roman);
+            y += rowH;
+        }
+        y += 12.0f * uiScale_;
+    }
+#else
+    else if (sel == AudioBackend::Alsa) {
+        canvas.textStyled("Uses the system default ALSA device (\"default\").",
+                          c.x + pad, y, textSizes_.secondary, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        y += textSizes_.secondary * 1.8f;
+    } else if (sel == AudioBackend::Jack) {
+        canvas.textStyled("Connects automatically to the first available physical playback ports.",
+                          c.x + pad, y, textSizes_.secondary, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        y += textSizes_.secondary * 1.8f;
+    }
+#endif
 
-    if (!ctx.applied) return;
+    float btnW = 120.0f * uiScale_, btnH = 36.0f * uiScale_;
+    int by = (int)(content.bottom - (btnH + pad));
+    asBtnApply_ = { (int)(content.right - pad - btnW), by, content.right - (int)pad, (int)(by + btnH) };
+    panels::drawButton(canvas, asBtnApply_, "Apply", asHoverApply_, textSizes_.nav, true);
+}
 
+void PlayerWindow::applyAudioSettingsPanel() {
     onStop();
 
-    useWasapi_ = (db_.loadSetting("audio_backend") == "wasapi");
-    wasapiMode_ = (db_.loadSetting("wasapi_mode") == "exclusive")
-                  ? WasapiMode::Exclusive : WasapiMode::Shared;
-    auto devIdUtf8 = db_.loadSetting("wasapi_device_id");
-    wasapiDeviceId_ = utf8ToWide(devIdUtf8);
+    AudioBackend sel = asBackendOptions_.empty() ? AudioBackend::Usb : asBackendOptions_[asBackendSelIdx_];
+    audioBackend_ = sel;
 
-    if (useWasapi_) {
-        output_ = std::make_unique<WasapiOutput>(wasapiDeviceId_, wasapiMode_);
-    } else {
+    if (sel == AudioBackend::Usb) {
+        db_.saveSetting("audio_backend", "usb");
+        if (asUsbSel_ >= 0 && asUsbSel_ < (int)asUsbDevices_.size()) {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%04X", asUsbDevices_[asUsbSel_].vid);
+            db_.saveSetting("usb_vid", buf);
+            snprintf(buf, sizeof(buf), "%04X", asUsbDevices_[asUsbSel_].pid);
+            db_.saveSetting("usb_pid", buf);
+        }
         auto vidStr = db_.loadSetting("usb_vid");
         auto pidStr = db_.loadSetting("usb_pid");
         uint16_t vid = vidStr.empty() ? (uint16_t)0x32BB : (uint16_t)strtoul(vidStr.c_str(), nullptr, 16);
         uint16_t pid = pidStr.empty() ? (uint16_t)0x0004 : (uint16_t)strtoul(pidStr.c_str(), nullptr, 16);
-
         usbDriver_.close();
         usbOpen_ = usbDriver_.open(vid, pid);
         if (usbOpen_) usbDriver_.parseDescriptors();
         output_ = std::make_unique<UsbAudioOutput>(usbDriver_);
     }
+#ifdef _WIN32
+    else if (sel == AudioBackend::Wasapi) {
+        db_.saveSetting("audio_backend", "wasapi");
+        std::string devId;
+        if (asWasapiSel_ > 0 && asWasapiSel_ <= (int)asWasapiDevices_.size())
+            devId = wideToUtf8(asWasapiDevices_[asWasapiSel_ - 1].id);
+        db_.saveSetting("wasapi_device_id", devId);
+        db_.saveSetting("wasapi_mode", asExclusive_ ? "exclusive" : "shared");
+        wasapiDeviceId_ = utf8ToWide(devId);
+        wasapiMode_ = asExclusive_ ? WasapiMode::Exclusive : WasapiMode::Shared;
+        output_ = std::make_unique<WasapiOutput>(wasapiDeviceId_, wasapiMode_);
+    }
+#else
+#ifdef MATRIX_HAVE_ALSA
+    else if (sel == AudioBackend::Alsa) {
+        db_.saveSetting("audio_backend", "alsa");
+        output_ = std::make_unique<AlsaOutput>();
+    }
+#endif
+#ifdef MATRIX_HAVE_JACK
+    else if (sel == AudioBackend::Jack) {
+        db_.saveSetting("audio_backend", "jack");
+        output_ = std::make_unique<JackOutput>();
+    }
+#endif
+#endif
+
+    closeActivePanel();
 }
 
-// ── EQ Settings dialog ──────────────────────────────────────────────────────
-
-#define ID_EQ_SEARCH  501
-#define ID_EQ_LIST    502
-#define ID_EQ_ASSIGN  503
-#define ID_EQ_CLEAR   504
-#define ID_EQ_CLOSE   505
-
-struct EqSettingsDlgCtx {
-    Db*                        db;
-    HWND                       parent;
-    HWND                       editSearch;
-    HWND                       listProfiles;
-    HWND                       lblDevice;
-    HWND                       lblSelected;
-    HWND                       lblDetails;
-    const std::vector<EqProfile>* allProfiles;
-    std::vector<int>           filteredIndices;
-    std::string                deviceKey;
-    EqManager*                 eqManager;
-    const EqProfileStore*      profileStore;
-    int                        currentSampleRate;
-    int                        currentChannels;
-    bool                       bitperfectActive = false;
-    bool                       changed = false;
-};
-
-static void eqFilterList(EqSettingsDlgCtx* ctx) {
-    wchar_t searchBuf[256] = {};
-    GetWindowTextW(ctx->editSearch, searchBuf, 256);
-    std::wstring search(searchBuf);
-    for (auto& c : search) c = towlower(c);
-
-    SendMessageW(ctx->listProfiles, WM_SETREDRAW, FALSE, 0);
-    SendMessageW(ctx->listProfiles, LB_RESETCONTENT, 0, 0);
-    ctx->filteredIndices.clear();
-
-    for (int i = 0; i < (int)ctx->allProfiles->size(); i++) {
-        auto& p = (*ctx->allProfiles)[i];
-        std::wstring nameW(utf8ToWide(p.name));
-        std::wstring nameLower = nameW;
-        for (auto& c : nameLower) c = towlower(c);
-
-        if (!search.empty() && nameLower.find(search) == std::wstring::npos)
-            continue;
-
-        std::wstring label = nameW;
-        if (!p.form.empty()) {
-            std::wstring formW(utf8ToWide(p.form));
-            label += L"  (" + formW + L")";
-        }
-        SendMessageW(ctx->listProfiles, LB_ADDSTRING, 0, (LPARAM)label.c_str());
-        ctx->filteredIndices.push_back(i);
-    }
-    SendMessageW(ctx->listProfiles, WM_SETREDRAW, TRUE, 0);
-    InvalidateRect(ctx->listProfiles, nullptr, TRUE);
-}
-
-static void eqUpdateSelection(EqSettingsDlgCtx* ctx) {
-    int sel = (int)SendMessageW(ctx->listProfiles, LB_GETCURSEL, 0, 0);
-    if (sel == LB_ERR || sel >= (int)ctx->filteredIndices.size()) {
-        SetWindowTextW(ctx->lblSelected, L"No profile selected");
-        SetWindowTextW(ctx->lblDetails, L"");
-        return;
-    }
-    int idx = ctx->filteredIndices[sel];
-    auto& p = (*ctx->allProfiles)[idx];
-    std::wstring nameW(utf8ToWide(p.name));
-    std::wstring formW(utf8ToWide(p.form));
-    std::wstring selText = nameW;
-    if (!formW.empty()) selText += L"  (" + formW + L")";
-    SetWindowTextW(ctx->lblSelected, selText.c_str());
-
-    wchar_t detailBuf[128];
-    swprintf_s(detailBuf, 128, L"Preamp: %.1f dB  |  Filters: %d",
-               p.preamp, (int)p.filters.size());
-    SetWindowTextW(ctx->lblDetails, detailBuf);
-}
-
-static LRESULT CALLBACK eqSettingsDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    auto* ctx = (EqSettingsDlgCtx*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-    switch (msg) {
-    case WM_CREATE: {
-        ctx = (EqSettingsDlgCtx*)((CREATESTRUCTW*)lp)->lpCreateParams;
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)ctx);
-        HINSTANCE hi = ((CREATESTRUCTW*)lp)->hInstance;
-        int x = 12, y = 10;
-
-        std::wstring devKeyW(utf8ToWide(ctx->deviceKey));
-        std::wstring devLabel = L"Current device: " + devKeyW;
-        ctx->lblDevice = CreateWindowExW(0, L"STATIC", devLabel.c_str(),
-            WS_CHILD | WS_VISIBLE, x, y, 460, 18, hwnd, nullptr, hi, nullptr);
-        y += 22;
-
-        if (ctx->bitperfectActive) {
-            CreateWindowExW(0, L"STATIC",
-                L"Bitperfect mode active \x2014 EQ changes apply when DSP mode is enabled.",
-                WS_CHILD | WS_VISIBLE, x, y, 460, 18, hwnd, nullptr, hi, nullptr);
-            y += 22;
-        }
-
-        // Show current assignment
-        EqAssignment assign;
-        std::wstring currentAssign = L"No EQ assigned";
-        if (ctx->db->loadEqAssignment(ctx->deviceKey, assign) ||
-            ctx->db->loadEqAssignment("global", assign)) {
-            std::wstring n(utf8ToWide(assign.name));
-            currentAssign = L"Current EQ: " + n;
-        }
-        CreateWindowExW(0, L"STATIC", currentAssign.c_str(),
-            WS_CHILD | WS_VISIBLE, x, y, 460, 18, hwnd, nullptr, hi, nullptr);
-        y += 30;
-
-        CreateWindowExW(0, L"STATIC", L"Search:",
-            WS_CHILD | WS_VISIBLE, x, y + 2, 50, 18, hwnd, nullptr, hi, nullptr);
-        ctx->editSearch = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr,
-            WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
-            x + 54, y, 406, 22, hwnd, (HMENU)ID_EQ_SEARCH, hi, nullptr);
-        y += 30;
-
-        ctx->listProfiles = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
-            WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
-            x, y, 460, 240, hwnd, (HMENU)ID_EQ_LIST, hi, nullptr);
-        y += 248;
-
-        ctx->lblSelected = CreateWindowExW(0, L"STATIC", L"No profile selected",
-            WS_CHILD | WS_VISIBLE, x, y, 460, 18, hwnd, nullptr, hi, nullptr);
-        y += 20;
-        ctx->lblDetails = CreateWindowExW(0, L"STATIC", L"",
-            WS_CHILD | WS_VISIBLE, x, y, 460, 18, hwnd, nullptr, hi, nullptr);
-        y += 30;
-
-        CreateWindowExW(0, L"BUTTON", L"Assign to Device",
-            WS_CHILD | WS_VISIBLE, x, y, 140, 28, hwnd, (HMENU)ID_EQ_ASSIGN, hi, nullptr);
-        CreateWindowExW(0, L"BUTTON", L"Clear",
-            WS_CHILD | WS_VISIBLE, x + 150, y, 80, 28, hwnd, (HMENU)ID_EQ_CLEAR, hi, nullptr);
-        CreateWindowExW(0, L"BUTTON", L"Close",
-            WS_CHILD | WS_VISIBLE, 392, y, 80, 28, hwnd, (HMENU)ID_EQ_CLOSE, hi, nullptr);
-
-        eqFilterList(ctx);
-        return 0;
-    }
-    case WM_COMMAND:
-        if (HIWORD(wp) == EN_CHANGE && LOWORD(wp) == ID_EQ_SEARCH) {
-            eqFilterList(ctx);
-        } else if (HIWORD(wp) == LBN_SELCHANGE && LOWORD(wp) == ID_EQ_LIST) {
-            eqUpdateSelection(ctx);
-        } else if (LOWORD(wp) == ID_EQ_ASSIGN) {
-            int sel = (int)SendMessageW(ctx->listProfiles, LB_GETCURSEL, 0, 0);
-            if (sel == LB_ERR || sel >= (int)ctx->filteredIndices.size()) {
-                MessageBoxW(hwnd, L"Select a profile first.", L"EQ", MB_OK);
-                break;
-            }
-            int idx = ctx->filteredIndices[sel];
-            auto& p = (*ctx->allProfiles)[idx];
-            ctx->db->saveEqAssignment(ctx->deviceKey, p.name, p.source, p.form);
-            if (!ctx->bitperfectActive) {
-                auto* profile = ctx->profileStore->findByKey(p.name, p.source, p.form);
-                if (profile && ctx->eqManager)
-                    ctx->eqManager->applyProfile(profile, ctx->currentSampleRate, ctx->currentChannels);
-            }
-            ctx->changed = true;
-            std::wstring nameW(utf8ToWide(p.name));
-            if (ctx->bitperfectActive) {
-                std::wstring msg = L"Saved: " + nameW + L"\nWill be active when DSP mode is enabled.";
-                MessageBoxW(hwnd, msg.c_str(), L"EQ Profile Saved (Bitperfect)", MB_OK | MB_ICONINFORMATION);
-            } else {
-                std::wstring msg = L"Assigned: " + nameW;
-                MessageBoxW(hwnd, msg.c_str(), L"EQ Profile Assigned", MB_OK | MB_ICONINFORMATION);
-            }
-        } else if (LOWORD(wp) == ID_EQ_CLEAR) {
-            ctx->db->clearEqAssignment(ctx->deviceKey);
-            if (ctx->eqManager) ctx->eqManager->clear();
-            ctx->changed = true;
-            MessageBoxW(hwnd, L"EQ assignment cleared.", L"EQ", MB_OK | MB_ICONINFORMATION);
-        } else if (LOWORD(wp) == ID_EQ_CLOSE) {
-            DestroyWindow(hwnd);
-        }
-        break;
-    case WM_CLOSE:
-        DestroyWindow(hwnd);
-        break;
-    case WM_DESTROY:
-        PostMessageW(ctx->parent, WM_NULL, 0, 0);
-        break;
-    }
-    return DefWindowProcW(hwnd, msg, wp, lp);
-}
+// ── EQ Settings panel ────────────────────────────────────────────────────────
 
 void PlayerWindow::onEqSettings() {
-    static bool registered = false;
-    if (!registered) {
-        WNDCLASSW wc = {};
-        wc.lpfnWndProc   = eqSettingsDlgProc;
-        wc.hInstance     = host_->nativeInstance();
-        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
-        wc.lpszClassName = L"MatrixEqSettings";
-        wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
-        RegisterClassW(&wc);
-        registered = true;
-    }
-
-    int sr = 44100, ch = 2;
-    if (output_) {
-        int r = output_->getConfiguredRate();
-        int c = output_->getConfiguredChannels();
-        if (r > 0) sr = r;
-        if (c > 0) ch = c;
-    }
-
-    EqSettingsDlgCtx ctx{};
-    ctx.db             = &db_;
-    ctx.parent         = host_->nativeHandle();
-    ctx.allProfiles    = &eqProfiles_.getAll();
-    ctx.deviceKey      = getActiveDeviceKey();
-    ctx.eqManager      = &eqManager_;
-    ctx.profileStore   = &eqProfiles_;
-    ctx.currentSampleRate = sr;
-    ctx.currentChannels   = ch;
-    ctx.bitperfectActive  = bitperfectMode_.load();
-
-    HWND dlg = CreateWindowExW(
-        WS_EX_DLGMODALFRAME, L"MatrixEqSettings", L"EQ / AutoEQ Profiles",
-        WS_POPUP | WS_CAPTION | WS_SYSMENU,
-        0, 0, 500, 520, host_->nativeHandle(), nullptr, host_->nativeInstance(), &ctx);
-
-    RECT pr; GetWindowRect(host_->nativeHandle(), &pr);
-    RECT dr; GetWindowRect(dlg, &dr);
-    int dw = dr.right - dr.left, dh = dr.bottom - dr.top;
-    SetWindowPos(dlg, nullptr,
-        pr.left + (pr.right - pr.left - dw) / 2,
-        pr.top  + (pr.bottom - pr.top  - dh) / 2,
-        0, 0, SWP_NOSIZE | SWP_NOZORDER);
-
-    EnableWindow(host_->nativeHandle(), FALSE);
-    ShowWindow(dlg, SW_SHOW);
-
-    MSG msg;
-    while (IsWindow(dlg) && GetMessageW(&msg, nullptr, 0, 0)) {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
-    }
-
-    EnableWindow(host_->nativeHandle(), TRUE);
-    SetForegroundWindow(host_->nativeHandle());
-    markDirty();  // repaint the main window, obscured/disabled while the dialog was up
+    eqDeviceKey_ = getActiveDeviceKey();
+    eqBitperfectActive_ = bitperfectMode_.load();
+    eqSearch_.clear();
+    eqSearchFocused_ = false;
+    eqSelectedRow_ = -1;
+    eqHoverRow_ = -1;
+    eqScrollY_ = 0;
+    eqHoverClose_ = eqHoverAssign_ = eqHoverClear_ = false;
+    eqRefilter();
+    activePanel_ = SettingsPanel::EqSettings;
+    invalidate();
 }
 
-void PlayerWindow::onAddFolder() {
-    wchar_t path[MAX_PATH] = {};
-    BROWSEINFOW bi = {};
-    bi.hwndOwner = host_->nativeHandle();
-    bi.lpszTitle = L"Select music folder to add";
-    bi.ulFlags   = BIF_RETURNONLYFSDIRS | BIF_USENEWUI;
-    LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
-    if (!pidl) return;
-    SHGetPathFromIDListW(pidl, path);
-    CoTaskMemFree(pidl);
+void PlayerWindow::eqRefilter() {
+    eqFilteredIndices_.clear();
+    std::string needle = eqSearch_;
+    for (auto& ch : needle) ch = (char)std::tolower((unsigned char)ch);
+    auto& all = eqProfiles_.getAll();
+    for (int i = 0; i < (int)all.size(); i++) {
+        std::string nameLower = all[i].name;
+        for (auto& ch : nameLower) ch = (char)std::tolower((unsigned char)ch);
+        if (!needle.empty() && nameLower.find(needle) == std::string::npos) continue;
+        eqFilteredIndices_.push_back(i);
+    }
+    if (eqSelectedRow_ >= (int)eqFilteredIndices_.size()) eqSelectedRow_ = -1;
+}
 
-    int rLen = WideCharToMultiByte(CP_UTF8, 0, path, -1, nullptr, 0, nullptr, nullptr);
-    std::string root(rLen, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, path, -1, root.data(), rLen, nullptr, nullptr);
-    if (!root.empty() && root.back() == '\0') root.pop_back();
+void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
+    LayoutRect content = panels::drawHeader(canvas, area, "EQ / AutoEQ Profiles", uiScale_, textSizes_.header, eqCloseRc_);
+    Rect c = toRect(content);
+    float pad = 20.0f * uiScale_;
+    float y = c.y + pad;
+
+    canvas.textStyled("Device: " + eqDeviceKey_, c.x + pad, y, textSizes_.secondary, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+    y += textSizes_.secondary * 1.6f;
+
+    EqAssignment assign;
+    std::string assignLine = "No EQ assigned";
+    if (db_.loadEqAssignment(eqDeviceKey_, assign) || db_.loadEqAssignment("global", assign))
+        assignLine = "Current EQ: " + assign.name;
+    canvas.textStyled(assignLine, c.x + pad, y, textSizes_.secondary, toColor(CLR_ACCENT), FontStyle::Roman);
+    y += textSizes_.secondary * 1.8f;
+
+    if (eqBitperfectActive_) {
+        canvas.textStyled("Bitperfect mode active \xE2\x80\x94 EQ applies once Reference EQ mode is enabled.",
+                          c.x + pad, y, textSizes_.secondary, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        y += textSizes_.secondary * 1.6f;
+    }
+
+    eqSearchRc_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + 34.0f * uiScale_) };
+    {
+        Rect s = toRect(eqSearchRc_);
+        canvas.rect(s.x, s.y, s.w, s.h, toColor(RGB(24, 24, 24)), 6.0f);
+        canvas.rect(s.x, s.y, s.w, 1.0f, toColor(eqSearchFocused_ ? CLR_ACCENT : CLR_SEPARATOR));
+        std::string shown = (eqSearch_.empty() && !eqSearchFocused_) ? "Search profiles" : eqSearch_;
+        if (eqSearchFocused_) shown += "|";
+        ColorRef clr = (eqSearch_.empty() && !eqSearchFocused_) ? CLR_TEXT_DIM : CLR_TEXT_PRIMARY;
+        canvas.textStyled(shown, s.x + 10.0f * uiScale_, s.y + s.h * 0.5f - textSizes_.nav * 0.5f,
+                          textSizes_.nav, toColor(clr), FontStyle::Roman);
+    }
+    y += 34.0f * uiScale_ + 10.0f * uiScale_;
+
+    float btnH = 36.0f * uiScale_;
+    LayoutRect listArea = { content.left, (int)y, content.right, (int)(content.bottom - (btnH + pad * 2)) };
+    eqListArea_ = listArea;
+
+    std::vector<std::string> labels;
+    labels.reserve(eqFilteredIndices_.size());
+    auto& all = eqProfiles_.getAll();
+    for (int idx : eqFilteredIndices_) {
+        std::string label = all[idx].name;
+        if (!all[idx].form.empty()) label += "  (" + all[idx].form + ")";
+        labels.push_back(label);
+    }
+    panels::drawRowList(canvas, listArea, labels, kPanelRowH, eqScrollY_, eqHoverRow_, eqSelectedRow_,
+                        textSizes_.nav, uiScale_);
+    if (labels.empty()) {
+        Rect a = toRect(listArea);
+        canvas.textStyled("No profiles match.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,
+                          textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+    }
+
+    float btnW = 170.0f * uiScale_;
+    int by = (int)(content.bottom - (btnH + pad));
+    eqBtnAssign_ = { content.left + (int)pad, by, (int)(content.left + pad + btnW), (int)(by + btnH) };
+    eqBtnClear_  = { (int)(content.left + pad + btnW + 12.0f * uiScale_), by,
+                     (int)(content.left + pad + 2.0f * btnW + 12.0f * uiScale_), (int)(by + btnH) };
+    panels::drawButton(canvas, eqBtnAssign_, "Assign to Device", eqHoverAssign_, textSizes_.nav, true);
+    panels::drawButton(canvas, eqBtnClear_, "Clear", eqHoverClear_, textSizes_.nav);
+}
+
+// ── Folder picker panel (also reached via "Add Music Folder") ───────────────
+// Replaces SHBrowseForFolderW on BOTH platforms — not just stubbed on Linux —
+// per the decision to keep every OS-chrome surface out of this otherwise
+// fully custom-rendered app (see CLAUDE.md's design-decisions table).
+
+void PlayerWindow::fpLoadDir(const std::string& dir) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path p = dir.empty() ? fs::path(userHomeDir()) : fs::weakly_canonical(fs::path(dir), ec);
+    if (ec) p = fs::path(userHomeDir());
+
+    fpCurrentDir_ = p.string();
+    fpEntries_.clear();
+    std::error_code iterEc;
+    for (auto it = fs::directory_iterator(p, fs::directory_options::skip_permission_denied, iterEc);
+         !iterEc && it != fs::directory_iterator(); it.increment(iterEc)) {
+        std::error_code isDirEc;
+        if (it->is_directory(isDirEc) && !isDirEc) {
+            std::string name = it->path().filename().string();
+            if (!name.empty() && name[0] != '.')  // hide dotfiles, matches typical folder pickers
+                fpEntries_.push_back(name);
+        }
+    }
+    std::sort(fpEntries_.begin(), fpEntries_.end(), [](const std::string& a, const std::string& b) {
+        return std::lexicographical_compare(a.begin(), a.end(), b.begin(), b.end(),
+            [](char x, char y) { return std::tolower((unsigned char)x) < std::tolower((unsigned char)y); });
+    });
+    fpHasParent_ = (p.parent_path() != p);
+    fpScrollY_ = 0;
+    fpHoverRow_ = -1;
+}
+
+void PlayerWindow::commitAddFolder(const std::string& root) {
     db_.addMusicRoot(root);
-
-    HWND h = host_->nativeHandle();
-    watcher_.watchRoot(root, [h](const std::string&) {
+    watcher_.watchRoot(root, [this](const std::string&) {
         host_->postAppEvent(AppEvent::ScanDone, 1);
     });
-
     startBackgroundScan();
 }
 
-#else  // !_WIN32 — not yet ported, see the comment above this block.
-
-void PlayerWindow::onManageFolders() {
-    printf("[Settings] Manage Folders is not yet available on Linux (Phase 7).\n");
-}
-void PlayerWindow::onAudioSettings() {
-    printf("[Settings] Audio Settings is not yet available on Linux (Phase 7).\n");
-}
-void PlayerWindow::onEqSettings() {
-    printf("[Settings] EQ Settings is not yet available on Linux (Phase 7).\n");
-}
 void PlayerWindow::onAddFolder() {
-    printf("[Settings] Add Folder is not yet available on Linux (Phase 7).\n");
+    fpLoadDir(fpCurrentDir_.empty() ? userHomeDir() : fpCurrentDir_);
+    fpHoverClose_ = fpHoverSelect_ = fpHoverCancel_ = false;
+    activePanel_ = SettingsPanel::FolderPicker;
+    invalidate();
 }
 
-#endif  // _WIN32
+void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
+    LayoutRect content = panels::drawHeader(canvas, area, "Select Music Folder", uiScale_, textSizes_.header, fpCloseRc_);
+    Rect c = toRect(content);
+    float pad = 20.0f * uiScale_;
+
+    canvas.textStyled(truncateToWidth(canvas, fpCurrentDir_, c.w - 2.0f * pad, textSizes_.secondary, FontStyle::Roman),
+                      c.x + pad, c.y + pad, textSizes_.secondary, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+
+    float listTop = pad * 2.0f + textSizes_.secondary * 1.4f;
+    float btnH = 36.0f * uiScale_;
+    LayoutRect listArea = { content.left, (int)(content.top + listTop),
+                            content.right, (int)(content.bottom - (btnH + pad * 2.0f)) };
+    fpListArea_ = listArea;
+
+    std::vector<std::string> labels;
+    labels.reserve(fpEntries_.size() + 1);
+    if (fpHasParent_) labels.push_back(".. (parent folder)");
+    labels.insert(labels.end(), fpEntries_.begin(), fpEntries_.end());
+
+    panels::drawRowList(canvas, listArea, labels, kPanelRowH, fpScrollY_, fpHoverRow_, -1,
+                        textSizes_.nav, uiScale_);
+    if (labels.empty()) {
+        Rect a = toRect(listArea);
+        canvas.textStyled("No subfolders here.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,
+                          textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+    }
+
+    float btnW = 200.0f * uiScale_;
+    int by = (int)(content.bottom - (btnH + pad));
+    fpBtnCancel_ = { content.left + (int)pad, by, (int)(content.left + pad + btnW), (int)(by + btnH) };
+    fpBtnSelect_ = { (int)(content.right - pad - btnW), by, content.right - (int)pad, (int)(by + btnH) };
+    panels::drawButton(canvas, fpBtnCancel_, "Cancel", fpHoverCancel_, textSizes_.nav);
+    panels::drawButton(canvas, fpBtnSelect_, "Select This Folder", fpHoverSelect_, textSizes_.nav, true);
+}
 
 // ── Album / Track selection (simplified for custom UI) ──────────────────────
 
@@ -2611,15 +2693,32 @@ void PlayerWindow::onTrackSelected(int idx) {
 // ── Playback ─────────────────────────────────────────────────────────────────
 
 std::string PlayerWindow::getActiveDeviceKey() {
-    if (useWasapi_) {
+    switch (audioBackend_) {
+    case AudioBackend::Wasapi: {
         auto devId = db_.loadSetting("wasapi_device_id");
         return devId.empty() ? "wasapi" : "wasapi:" + devId;
     }
-    auto vid = db_.loadSetting("usb_vid");
-    auto pid = db_.loadSetting("usb_pid");
-    if (vid.empty()) vid = "32BB";
-    if (pid.empty()) pid = "0004";
-    return vid + ":" + pid;
+    case AudioBackend::Alsa: return "alsa";
+    case AudioBackend::Jack: return "jack";
+    case AudioBackend::Usb:
+    default: {
+        auto vid = db_.loadSetting("usb_vid");
+        auto pid = db_.loadSetting("usb_pid");
+        if (vid.empty()) vid = "32BB";
+        if (pid.empty()) pid = "0004";
+        return vid + ":" + pid;
+    }
+    }
+}
+
+std::string PlayerWindow::audioBackendLabel() const {
+    switch (audioBackend_) {
+    case AudioBackend::Wasapi: return "WASAPI";
+    case AudioBackend::Alsa:   return "ALSA";
+    case AudioBackend::Jack:   return "JACK";
+    case AudioBackend::Usb:
+    default:                   return "USB";
+    }
 }
 
 void PlayerWindow::applyDeviceEq(int sampleRate, int channels) {
@@ -2717,10 +2816,11 @@ void PlayerWindow::onPlay() {
     int reqBits = isBitperfect ? active_->bitsPerSample() : 32;
     bool cfgOk = output_->configure(fileSr, active_->channels(), reqBits, isBitperfect);
     if (!cfgOk && !isBitperfect) {
-        // Negotiate the best rate the device supports (WASAPI: probe; USB: descriptor).
-        std::vector<int> supported = useWasapi_
-            ? output_->probeRates(active_->channels())
-            : usbDriver_.getOutputRates();
+        // Negotiate the best rate the device supports (USB: descriptor; every
+        // other backend: its own probeRates(), empty/unknown by default).
+        std::vector<int> supported = (audioBackend_ == AudioBackend::Usb)
+            ? usbDriver_.getOutputRates()
+            : output_->probeRates(active_->channels());
         outSr = pickOutputRate(fileSr, supported);
         cfgOk = output_->configure(outSr, active_->channels(), 32, false);
         printf("[Audio][WARN] %d Hz unsupported -> negotiated %d Hz\n", fileSr, outSr);
@@ -2746,17 +2846,17 @@ void PlayerWindow::onPlay() {
 
     // Query device's maximum supported bit depth for the final quantize step.
     int deviceMaxBits = 32;
-#ifdef _WIN32
-    if (useWasapi_ && !isBitperfect) {
-        auto* wasapi = static_cast<WasapiOutput*>(output_.get());
-        deviceMaxBits = wasapi->getMaxBitDepth(outSr, active_->channels());
-        if (deviceMaxBits <= 0) deviceMaxBits = 32;
-    } else
-#endif
-    if (!useWasapi_) {
+    if (audioBackend_ == AudioBackend::Usb) {
         deviceMaxBits = usbDriver_.getConfiguredBitDepth();
         if (deviceMaxBits <= 0) deviceMaxBits = 32;
     }
+#ifdef _WIN32
+    else if (audioBackend_ == AudioBackend::Wasapi && !isBitperfect) {
+        auto* wasapi = static_cast<WasapiOutput*>(output_.get());
+        deviceMaxBits = wasapi->getMaxBitDepth(outSr, active_->channels());
+        if (deviceMaxBits <= 0) deviceMaxBits = 32;
+    }
+#endif
     printf("[Audio] device max bit depth: %d\n", deviceMaxBits);
     fflush(stdout);
 
@@ -3253,6 +3353,7 @@ void PlayerWindow::onHotkey(int hotkeyId) {
 }
 
 void PlayerWindow::onCharPortable(uint32_t codepoint) {
+    if (activePanel_ != SettingsPanel::None) { onPanelChar(codepoint); return; }
     if (!searchFocused_) return;
     if (codepoint == 0x08) {  // backspace: pop one UTF-8 codepoint
         while (!searchQuery_.empty() && (searchQuery_.back() & 0xC0) == 0x80)
@@ -3263,23 +3364,7 @@ void PlayerWindow::onCharPortable(uint32_t codepoint) {
         // detour (Windows' WM_CHAR delivers UTF-16 code units, which for the
         // BMP codepoints a search box actually sees are numerically the same
         // value this function receives).
-        char u8[4]; int n = 0;
-        if (codepoint < 0x80) {
-            u8[n++] = (char)codepoint;
-        } else if (codepoint < 0x800) {
-            u8[n++] = (char)(0xC0 | (codepoint >> 6));
-            u8[n++] = (char)(0x80 | (codepoint & 0x3F));
-        } else if (codepoint < 0x10000) {
-            u8[n++] = (char)(0xE0 | (codepoint >> 12));
-            u8[n++] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
-            u8[n++] = (char)(0x80 | (codepoint & 0x3F));
-        } else {
-            u8[n++] = (char)(0xF0 | (codepoint >> 18));
-            u8[n++] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
-            u8[n++] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
-            u8[n++] = (char)(0x80 | (codepoint & 0x3F));
-        }
-        searchQuery_.append(u8, n);
+        appendUtf8(searchQuery_, codepoint);
     } else {
         return;  // control chars: consumed, no query change
     }
@@ -3289,7 +3374,33 @@ void PlayerWindow::onCharPortable(uint32_t codepoint) {
     invalidate();
 }
 
+void PlayerWindow::onPanelChar(uint32_t codepoint) {
+    if (activePanel_ != SettingsPanel::EqSettings || !eqSearchFocused_) return;
+    if (codepoint == 0x08) {
+        while (!eqSearch_.empty() && (eqSearch_.back() & 0xC0) == 0x80)
+            eqSearch_.pop_back();
+        if (!eqSearch_.empty()) eqSearch_.pop_back();
+    } else if (codepoint >= 0x20 && codepoint != 0x7F) {
+        appendUtf8(eqSearch_, codepoint);
+    } else {
+        return;
+    }
+    eqRefilter();
+    eqScrollY_ = 0;
+    invalidate();
+}
+
+bool PlayerWindow::onPanelKeyDown(int keyCode) {
+    if (activePanel_ == SettingsPanel::None) return false;
+    if (keyCode == key::Escape) { closeActivePanel(); return true; }
+    return true;  // swallow every other key while a panel is open — no
+                  // play/stop or search-box interaction bleeding through to
+                  // the main view behind it (mirrors the native dialogs'
+                  // EnableWindow(false) modal behavior).
+}
+
 void PlayerWindow::onKeyDownPortable(int keyCode) {
+    if (onPanelKeyDown(keyCode)) return;
     switch (keyCode) {
     case key::Space:
         if (searchFocused_) return;  // typing a space, not play/stop

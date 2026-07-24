@@ -7,7 +7,8 @@
 set(MATRIX_PLAYER_PORTABLE_SOURCES
     src/gui_main.cc
     src/player_view.cc
-    src/art_view.cc)
+    src/art_view.cc
+    src/panels/settings_panels.cc)
 
 if(WIN32)
     add_executable(matrix_player WIN32
@@ -47,18 +48,38 @@ if(WIN32)
         soxr
         turbojpeg-static
         vk_canvas_core
-        comctl32
-        comdlg32
-        shell32
         ole32
         mmdevapi
         avrt
         dbghelp)
 else()
+    # AlsaOutput/JackOutput are secondary Linux outputs (see gui/src/os/) —
+    # only built when audio_engine actually found ALSA/jack2 dev headers and
+    # defined the corresponding target (same optionality as the ae_alsa/
+    # ae_jack tools in framework/audio_engine/CMakeLists.txt).
+    set(MATRIX_LINUX_AUDIO_SOURCES)
+    set(MATRIX_LINUX_AUDIO_LIBS)
+    if(TARGET ae_alsa)
+        list(APPEND MATRIX_LINUX_AUDIO_SOURCES src/os/alsa_output.cc)
+        list(APPEND MATRIX_LINUX_AUDIO_LIBS ae_alsa)
+    endif()
+    if(TARGET ae_jack)
+        list(APPEND MATRIX_LINUX_AUDIO_SOURCES src/os/jack_output.cc)
+        list(APPEND MATRIX_LINUX_AUDIO_LIBS ae_jack)
+    endif()
+
     add_executable(matrix_player
         ${MATRIX_PLAYER_PORTABLE_SOURCES}
+        ${MATRIX_LINUX_AUDIO_SOURCES}
         src/os/linux_host.cc
         ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/linux/wayland_platform.cc)
+
+    if(TARGET ae_alsa)
+        target_compile_definitions(matrix_player PRIVATE MATRIX_HAVE_ALSA)
+    endif()
+    if(TARGET ae_jack)
+        target_compile_definitions(matrix_player PRIVATE MATRIX_HAVE_JACK)
+    endif()
 
     target_include_directories(matrix_player PRIVATE
         src
@@ -75,6 +96,7 @@ else()
     target_link_libraries(matrix_player PRIVATE
         matrix_core
         ae_usb
+        ${MATRIX_LINUX_AUDIO_LIBS}
         sqlite3
         soxr
         turbojpeg-static
