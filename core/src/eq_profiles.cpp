@@ -1,7 +1,8 @@
-#include "eq_profiles.h"
-#include "../libs/thirdparty/json.hpp"
+#include "core/eq_profiles.h"
+#include "json.hpp"
 #include <fstream>
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 
 using json = nlohmann::json;
@@ -37,7 +38,11 @@ bool EqProfileStore::load(const std::string& jsonPath) {
 
         std::sort(profiles_.begin(), profiles_.end(),
             [](const EqProfile& a, const EqProfile& b) {
-                return _stricmp(a.name.c_str(), b.name.c_str()) < 0;
+                return std::lexicographical_compare(
+                    a.name.begin(), a.name.end(), b.name.begin(), b.name.end(),
+                    [](char x, char y) {
+                        return std::tolower((unsigned char)x) < std::tolower((unsigned char)y);
+                    });
             });
 
         printf("[EQ] Loaded %zu profiles from %s\n", profiles_.size(), jsonPath.c_str());

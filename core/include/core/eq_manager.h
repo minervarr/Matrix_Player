@@ -1,5 +1,5 @@
 #pragma once
-#include "eq_profiles.h"
+#include "core/eq_profiles.h"
 #include "core/dsp/eq_processor.h"
 #include <atomic>
 

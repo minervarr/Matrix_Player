@@ -7,7 +7,7 @@
 #include <thread>
 #include <atomic>
 #include <vector>
-#include "player_window.h"
+#include "player_view.hh"
 #include "usb_audio.h"
 
 #pragma comment(lib, "winmm.lib")

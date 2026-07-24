@@ -1,4 +1,4 @@
-#include "decoder.h"
+#include "core/decoder.h"
 #include <cstdio>
 #include <algorithm>
 #include <vector>
@@ -16,10 +16,10 @@
 #pragma warning(push, 0)
 #endif
 #define DR_FLAC_IMPLEMENTATION
-#include "../libs/thirdparty/dr_flac.h"
+#include "dr_flac.h"
 
 #define DR_WAV_IMPLEMENTATION
-#include "../libs/thirdparty/dr_wav.h"
+#include "dr_wav.h"
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
@@ -45,6 +45,7 @@ static std::string fileExt(const std::string& path) {
     return ext;
 }
 
+#ifdef _WIN32
 static std::wstring utf8ToWide(const std::string& s) {
     if (s.empty()) return {};
     int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
@@ -53,16 +54,25 @@ static std::wstring utf8ToWide(const std::string& s) {
     if (!w.empty() && w.back() == L'\0') w.pop_back();
     return w;
 }
+#endif
 
 bool Decoder::open(const std::string& path) {
     close();
     seekTarget_.store(-1, std::memory_order_relaxed);
     std::string ext = fileExt(path);
+
+#ifdef _WIN32
     std::wstring wpath = utf8ToWide(path);
+#endif
 
     if (ext == ".wav") {
-        if (!drwav_init_file_w(&impl_->wav, wpath.c_str(), nullptr)) {
-            printf("[Decoder][ERROR] drwav_init_file_w FAILED: '%s'\n", path.c_str());
+#ifdef _WIN32
+        bool opened = drwav_init_file_w(&impl_->wav, wpath.c_str(), nullptr);
+#else
+        bool opened = drwav_init_file(&impl_->wav, path.c_str(), nullptr);
+#endif
+        if (!opened) {
+            printf("[Decoder][ERROR] drwav_init_file FAILED: '%s'\n", path.c_str());
             fflush(stdout);
             return false;
         }
@@ -72,9 +82,13 @@ bool Decoder::open(const std::string& path) {
         totalFrames_   = (int64_t)impl_->wav.totalPCMFrameCount;
         bitsPerSample_ = (int)impl_->wav.bitsPerSample;
     } else {
+#ifdef _WIN32
         impl_->flac = drflac_open_file_w(wpath.c_str(), nullptr);
+#else
+        impl_->flac = drflac_open_file(path.c_str(), nullptr);
+#endif
         if (!impl_->flac) {
-            printf("[Decoder][ERROR] drflac_open_file_w FAILED: '%s'\n", path.c_str());
+            printf("[Decoder][ERROR] drflac_open_file FAILED: '%s'\n", path.c_str());
             fflush(stdout);
             return false;
         }

@@ -1,4 +1,4 @@
-#include "wasapi_output.h"
+#include "wasapi_output.hh"
 #include "log_util.h"
 #include <functiondiscoverykeys_devpkey.h>
 #include <avrt.h>

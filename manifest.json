@@ -1,0 +1,13 @@
+{
+  "name": "matrix_player",
+  "description": "Native bit-perfect music player driving a USB DAC directly, bypassing the OS audio mixer.",
+  "version": "0.1.0",
+  "platforms": ["windows", "linux"],
+  "language": "C++17",
+  "ui_framework": "vk_canvas",
+  "audio_engine": {
+    "path": "framework/audio_engine",
+    "backends": ["usb", "wasapi (windows)", "alsa (linux, secondary)", "jack (linux, secondary)"]
+  },
+  "database": "sqlite3"
+}

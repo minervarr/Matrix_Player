@@ -1,11 +1,15 @@
-#include "library.h"
+#include "core/library.h"
+#ifdef _WIN32
 #include <windows.h>
+#endif
 #include <algorithm>
 #include <filesystem>
+#include <system_error>
 #include <map>
 #include <cctype>
 #include <cstdio>
 #include <future>
+#include <thread>
 #include <regex>
 #include "dr_flac.h"
 #include "dr_wav.h"
@@ -168,16 +172,13 @@ static void onFlacMeta(void* userdata, drflac_metadata* meta) {
     }
 }
 
-static int64_t getFileMtime(const std::string& path) {
-    auto ftime = fs::last_write_time(fs::path(path));
-    return ftime.time_since_epoch().count();
-}
-
-static Track quickParseWAV(const std::string& path) {
-    Track t;
-    t.filePath = path;
-    t.title = fs::path(fs::u8path(path)).stem().u8string();
-
+// Windows keeps the exact FILETIME-tick value (100ns since 1601) it always
+// has; Linux uses filesystem::last_write_time's native clock tick count.
+// Neither is ever compared across platforms — only against a cache value
+// this same machine wrote on a prior scan — so the differing epoch/units
+// are safe.
+static void statSizeAndMtime(const std::string& path, int64_t& outSize, int64_t& outMtime) {
+#ifdef _WIN32
     int wl = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
     std::wstring wpath(wl, L'\0');
     MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath.data(), wl);
@@ -188,15 +189,40 @@ static Track quickParseWAV(const std::string& path) {
         LARGE_INTEGER sz;
         sz.HighPart = fad.nFileSizeHigh;
         sz.LowPart  = fad.nFileSizeLow;
-        t.fileSize  = sz.QuadPart;
+        outSize     = sz.QuadPart;
         LARGE_INTEGER mt;
         mt.HighPart = fad.ftLastWriteTime.dwHighDateTime;
         mt.LowPart  = fad.ftLastWriteTime.dwLowDateTime;
-        t.fileMtime = mt.QuadPart;
+        outMtime    = mt.QuadPart;
     }
+#else
+    std::error_code ec;
+    fs::path p = fs::u8path(path);
+    auto sz = fs::file_size(p, ec);
+    outSize = ec ? 0 : static_cast<int64_t>(sz);
+    auto ftime = fs::last_write_time(p, ec);
+    outMtime = ec ? 0 : ftime.time_since_epoch().count();
+#endif
+}
+
+static Track quickParseWAV(const std::string& path) {
+    Track t;
+    t.filePath = path;
+    t.title = fs::path(fs::u8path(path)).stem().u8string();
+
+    statSizeAndMtime(path, t.fileSize, t.fileMtime);
 
     drwav wav;
-    if (drwav_init_file_w(&wav, wpath.c_str(), nullptr)) {
+#ifdef _WIN32
+    int wl = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
+    std::wstring wpath(wl, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath.data(), wl);
+    if (!wpath.empty() && wpath.back() == L'\0') wpath.pop_back();
+    bool opened = drwav_init_file_w(&wav, wpath.c_str(), nullptr);
+#else
+    bool opened = drwav_init_file(&wav, path.c_str(), nullptr);
+#endif
+    if (opened) {
         t.sampleRate = (int)wav.sampleRate;
         t.channels   = (int)wav.channels;
         t.bitDepth   = (int)wav.bitsPerSample;
@@ -212,25 +238,18 @@ static Track quickParseFLAC(const std::string& path) {
     t.filePath = path;
     t.title = fs::path(fs::u8path(path)).stem().u8string();
 
+    statSizeAndMtime(path, t.fileSize, t.fileMtime);
+
+    VorbisCtx ctx;
+#ifdef _WIN32
     int wl = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
     std::wstring wpath(wl, L'\0');
     MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath.data(), wl);
     if (!wpath.empty() && wpath.back() == L'\0') wpath.pop_back();
-
-    WIN32_FILE_ATTRIBUTE_DATA fad;
-    if (GetFileAttributesExW(wpath.c_str(), GetFileExInfoStandard, &fad)) {
-        LARGE_INTEGER sz;
-        sz.HighPart = fad.nFileSizeHigh;
-        sz.LowPart  = fad.nFileSizeLow;
-        t.fileSize  = sz.QuadPart;
-        LARGE_INTEGER mt;
-        mt.HighPart = fad.ftLastWriteTime.dwHighDateTime;
-        mt.LowPart  = fad.ftLastWriteTime.dwLowDateTime;
-        t.fileMtime = mt.QuadPart;
-    }
-
-    VorbisCtx ctx;
     drflac* flac = drflac_open_file_with_metadata_w(wpath.c_str(), onFlacMeta, &ctx, nullptr);
+#else
+    drflac* flac = drflac_open_file_with_metadata(path.c_str(), onFlacMeta, &ctx, nullptr);
+#endif
     if (flac) {
         t.sampleRate = (int)flac->sampleRate;
         t.channels   = (int)flac->channels;
@@ -298,20 +317,11 @@ IncrementalScanResult scanLibraryIncremental(
         // Check if file is unchanged
         auto it = existing.find(filePath);
         if (it != existing.end()) {
-            int wl2 = MultiByteToWideChar(CP_UTF8, 0, filePath.c_str(), -1, nullptr, 0);
-            std::wstring wfp(wl2, L'\0');
-            MultiByteToWideChar(CP_UTF8, 0, filePath.c_str(), -1, wfp.data(), wl2);
-            if (!wfp.empty() && wfp.back() == L'\0') wfp.pop_back();
-            WIN32_FILE_ATTRIBUTE_DATA fad;
-            if (GetFileAttributesExW(wfp.c_str(), GetFileExInfoStandard, &fad)) {
-                LARGE_INTEGER sz, mt;
-                sz.HighPart = fad.nFileSizeHigh; sz.LowPart = fad.nFileSizeLow;
-                mt.HighPart = fad.ftLastWriteTime.dwHighDateTime;
-                mt.LowPart  = fad.ftLastWriteTime.dwLowDateTime;
-                if (sz.QuadPart == it->second.fileSize && mt.QuadPart == it->second.fileMtime) {
-                    result.filesSkipped++;
-                    continue;
-                }
+            int64_t sz = 0, mt = 0;
+            statSizeAndMtime(filePath, sz, mt);
+            if (sz == it->second.fileSize && mt == it->second.fileMtime) {
+                result.filesSkipped++;
+                continue;
             }
         }
 
@@ -397,114 +407,4 @@ void purgeStaleFiles(std::vector<Album>& albums, int& removedCount) {
         std::remove_if(albums.begin(), albums.end(),
             [](const Album& a) { return a.tracks.empty(); }),
         albums.end());
-}
-
-// ── Folder watcher (ReadDirectoryChangesW) ───────────────────────────────────
-
-void FolderWatcher::watchRoot(const std::string& path, Callback cb) {
-    std::lock_guard<std::mutex> lk(mu_);
-
-    // Don't double-watch
-    for (auto& e : entries_)
-        if (e->root == path) return;
-
-    auto entry = std::make_unique<WatchEntry>();
-    entry->root     = path;
-    entry->callback = cb;
-    entry->stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-
-    int wl3 = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
-    std::wstring wpath(wl3, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath.data(), wl3);
-    if (!wpath.empty() && wpath.back() == L'\0') wpath.pop_back();
-    entry->dirHandle = CreateFileW(
-        wpath.c_str(),
-        FILE_LIST_DIRECTORY,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        nullptr,
-        OPEN_EXISTING,
-        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED,
-        nullptr);
-
-    if (entry->dirHandle == INVALID_HANDLE_VALUE) {
-        printf("[Watcher][ERROR] Failed to open directory: %s\n", path.c_str());
-        CloseHandle(entry->stopEvent);
-        return;
-    }
-
-    auto* raw = entry.get();
-    entry->thread = std::thread([raw]() {
-        alignas(DWORD) char buf[4096];
-        OVERLAPPED ovl = {};
-        ovl.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-
-        while (true) {
-            ResetEvent(ovl.hEvent);
-            DWORD bytesReturned = 0;
-            BOOL ok = ReadDirectoryChangesW(
-                raw->dirHandle, buf, sizeof(buf), TRUE,
-                FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_SIZE |
-                FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_CREATION,
-                &bytesReturned, &ovl, nullptr);
-
-            if (!ok) break;
-
-            HANDLE handles[] = { ovl.hEvent, raw->stopEvent };
-            DWORD wait = WaitForMultipleObjects(2, handles, FALSE, INFINITE);
-
-            if (wait == WAIT_OBJECT_0 + 1) break; // stop requested
-            if (wait != WAIT_OBJECT_0) break;
-
-            GetOverlappedResult(raw->dirHandle, &ovl, &bytesReturned, FALSE);
-
-            // Coalesce: wait 500ms for more changes before notifying
-            Sleep(500);
-
-            // Drain any additional changes that accumulated
-            while (true) {
-                ResetEvent(ovl.hEvent);
-                ReadDirectoryChangesW(raw->dirHandle, buf, sizeof(buf), TRUE,
-                    FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_SIZE |
-                    FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_CREATION,
-                    &bytesReturned, &ovl, nullptr);
-                DWORD drain = WaitForSingleObject(ovl.hEvent, 100);
-                if (drain == WAIT_TIMEOUT) {
-                    CancelIo(raw->dirHandle);
-                    break;
-                }
-                GetOverlappedResult(raw->dirHandle, &ovl, &bytesReturned, FALSE);
-            }
-
-            raw->callback(raw->root);
-        }
-
-        CloseHandle(ovl.hEvent);
-    });
-
-    entries_.push_back(std::move(entry));
-}
-
-void FolderWatcher::unwatchRoot(const std::string& path) {
-    std::lock_guard<std::mutex> lk(mu_);
-    for (auto it = entries_.begin(); it != entries_.end(); ++it) {
-        if ((*it)->root == path) {
-            SetEvent((*it)->stopEvent);
-            if ((*it)->thread.joinable()) (*it)->thread.join();
-            CloseHandle((*it)->dirHandle);
-            CloseHandle((*it)->stopEvent);
-            entries_.erase(it);
-            return;
-        }
-    }
-}
-
-void FolderWatcher::unwatchAll() {
-    std::lock_guard<std::mutex> lk(mu_);
-    for (auto& e : entries_) {
-        SetEvent(e->stopEvent);
-        if (e->thread.joinable()) e->thread.join();
-        CloseHandle(e->dirHandle);
-        CloseHandle(e->stopEvent);
-    }
-    entries_.clear();
 }

@@ -1,4 +1,4 @@
-#include "player_window.h"
+#include "player_view.hh"
 #include "log_util.h"
 #include "art_texture.hh"
 #include "img_decode.hh"

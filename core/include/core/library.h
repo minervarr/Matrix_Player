@@ -1,13 +1,9 @@
 #pragma once
-#include <windows.h>
 #include <string>
 #include <vector>
 #include <map>
 #include <memory>
 #include <functional>
-#include <thread>
-#include <atomic>
-#include <mutex>
 
 struct Track {
     int         id = 0;
@@ -71,23 +67,22 @@ void parseAlbumFolder(const std::string& folderPath,
 
 void purgeStaleFiles(std::vector<Album>& albums, int& removedCount);
 
+// Recursive directory-tree watcher with a ~500ms coalescing debounce.
+// Platform backend (ReadDirectoryChangesW on Windows, inotify on Linux) is
+// hidden behind this opaque Impl so the header stays OS-header-free; see
+// core/src/os/windows_folder_watch.cpp / linux_folder_watch.cpp.
 class FolderWatcher {
 public:
     using Callback = std::function<void(const std::string& root)>;
 
+    FolderWatcher();
+    ~FolderWatcher();
+
     void watchRoot(const std::string& path, Callback cb);
     void unwatchRoot(const std::string& path);
     void unwatchAll();
-    ~FolderWatcher() { unwatchAll(); }
 
 private:
-    struct WatchEntry {
-        std::string  root;
-        HANDLE       dirHandle = INVALID_HANDLE_VALUE;
-        HANDLE       stopEvent = nullptr;
-        std::thread  thread;
-        Callback     callback;
-    };
-    std::mutex mu_;
-    std::vector<std::unique_ptr<WatchEntry>> entries_;
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };

@@ -1,5 +1,5 @@
-#include "db.h"
-#include "../libs/thirdparty/sqlite3.h"
+#include "core/db.h"
+#include "sqlite3.h"
 #include <cstdio>
 
 struct Db::Impl {

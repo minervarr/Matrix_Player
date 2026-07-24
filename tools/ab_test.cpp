@@ -15,7 +15,7 @@
 #define DR_FLAC_IMPLEMENTATION
 #include "dr_flac.h"
 #include "usb_audio.h"
-#include "eq_processor.h"
+#include "core/dsp/eq_processor.h"
 
 #include <windows.h>
 #include <atomic>

@@ -1,4 +1,4 @@
-#include "art_window.h"
+#include "art_view.hh"
 #include "art_texture.hh"
 #include "ui_min_text_size.gen.h"
 #include <cstdio>

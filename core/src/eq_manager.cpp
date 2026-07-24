@@ -1,4 +1,4 @@
-#include "eq_manager.h"
+#include "core/eq_manager.h"
 #include <cstdio>
 #include <algorithm>
 
