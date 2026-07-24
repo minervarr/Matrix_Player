@@ -7,3 +7,4 @@ build_debug/
 .vs/
 .antigravitycli/
 matrix_player.db
+git_wrapper
