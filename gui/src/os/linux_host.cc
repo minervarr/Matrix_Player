@@ -36,6 +36,10 @@ public:
     // Windows' MonitorFromPoint works without any window existing yet.
     LinuxHost() : display_(std::make_unique<WaylandDisplay>()) {}
 
+    ~LinuxHost() override {
+        if (seekTimerFd_ >= 0) ::close(seekTimerFd_);
+    }
+
     std::string exeDir() const override {
         char buf[PATH_MAX];
         ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);

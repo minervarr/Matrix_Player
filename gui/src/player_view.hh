@@ -326,6 +326,15 @@ private:
     bool asExclusive_   = false;
     LayoutRect asModeRows_[2] = {};
     int  asHoverModeRow_ = -1;
+#else
+#ifdef MATRIX_HAVE_ALSA
+    std::vector<AlsaDeviceInfo> asAlsaDevices_;  // index 0 shown as "(System default)"
+    int  asAlsaSel_     = 0;
+#endif
+#ifdef MATRIX_HAVE_JACK
+    std::vector<JackPlaybackPortInfo> asJackPorts_;  // index 0 shown as "(Auto-connect)"
+    int  asJackSel_     = 0;
+#endif
 #endif
     LayoutRect asCloseRc_ = {}, asBtnApply_ = {};
     bool asHoverClose_ = false, asHoverApply_ = false;
@@ -510,6 +519,13 @@ private:
 #ifdef _WIN32
     std::wstring     wasapiDeviceId_;
     WasapiMode       wasapiMode_    = WasapiMode::Shared;
+#else
+#ifdef MATRIX_HAVE_ALSA
+    std::string      alsaDeviceId_  = "default";
+#endif
+#ifdef MATRIX_HAVE_JACK
+    std::string      jackStartPort_;
+#endif
 #endif
 
     // True playback position is "frames written to the output minus the output's

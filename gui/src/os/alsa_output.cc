@@ -1,9 +1,54 @@
 #include "alsa_output.hh"
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <alsa/asoundlib.h>
+
+// Mirrors AlsaSource::enumerateCaptureDevices' shape (audio_engine's own
+// capture-side enumeration), but walks SND_PCM_STREAM_PLAYBACK instead —
+// that method lives on the capture class, not something this adapter (in
+// matrix_player's own tree, not the audio_engine submodule) can call for
+// playback devices.
+std::vector<AlsaDeviceInfo> AlsaOutput::enumerateDevices() {
+    std::vector<AlsaDeviceInfo> out;
+
+    int card = -1;
+    while (snd_card_next(&card) >= 0 && card >= 0) {
+        char ctlName[32];
+        snprintf(ctlName, sizeof(ctlName), "hw:%d", card);
+
+        snd_ctl_t* ctl = nullptr;
+        if (snd_ctl_open(&ctl, ctlName, 0) < 0) continue;
+
+        snd_ctl_card_info_t* cardInfo = nullptr;
+        snd_ctl_card_info_alloca(&cardInfo);
+        const char* cardName = "(unknown card)";
+        if (snd_ctl_card_info(ctl, cardInfo) >= 0)
+            cardName = snd_ctl_card_info_get_name(cardInfo);
+
+        int device = -1;
+        while (snd_ctl_pcm_next_device(ctl, &device) >= 0 && device >= 0) {
+            snd_pcm_info_t* pcmInfo = nullptr;
+            snd_pcm_info_alloca(&pcmInfo);
+            snd_pcm_info_set_device(pcmInfo, (unsigned)device);
+            snd_pcm_info_set_subdevice(pcmInfo, 0);
+            snd_pcm_info_set_stream(pcmInfo, SND_PCM_STREAM_PLAYBACK);
+            if (snd_ctl_pcm_info(ctl, pcmInfo) < 0) continue;   // not playback-capable
+
+            AlsaDeviceInfo d;
+            char id[32];
+            snprintf(id, sizeof(id), "hw:%d,%d", card, device);
+            d.deviceId = id;
+            d.name = std::string(cardName) + " \xE2\x80\x94 " + snd_pcm_info_get_name(pcmInfo);
+            out.push_back(std::move(d));
+        }
+        snd_ctl_close(ctl);
+    }
+    return out;
+}
 
 bool AlsaOutput::configure(int rate, int channels, int bitDepth, bool strictBitperfect) {
-    if (!sink_.open("default")) return false;
+    if (!sink_.open(deviceId_)) return false;
     ae::AudioFormat req{};
     req.sampleRate   = rate;
     req.channels     = channels;

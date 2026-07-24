@@ -1,6 +1,6 @@
 # Linux port + repo reorg
 
-**Status**: Phases 1–8 complete, Phase 9 (final verification pass) pending.
+**Status**: Phases 1–9 complete.
 **Plan**: `~/.claude/plans/i-don-t-understand-wht-hashed-possum.md`
 **Branch**: `worktree-linux-port-reorg` (isolated worktree).
 
@@ -86,6 +86,32 @@ WASAPI's role on Windows. The `useWasapi_` bool became an `AudioBackend` enum
 (`Usb`/`Wasapi`/`Alsa`/`Jack`) so `onPlay()`'s rate-negotiation and
 bit-depth-quantize logic branches correctly for all four backends instead of
 a Windows-only boolean silently mis-branching for the two new Linux ones.
+`AlsaOutput::enumerateDevices()`/`JackOutput::enumeratePorts()` populate a
+device-list sub-row under the ALSA/JACK backend selection (same shape as
+`WasapiOutput::enumerateDevices()`'s device row), persisted as
+`alsa_device_id`/`jack_port` — this was flagged by the Phase 9 final review as
+missing against the plan's own Phase 7 text and added afterward, once the
+user confirmed the plan's text (not the simpler first cut) should govern.
+
+**Phase 9 — Final review + fixes.** The whole-branch review (dispatched per
+`subagent-driven-development`'s mandated final step) returned 3 Important and
+5 Minor findings, no Critical ones. Resolved: the ALSA/JACK device-picker gap
+above (user's explicit call, since it contradicted the plan's own text);
+`JackOutput::writeFloat32Blocking` now retries under backpressure instead of
+silently dropping samples when `JackSink`'s lock-free ring is full (mirrors
+`UsbAudioOutput`'s spin-then-sleep loop) — verified against a real running
+`jackd`, not just compiled; `LinuxHost`'s `seekTimerFd_` is now closed in a
+destructor instead of leaking for the process's lifetime; a dead
+`Host::nativeInstance()` accessor (zero callers anywhere in `gui/`) was
+removed along with the stale comment above it that still described
+`nativeHandle()`/`nativeInstance()` as existing for dialog-parenting — that
+rationale predates this same phase's panel work; `onTimer()`'s device-fault
+log line said "WASAPI device fault" unconditionally even though
+`AudioOutput::hasFaulted()` is a generic interface method, now says "Audio
+device fault". Deliberately not implemented: `pendingPlaybackMs()`/
+`ringAvailable()`/`waitForData()`/`getPreBufferSamples()` overrides for
+`AlsaOutput`/`JackOutput` — see "Not verified" below for why this is a
+documented gap rather than a fix.
 
 **Phase 8 — Documentation.** This file; `CLAUDE.md` rewritten against the
 real final tree (it had drifted badly — claiming a `windows_matrix_player/
@@ -120,8 +146,32 @@ subdirectory).
 - **`ArtWindow`** (fullscreen album art, a second window) is Windows-only.
   Wayland has no per-monitor window-targeting API, so porting it needs its
   own design pass rather than a mechanical port.
-- **Real playback through the new ALSA/JACK backends** — code-reviewed
-  against `AlsaSink`/`JackSink`'s documented contracts, but not run against a
-  live `jackd` or physical ALSA hardware output from this session (the app's
-  own automatic startup only opens the primary USB path; exercising the
-  secondary backends requires the not-yet-click-tested Audio Settings panel).
+- **Real playback through the new ALSA/JACK backends** — since the Audio
+  Settings panel itself still isn't click-testable (no `ydotool`/`wtype`),
+  this was verified below the UI instead: standalone scratch programs (not
+  committed) linked directly against `AlsaOutput`/`JackOutput` and confirmed,
+  on this machine's real hardware: `AlsaOutput::enumerateDevices()` lists the
+  3 real ALSA playback devices present (`hw:0,3`/`hw:0,7`/`hw:1,0`);
+  `configure()`/`start()`/`writeInt32()` against the non-default `hw:1,0`
+  device play a full buffer with no error. `JackOutput::enumeratePorts()`
+  connected to this machine's running `jackd` and listed its 2 real physical
+  playback ports; `configure()`/`start()`/`writeFloat32Blocking()` streamed a
+  0.3s tone through it with 0 samples dropped (28800/28800), confirming the
+  Phase 9 backpressure fix actually holds under real RT scheduling, not just
+  in review. The device-picker *UI* (clicking the new device rows in Audio
+  Settings) is still not interactively verified for the same input-injection
+  reason as the other three panels.
+- **Position/gapless reporting on the secondary Linux backends** — `AlsaOutput`/
+  `JackOutput` don't override `pendingPlaybackMs()`/`ringAvailable()`/
+  `waitForData()`/`getPreBufferSamples()`; they fall back to `AudioOutput`'s
+  own documented "shallow backends return 0" defaults. Traced call-by-call
+  during Phase 9: the pre-buffer-wait in `onPlay()` degrades gracefully
+  (`waitForData()`'s `true` default just skips the wait rather than hanging),
+  but `onTimer()`'s displayed playback position and the format-change gapless
+  drain loop (`while pendingPlaybackMs() > 30`) both silently treat these two
+  backends as having zero internal buffering — the seekbar will read slightly
+  ahead of true output position by whatever ALSA/JACK are actually holding
+  buffered, and a format change immediately cuts to the next track instead of
+  draining the tail, on these two backends only. Real values would need new
+  query methods on `AlsaSink`/`JackSink` themselves (a submodule change, out
+  of this pass's scope) — left as a known, named gap rather than fixed.

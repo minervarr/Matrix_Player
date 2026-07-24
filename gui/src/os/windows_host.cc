@@ -277,8 +277,7 @@ public:
         MessageBoxA(hwnd_, msg.c_str(), title.c_str(), MB_OK | MB_ICONERROR);
     }
 
-    HWND      nativeHandle() const override { return hwnd_; }
-    HINSTANCE nativeInstance() const override { return hInst_; }
+    HWND nativeHandle() const override { return hwnd_; }
 
 private:
     static UINT_PTR timerWinId(TimerId id) { return 1 + (UINT_PTR)id; }

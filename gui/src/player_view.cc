@@ -112,8 +112,8 @@ static const char* backendDisplayName(AudioBackend b) {
     switch (b) {
     case AudioBackend::Usb:    return "USB Direct";
     case AudioBackend::Wasapi: return "WASAPI";
-    case AudioBackend::Alsa:   return "ALSA (system default device)";
-    case AudioBackend::Jack:   return "JACK (auto-connects to physical outputs)";
+    case AudioBackend::Alsa:   return "ALSA";
+    case AudioBackend::Jack:   return "JACK";
     }
     return "?";
 }
@@ -381,6 +381,16 @@ bool PlayerWindow::create() {
                   ? WasapiMode::Exclusive : WasapiMode::Shared;
     auto devIdUtf8 = db_.loadSetting("wasapi_device_id");
     wasapiDeviceId_ = utf8ToWide(devIdUtf8);
+#else
+#ifdef MATRIX_HAVE_ALSA
+    {
+        auto saved = db_.loadSetting("alsa_device_id");
+        alsaDeviceId_ = saved.empty() ? "default" : saved;
+    }
+#endif
+#ifdef MATRIX_HAVE_JACK
+    jackStartPort_ = db_.loadSetting("jack_port");
+#endif
 #endif
 
     if (audioBackend_ == AudioBackend::Usb) {
@@ -421,14 +431,15 @@ bool PlayerWindow::create() {
 #else
 #ifdef MATRIX_HAVE_ALSA
     else if (audioBackend_ == AudioBackend::Alsa) {
-        output_ = std::make_unique<AlsaOutput>();
-        printf("[Audio] ALSA backend selected (default device)\n");
+        output_ = std::make_unique<AlsaOutput>(alsaDeviceId_);
+        printf("[Audio] ALSA backend selected (device=%s)\n", alsaDeviceId_.c_str());
     }
 #endif
 #ifdef MATRIX_HAVE_JACK
     else if (audioBackend_ == AudioBackend::Jack) {
-        output_ = std::make_unique<JackOutput>();
-        printf("[Audio] JACK backend selected\n");
+        output_ = std::make_unique<JackOutput>(jackStartPort_);
+        printf("[Audio] JACK backend selected (start port=%s)\n",
+               jackStartPort_.empty() ? "auto" : jackStartPort_.c_str());
     }
 #endif
 #endif
@@ -2083,6 +2094,13 @@ void PlayerWindow::onPanelMouseMove(int x, int y) {
         if (sel == AudioBackend::Usb) rowCount = (int)asUsbDevices_.size();
 #ifdef _WIN32
         else if (sel == AudioBackend::Wasapi) rowCount = (int)asWasapiDevices_.size() + 1;
+#else
+#ifdef MATRIX_HAVE_ALSA
+        else if (sel == AudioBackend::Alsa) rowCount = (int)asAlsaDevices_.size() + 1;
+#endif
+#ifdef MATRIX_HAVE_JACK
+        else if (sel == AudioBackend::Jack) rowCount = (int)asJackPorts_.size() + 1;
+#endif
 #endif
         int hdv = panels::hitTestRows(asDeviceListArea_, kPanelRowH, 0, rowCount, x, y);
         if (hdv != asHoverDeviceRow_) { asHoverDeviceRow_ = hdv; changed = true; }
@@ -2156,6 +2174,19 @@ void PlayerWindow::onPanelClick(int x, int y) {
             for (int i = 0; i < 2; i++)
                 if (ptInRect(asModeRows_[i], x, y)) { asExclusive_ = (i == 1); invalidate(); return; }
         }
+#else
+#ifdef MATRIX_HAVE_ALSA
+        else if (sel == AudioBackend::Alsa) {
+            int row = panels::hitTestRows(asDeviceListArea_, kPanelRowH, 0, (int)asAlsaDevices_.size() + 1, x, y);
+            if (row >= 0) { asAlsaSel_ = row; invalidate(); return; }
+        }
+#endif
+#ifdef MATRIX_HAVE_JACK
+        else if (sel == AudioBackend::Jack) {
+            int row = panels::hitTestRows(asDeviceListArea_, kPanelRowH, 0, (int)asJackPorts_.size() + 1, x, y);
+            if (row >= 0) { asJackSel_ = row; invalidate(); return; }
+        }
+#endif
 #endif
         if (ptInRect(asBtnApply_, x, y)) { applyAudioSettingsPanel(); return; }
         return;
@@ -2321,9 +2352,26 @@ void PlayerWindow::onAudioSettings() {
 #else
 #ifdef MATRIX_HAVE_ALSA
     asBackendOptions_.push_back(AudioBackend::Alsa);
+    asAlsaDevices_ = AlsaOutput::enumerateDevices();
+    asAlsaSel_ = 0;
+    {
+        auto savedId = db_.loadSetting("alsa_device_id");
+        for (int i = 0; i < (int)asAlsaDevices_.size(); i++)
+            if (asAlsaDevices_[i].deviceId == savedId) { asAlsaSel_ = i + 1; break; }
+    }
 #endif
 #ifdef MATRIX_HAVE_JACK
     asBackendOptions_.push_back(AudioBackend::Jack);
+    {
+        JackOutput probe;
+        asJackPorts_ = probe.enumeratePorts();   // opens a throwaway client just to query the graph
+    }
+    asJackSel_ = 0;
+    {
+        auto savedPort = db_.loadSetting("jack_port");
+        for (int i = 0; i < (int)asJackPorts_.size(); i++)
+            if (asJackPorts_[i].portName == savedPort) { asJackSel_ = i + 1; break; }
+    }
 #endif
 #endif
 
@@ -2428,15 +2476,38 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         y += 12.0f * uiScale_;
     }
 #else
+#ifdef MATRIX_HAVE_ALSA
     else if (sel == AudioBackend::Alsa) {
-        canvas.textStyled("Uses the system default ALSA device (\"default\").",
-                          c.x + pad, y, textSizes_.secondary, toColor(CLR_TEXT_DIM), FontStyle::Italic);
-        y += textSizes_.secondary * 1.8f;
-    } else if (sel == AudioBackend::Jack) {
-        canvas.textStyled("Connects automatically to the first available physical playback ports.",
-                          c.x + pad, y, textSizes_.secondary, toColor(CLR_TEXT_DIM), FontStyle::Italic);
-        y += textSizes_.secondary * 1.8f;
+        canvas.textStyled("Device:", c.x + pad, y, textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+        y += textSizes_.nav * 1.6f;
+        asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
+        std::vector<std::string> labels;
+        labels.push_back("(System default)");
+        for (auto& d : asAlsaDevices_) labels.push_back(d.name);
+        panels::drawRowList(canvas, asDeviceListArea_, labels, kPanelRowH, 0, asHoverDeviceRow_, asAlsaSel_,
+                            textSizes_.nav, uiScale_);
+        y += listH + 12.0f * uiScale_;
     }
+#endif
+#ifdef MATRIX_HAVE_JACK
+    else if (sel == AudioBackend::Jack) {
+        canvas.textStyled("Starting port:", c.x + pad, y, textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+        y += textSizes_.nav * 1.6f;
+        asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
+        std::vector<std::string> labels;
+        labels.push_back("(Auto-connect to first available ports)");
+        for (auto& p : asJackPorts_) labels.push_back(p.portName);
+        panels::drawRowList(canvas, asDeviceListArea_, labels, kPanelRowH, 0, asHoverDeviceRow_, asJackSel_,
+                            textSizes_.nav, uiScale_);
+        if (asJackPorts_.empty()) {
+            Rect a = toRect(asDeviceListArea_);
+            canvas.textStyled("No running JACK server found (or no physical playback ports).",
+                              a.x + 14.0f * uiScale_, a.y + 60.0f * uiScale_,
+                              textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        }
+        y += listH + 12.0f * uiScale_;
+    }
+#endif
 #endif
 
     float btnW = 120.0f * uiScale_, btnH = 36.0f * uiScale_;
@@ -2485,13 +2556,23 @@ void PlayerWindow::applyAudioSettingsPanel() {
 #ifdef MATRIX_HAVE_ALSA
     else if (sel == AudioBackend::Alsa) {
         db_.saveSetting("audio_backend", "alsa");
-        output_ = std::make_unique<AlsaOutput>();
+        std::string devId;
+        if (asAlsaSel_ > 0 && asAlsaSel_ <= (int)asAlsaDevices_.size())
+            devId = asAlsaDevices_[asAlsaSel_ - 1].deviceId;
+        db_.saveSetting("alsa_device_id", devId);
+        alsaDeviceId_ = devId.empty() ? "default" : devId;
+        output_ = std::make_unique<AlsaOutput>(alsaDeviceId_);
     }
 #endif
 #ifdef MATRIX_HAVE_JACK
     else if (sel == AudioBackend::Jack) {
         db_.saveSetting("audio_backend", "jack");
-        output_ = std::make_unique<JackOutput>();
+        std::string port;
+        if (asJackSel_ > 0 && asJackSel_ <= (int)asJackPorts_.size())
+            port = asJackPorts_[asJackSel_ - 1].portName;
+        db_.saveSetting("jack_port", port);
+        jackStartPort_ = port;
+        output_ = std::make_unique<JackOutput>(jackStartPort_);
     }
 #endif
 #endif
@@ -3166,7 +3247,7 @@ void PlayerWindow::onTimer() {
     if (!isPlaying_) return;
 
     if (output_ && output_->hasFaulted()) {
-        printf("[Audio][ERROR] WASAPI device fault detected, stopping playback\n");
+        printf("[Audio][ERROR] Audio device fault detected, stopping playback\n");
         fflush(stdout);
         onStop();
         host_->showErrorMessage("Audio device error",

@@ -109,13 +109,10 @@ public:
     virtual void showErrorMessage(const std::string& title, const std::string& msg) = 0;
 
 #ifdef _WIN32
-    // Only exists on Windows: the four native Win32 dialogs (Manage Folders/
-    // Audio Settings/EQ Settings/folder picker) are still real HWND-owned
-    // child dialogs until Phase 7 replaces them with vk_canvas panels on
-    // both platforms — they need the real handles to center/parent
-    // themselves. Not part of the portable surface.
-    virtual HWND      nativeHandle() const = 0;
-    virtual HINSTANCE nativeInstance() const = 0;
+    // Only exists on Windows: player_view.cc's TRACKMOUSEEVENT (mouse-leave
+    // detection) needs a real HWND — vk_canvas has no portable equivalent.
+    // Not part of the portable surface.
+    virtual HWND nativeHandle() const = 0;
 #endif
 };
 
