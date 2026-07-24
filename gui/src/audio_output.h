@@ -1,9 +1,9 @@
 #pragma once
 #include "usb_audio.h"
 #include <vector>
-#include <windows.h>
-#include <mmsystem.h>
-#pragma comment(lib, "winmm.lib")
+#include <chrono>
+#include <thread>
+#include <cstdio>
 
 class AudioOutput {
 public:
@@ -50,15 +50,22 @@ public:
     virtual bool hasFaulted() const { return false; }
 };
 
+namespace detail {
+inline int64_t monotonicMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+} // namespace detail
+
 // Thin adapter so UsbAudioDriver satisfies AudioOutput.
 // close() is a no-op — the driver's lifetime is owned by PlayerWindow.
 class UsbAudioOutput : public AudioOutput {
 public:
     explicit UsbAudioOutput(UsbAudioDriver& d) : d_(d) {}
     bool configure(int r, int ch, int bd, bool strictBitperfect = false) override { return d_.configure(r, ch, bd); }
-    // Note: timer resolution (timeBeginPeriod(1)) is raised once at app
-    // startup in main.cpp, not per-start, so the pre-buffer wait loop in
-    // PlayerWindow::onPlay runs at 1 ms grain instead of ~15 ms.
+    // Note: timer resolution (timeBeginPeriod(1) on Windows) is raised once at
+    // app startup in os/windows_host.cc, not per-start, so the pre-buffer wait
+    // loop in PlayerWindow::onPlay runs at 1 ms grain instead of ~15 ms.
     bool start()  override { return d_.start(); }
     int  writeFloat32(const float* p, int n) override { return d_.writeFloat32(p, n); }
     int  writeInt32(const int32_t* p, int n) override { return d_.writeInt32(p, n); }
@@ -72,7 +79,7 @@ public:
 
     int writeFloat32Blocking(const float* p, int n, int timeoutMs = 500) override {
         int total = 0;
-        DWORD t0 = GetTickCount();
+        int64_t t0 = detail::monotonicMs();
         int spins = 0;
         while (total < n) {
             int written = d_.writeFloat32(p + total, n - total);
@@ -81,9 +88,9 @@ public:
                 spins = 0;
                 continue;
             }
-            if ((int)(GetTickCount() - t0) >= timeoutMs) {
-                static DWORD lastLog = 0;
-                DWORD nowMs = GetTickCount();
+            if ((int)(detail::monotonicMs() - t0) >= timeoutMs) {
+                static int64_t lastLog = 0;
+                int64_t nowMs = detail::monotonicMs();
                 if ((nowMs - lastLog) >= 1000) {
                     printf("[USB][WARN] writeFloat32Blocking timeout: wanted=%d got=%d elapsed=%ums ring=%zu\n",
                            n, total, (unsigned)(nowMs - t0), d_.ringAvailable());
@@ -93,9 +100,9 @@ public:
                 break;
             }
             if (spins < 4)
-                SwitchToThread();
+                std::this_thread::yield();
             else
-                Sleep(1);
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             ++spins;
         }
         return total;
@@ -103,7 +110,7 @@ public:
 
     int writeInt32Blocking(const int32_t* p, int n, int timeoutMs = 500) override {
         int total = 0;
-        DWORD t0 = GetTickCount();
+        int64_t t0 = detail::monotonicMs();
         int spins = 0;
         while (total < n) {
             int written = d_.writeInt32(p + total, n - total);
@@ -112,9 +119,9 @@ public:
                 spins = 0;
                 continue;
             }
-            if ((int)(GetTickCount() - t0) >= timeoutMs) {
-                static DWORD lastLog = 0;
-                DWORD nowMs = GetTickCount();
+            if ((int)(detail::monotonicMs() - t0) >= timeoutMs) {
+                static int64_t lastLog = 0;
+                int64_t nowMs = detail::monotonicMs();
                 if ((nowMs - lastLog) >= 1000) {
                     printf("[USB][WARN] writeInt32Blocking timeout: wanted=%d got=%d elapsed=%ums ring=%zu\n",
                            n, total, (unsigned)(nowMs - t0), d_.ringAvailable());
@@ -124,9 +131,9 @@ public:
                 break;
             }
             if (spins < 4)
-                SwitchToThread();
+                std::this_thread::yield();
             else
-                Sleep(1);
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             ++spins;
         }
         return total;
@@ -134,10 +141,10 @@ public:
 
     bool waitForData(int minSamples, int timeoutMs) override {
         int minBytes = minSamples * d_.getConfiguredSubslotSize();
-        DWORD t0 = GetTickCount();
+        int64_t t0 = detail::monotonicMs();
         while ((int)d_.ringAvailable() < minBytes) {
-            if ((int)(GetTickCount() - t0) >= timeoutMs) return false;
-            Sleep(2);
+            if ((int)(detail::monotonicMs() - t0) >= timeoutMs) return false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         return true;
     }

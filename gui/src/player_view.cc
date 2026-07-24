@@ -4,20 +4,22 @@
 #include "img_decode.hh"
 #include "text_util.hh"
 #include "utf8.hh"
-#include <windowsx.h>
+#ifdef _WIN32
 #include <commdlg.h>
 #include <shlobj.h>
+#pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "comdlg32.lib")
+#pragma comment(lib, "shell32.lib")
+#endif
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
+#include <chrono>
 #include <vector>
 #include <algorithm>
 #include <stdexcept>
 #include <filesystem>
 #include <fstream>
-#pragma comment(lib, "comctl32.lib")
-#pragma comment(lib, "comdlg32.lib")
-#pragma comment(lib, "shell32.lib")
 
 #include <soxr.h>
 
@@ -57,6 +59,11 @@ static void ditherAndQuantize(const double* in, int32_t* out, int n, int bits) {
     }
 }
 
+#ifdef _WIN32
+// Only used for wasapiDeviceId_ and the still-native (Windows-only, Phase 7
+// replaces them) Manage Folders/Audio Settings/EQ Settings/folder-picker
+// dialogs' Win32 listbox/edit controls — everything else uses UTF-8
+// std::string directly now (see currentTitle_/currentArtist_).
 static std::wstring utf8ToWide(const std::string& s) {
     if (s.empty()) return {};
     int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
@@ -65,26 +72,16 @@ static std::wstring utf8ToWide(const std::string& s) {
     if (!w.empty() && w.back() == L'\0') w.pop_back();
     return w;
 }
-
-// Canvas::text() wants UTF-8; currentTitleW_/currentArtistW_ are wide (set
-// from metadata elsewhere) — convert back for drawFrame().
-static std::string wideToUtf8(const std::wstring& w) {
-    if (w.empty()) return {};
-    int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    std::string s(n, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, s.data(), n, nullptr, nullptr);
-    if (!s.empty() && s.back() == '\0') s.pop_back();
-    return s;
-}
+#endif
 
 // ── GDI -> Canvas bridges (Phase 6) ──────────────────────────────────────────
-// recalcLayout() keeps computing the same int RECTs it always did; these just
-// let drawFrame() consume them (and the existing COLORREF palette) without
-// re-deriving layout math or a parallel color table.
-static Rect toRect(const RECT& r) {
+// recalcLayout() keeps computing the same int LayoutRects it always did;
+// these just let drawFrame() consume them (and the existing ColorRef
+// palette) without re-deriving layout math or a parallel color table.
+static Rect toRect(const LayoutRect& r) {
     return { (float)r.left, (float)r.top, (float)(r.right - r.left), (float)(r.bottom - r.top) };
 }
-static Color toColor(COLORREF c, float a = 1.0f) {
+static Color toColor(ColorRef c, float a = 1.0f) {
     return { GetRValue(c) / 255.0f, GetGValue(c) / 255.0f, GetBValue(c) / 255.0f, a };
 }
 
@@ -169,106 +166,40 @@ static bool splitNameModifier(const std::string& s, std::string& base, std::stri
     return !mod.empty();
 }
 
-static const wchar_t* MAIN_CLASS = L"MatrixPlayerMain";
-
-// Borderless: no title bar/icon/min-max-close buttons at all. Both UI modes
-// are fixed sizes the app sets itself (see toggleUiMode()), so there's no
-// resize/maximize to offer anyway; positioning is via the Alt+F/J/C/U edge-
-// snap hotkeys (see snapToEdge()) instead of title-bar dragging. Taskbar/
-// Alt-Tab presence (and the app icon there) still comes from
-// WS_EX_APPWINDOW — only the on-window chrome is gone. Alt+F4 and the
-// taskbar icon's right-click "Close window"/single-click-to-minimize still
-// work; neither is tied to WS_CAPTION/WS_SYSMENU.
-static constexpr DWORD kFixedWindowStyle = WS_POPUP;
-static constexpr DWORD kFixedWindowExStyle = WS_EX_APPWINDOW;
-
-enum {
-    kHotkeySnapLeft = 1,
-    kHotkeySnapRight,
-    kHotkeySnapBottom,
-    kHotkeySnapTop,
-    kHotkeySnapCenterG,  // Alt+G and Alt+H both center — two ids, same action
-    kHotkeySnapCenterH,
-    kHotkeyToggleMode,   // Alt+L: Essential <-> Complete (replaces the old corner button)
-};
-
 // ── Window creation ──────────────────────────────────────────────────────────
+// MAIN_CLASS, kFixedWindowStyle/kFixedWindowExStyle, and the window-creation/
+// message-loop/monitor-rect logic that used to live in this section now live
+// in os/windows_host.cc (WindowsHost) / os/linux_host.cc (LinuxHost) — see
+// host.hh. Hotkey IDs are in hotkey_ids.hh (shared by both hosts).
 
-bool PlayerWindow::create(HINSTANCE hInst) {
-    hInst_ = hInst;
+bool PlayerWindow::create() {
+    host_ = make_host();
 
-    WNDCLASSEXW wc = {};
-    wc.cbSize        = sizeof(wc);
-    wc.style         = CS_DBLCLKS;
-    wc.lpfnWndProc   = wndProc;
-    wc.hInstance     = hInst;
-    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    wc.lpszClassName = MAIN_CLASS;
-    wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hIcon         = LoadIconW(hInst, L"IDI_APPICON");
-    wc.hIconSm       = LoadIconW(hInst, L"IDI_APPICON");
-    RegisterClassExW(&wc);
+    // Fixed, non-resizable window — both UI modes are fixed sizes the app
+    // itself sets on toggle (toggleUiMode()), never left to interactive
+    // resize/maximize. Starting mode: Complete (true fullscreen) if the
+    // primary monitor is tall enough to clear kMinWindowContentH, the font's
+    // geometric legibility floor (see player_view.hh); otherwise Essential,
+    // which always fits by construction (its size is *derived* from the
+    // monitor's own dimensions — see Host::applyUiMode()'s implementation).
+    MonitorInfo primaryMon = host_->primaryMonitor();
+    int monitorH = primaryMon.bounds.bottom - primaryMon.bounds.top;
+    uiMode_ = (monitorH >= (int)std::ceil(kMinWindowContentH))
+        ? UiMode::Complete : UiMode::Essential;
 
-    // Fixed, non-resizable window (no WS_THICKFRAME/WS_MAXIMIZEBOX) — both UI
-    // modes are fixed sizes the app itself sets via SetWindowPos on toggle
-    // (toggleUiMode()), never left to interactive resize/maximize.
-    //
-    // Starting mode: Complete (true fullscreen, sized to the monitor's own
-    // resolution — see computeCompleteWindowRect()) if the monitor is tall
-    // enough to clear kMinWindowContentH, the font's geometric legibility
-    // floor (player_window.h); otherwise fall back to Essential, which always
-    // fits by construction (its size is *derived* from the monitor's own
-    // dimensions — see computeEssentialWindowRect()).
-    HMONITOR primaryMon = MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
-    MONITORINFO primaryMi = { sizeof(primaryMi) };
-    GetMonitorInfoW(primaryMon, &primaryMi);
-    int monitorH = primaryMi.rcMonitor.bottom - primaryMi.rcMonitor.top;
+    if (!host_->init(this, uiMode_)) return false;
 
-    RECT startRect;
-    if (monitorH >= (int)std::ceil(kMinWindowContentH)) {
-        uiMode_ = UiMode::Complete;
-        startRect = computeCompleteWindowRect(primaryMon);
-    } else {
-        uiMode_ = UiMode::Essential;
-        startRect = computeEssentialWindowRect(primaryMon);
-    }
-
-    hwnd_ = CreateWindowExW(kFixedWindowExStyle, MAIN_CLASS, L"Matrix Player",
-        kFixedWindowStyle, startRect.left, startRect.top,
-        startRect.right - startRect.left, startRect.bottom - startRect.top,
-        nullptr, nullptr, hInst, this);
-    if (!hwnd_) return false;
-    SetWindowLongPtrW(hwnd_, GWLP_USERDATA, (LONG_PTR)this);
-    lastMonitor_ = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
-
-    // Edge-snap hotkeys — the window-move mechanism now that there's no
-    // title bar to drag: Alt+F/J snap to the left/right edge (horizontal
-    // monitor use), Alt+C/U snap to the bottom/top edge (vertical monitor
-    // use), Alt+G/H re-center. All work regardless of current monitor
-    // orientation (snapToEdge() just aligns to that edge/center) —
-    // MOD_NOREPEAT so holding the keys doesn't spam WM_HOTKEY.
-    RegisterHotKey(hwnd_, kHotkeySnapLeft,    MOD_ALT | MOD_NOREPEAT, 'F');
-    RegisterHotKey(hwnd_, kHotkeySnapRight,   MOD_ALT | MOD_NOREPEAT, 'J');
-    RegisterHotKey(hwnd_, kHotkeySnapBottom,  MOD_ALT | MOD_NOREPEAT, 'C');
-    RegisterHotKey(hwnd_, kHotkeySnapTop,     MOD_ALT | MOD_NOREPEAT, 'U');
-    RegisterHotKey(hwnd_, kHotkeySnapCenterG, MOD_ALT | MOD_NOREPEAT, 'G');
-    RegisterHotKey(hwnd_, kHotkeySnapCenterH, MOD_ALT | MOD_NOREPEAT, 'H');
-    // Alt+L toggles Essential/Complete — keyboard only; the on-screen
-    // corner-bracket button was removed (visual clutter, per design).
-    RegisterHotKey(hwnd_, kHotkeyToggleMode,  MOD_ALT | MOD_NOREPEAT, 'L');
-
-    // Vulkan rendering (vk_canvas). Must come after hwnd_ exists (the surface
-    // provider wraps it) and before ShowWindow, so the first frame presents
-    // as soon as the window is visible.
-    vkSurface_ = std::make_unique<Win32SurfaceProvider>(hwnd_);
+    // Vulkan rendering (vk_canvas). Must come after host_->init() (the
+    // surface provider wraps the now-created native window) and before the
+    // window is shown, so the first frame presents as soon as it's visible.
     try {
         // 3 swapchain images: enough for MAILBOX on desktop (the default 4
         // is an Android compositor-hitch allowance) — saves one full-screen
         // RGBA8 image (~8 MB at 1080p).
-        renderer_ = std::make_unique<Renderer>(*vkSurface_, vkAssets_,
+        renderer_ = std::make_unique<Renderer>(host_->surfaceProvider(), host_->assetReader(),
                                                /*desiredSwapchainImages=*/3);
     } catch (const std::exception& e) {
-        MessageBoxA(hwnd_, e.what(), "Vulkan initialization failed", MB_ICONERROR);
+        host_->showErrorMessage("Vulkan initialization failed", e.what());
         return false;
     }
 
@@ -279,15 +210,8 @@ bool PlayerWindow::create(HINSTANCE hInst) {
     // script-fallback glyphs (Cyrillic/Greek/CJK/…) needs to scan the
     // library's actual track/album/artist text for which non-Latin
     // codepoints it must cover.
-    wchar_t exePath[MAX_PATH];
-    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-    std::wstring dbPathW = exePath;
-    dbPathW = dbPathW.substr(0, dbPathW.rfind(L'\\') + 1) + L"matrix_player.db";
-    int dbLen = WideCharToMultiByte(CP_UTF8, 0, dbPathW.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    std::string dbPath(dbLen, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, dbPathW.c_str(), -1, dbPath.data(), dbLen, nullptr, nullptr);
-    if (!dbPath.empty() && dbPath.back() == '\0') dbPath.pop_back();
-    db_.open(dbPath);
+    std::string exeDir = host_->exeDir();
+    db_.open(exeDir + "matrix_player.db");
 
     // Restore library from DB
     {
@@ -328,26 +252,16 @@ bool PlayerWindow::create(HINSTANCE hInst) {
 
     // UI font (fonts/ is copied next to the exe by the CMake build step).
     {
-        wchar_t exePathW[MAX_PATH];
-        GetModuleFileNameW(nullptr, exePathW, MAX_PATH);
-        std::wstring exeDirW = exePathW;
-        exeDirW = exeDirW.substr(0, exeDirW.rfind(L'\\') + 1);
-
-        auto toUtf8Path = [&](const wchar_t* rel) -> std::string {
-            std::wstring wpath = exeDirW + rel;
-            int len = WideCharToMultiByte(CP_UTF8, 0, wpath.c_str(), -1, nullptr, 0, nullptr, nullptr);
-            std::string path(len, '\0');
-            WideCharToMultiByte(CP_UTF8, 0, wpath.c_str(), -1, path.data(), len, nullptr, nullptr);
-            if (!path.empty() && path.back() == '\0') path.pop_back();
-            return path;
+        auto toUtf8Path = [&](const char* rel) -> std::string {
+            return exeDir + rel;
         };
 
-        std::string fontPath = toUtf8Path(L"fonts\\lm\\lmroman10-regular.otf");
+        std::string fontPath = toUtf8Path("fonts/lm/lmroman10-regular.otf");
         uiFont_.load(fontPath.c_str());
-        fontsDir_ = toUtf8Path(L"fonts\\");
+        fontsDir_ = toUtf8Path("fonts/");
 
         // Generate MSDF atlas from the same OTF (cached to disk for fast reload).
-        std::string cachePath = toUtf8Path(L"fonts\\lmroman10-regular.msdf.cache");
+        std::string cachePath = toUtf8Path("fonts/lmroman10-regular.msdf.cache");
         msdfCachePath_ = cachePath;
 
         FileByteReader loader;
@@ -359,11 +273,11 @@ bool PlayerWindow::create(HINSTANCE hInst) {
             // fresh addStyle() rebake only happens once per cache generation.
             bool addedStyle = false;
             if (!msdfFont_.hasStyle(FontStyle::Bold))
-                addedStyle |= msdfFont_.addStyle(loader, toUtf8Path(L"fonts\\lm\\lmroman10-bold.otf").c_str(), FontStyle::Bold);
+                addedStyle |= msdfFont_.addStyle(loader, toUtf8Path("fonts/lm/lmroman10-bold.otf").c_str(), FontStyle::Bold);
             if (!msdfFont_.hasStyle(FontStyle::Italic))
-                addedStyle |= msdfFont_.addStyle(loader, toUtf8Path(L"fonts\\lm\\lmroman10-italic.otf").c_str(), FontStyle::Italic);
+                addedStyle |= msdfFont_.addStyle(loader, toUtf8Path("fonts/lm/lmroman10-italic.otf").c_str(), FontStyle::Italic);
             if (!msdfFont_.hasStyle(FontStyle::Math))
-                addedStyle |= msdfFont_.addStyle(loader, toUtf8Path(L"fonts\\lm\\lmmono10-regular.otf").c_str(), FontStyle::Math);
+                addedStyle |= msdfFont_.addStyle(loader, toUtf8Path("fonts/lm/lmmono10-regular.otf").c_str(), FontStyle::Math);
 
             // Cyrillic/Greek (unconditional) + whatever CJK/Hangul/Kana the
             // now-loaded library actually contains — see bakeFallbackGlyphs().
@@ -379,7 +293,7 @@ bool PlayerWindow::create(HINSTANCE hInst) {
         }
     }
 
-    artWin_.create(hInst);
+    artWin_.create();
     recalcLayout();
 
     // Last-played album (grid indicator, Fix C): stored as "name\x1fartist"
@@ -395,15 +309,7 @@ bool PlayerWindow::create(HINSTANCE hInst) {
     }
 
     // Load EQ profiles
-    {
-        std::wstring eqPathW = exePath;
-        eqPathW = eqPathW.substr(0, eqPathW.rfind(L'\\') + 1) + L"eq_profiles.json";
-        int eqLen = WideCharToMultiByte(CP_UTF8, 0, eqPathW.c_str(), -1, nullptr, 0, nullptr, nullptr);
-        std::string eqPath(eqLen, '\0');
-        WideCharToMultiByte(CP_UTF8, 0, eqPathW.c_str(), -1, eqPath.data(), eqLen, nullptr, nullptr);
-        if (!eqPath.empty() && eqPath.back() == '\0') eqPath.pop_back();
-        eqProfiles_.load(eqPath);
-    }
+    eqProfiles_.load(exeDir + "eq_profiles.json");
 
     setupWatchers();
     startBackgroundScan();
@@ -413,15 +319,19 @@ bool PlayerWindow::create(HINSTANCE hInst) {
 
     // Load audio backend
     useWasapi_ = (db_.loadSetting("audio_backend") == "wasapi");
+#ifdef _WIN32
     wasapiMode_ = (db_.loadSetting("wasapi_mode") == "exclusive")
                   ? WasapiMode::Exclusive : WasapiMode::Shared;
     auto devIdUtf8 = db_.loadSetting("wasapi_device_id");
     wasapiDeviceId_ = utf8ToWide(devIdUtf8);
+#endif
 
     if (useWasapi_) {
+#ifdef _WIN32
         output_ = std::make_unique<WasapiOutput>(wasapiDeviceId_, wasapiMode_);
         printf("[Audio] WASAPI backend selected (%s mode)\n",
                wasapiMode_ == WasapiMode::Exclusive ? "exclusive" : "shared");
+#endif
     } else {
         auto vidStr = db_.loadSetting("usb_vid");
         auto pidStr = db_.loadSetting("usb_pid");
@@ -437,23 +347,22 @@ bool PlayerWindow::create(HINSTANCE hInst) {
             printf("\n");
         } else {
             printf("[USB][ERROR] Failed to open DAC VID=%04X PID=%04X\n", vid, pid);
-            wchar_t msgBuf[512];
-            swprintf_s(msgBuf, sizeof(msgBuf)/sizeof(wchar_t),
-                L"USB DAC not found (VID=%04X PID=%04X).\n\n"
-                L"Steps to fix:\n"
-                L"1. Open Zadig\n"
-                L"2. Select your USB DAC interface MI_00\n"
-                L"3. Install libusbK driver\n"
-                L"4. Restart this app\n\n"
-                L"Use Audio Settings to select a different device\n"
-                L"or switch to WASAPI.", vid, pid);
-            MessageBoxW(hwnd_, msgBuf, L"USB DAC not found", MB_OK | MB_ICONWARNING);
+            char msgBuf[512];
+            snprintf(msgBuf, sizeof(msgBuf),
+                "USB DAC not found (VID=%04X PID=%04X).\n\n"
+                "Steps to fix:\n"
+                "1. Open Zadig\n"
+                "2. Select your USB DAC interface MI_00\n"
+                "3. Install libusbK driver\n"
+                "4. Restart this app\n\n"
+                "Use Audio Settings to select a different device\n"
+                "or switch to WASAPI.", vid, pid);
+            host_->showErrorMessage("USB DAC not found", msgBuf);
         }
         output_ = std::make_unique<UsbAudioOutput>(usbDriver_);
     }
 
-    ShowWindow(hwnd_, SW_SHOW);
-    UpdateWindow(hwnd_);
+    host_->showWindow();
     return true;
 }
 
@@ -480,7 +389,7 @@ bool PlayerWindow::bakeFallbackGlyphs() {
         std::vector<uint32_t> cps;
         for (uint32_t cp = 0x0370; cp <= 0x03FF; cp++) cps.push_back(cp);
         for (uint32_t cp = 0x0400; cp <= 0x04FF; cp++) cps.push_back(cp);
-        std::string newcmPath = fontsDir_ + "newcomputermodern\\NewCM10-Regular.otf";
+        std::string newcmPath = fontsDir_ + "newcomputermodern/NewCM10-Regular.otf";
         if (msdfFont_.bakeCodepoints(loader, newcmPath.c_str(), cps) > 0)
             anyNew = true;
     }
@@ -517,7 +426,7 @@ bool PlayerWindow::bakeFallbackGlyphs() {
         // genuinely lacks (CJK/Hangul/Kana) falls through to the bundled
         // per-script serif faces below — bakeCodepoints() skips whatever's
         // already covered, so this whole chain is purely additive.
-        std::string newcmPath = fontsDir_ + "newcomputermodern\\NewCM10-Regular.otf";
+        std::string newcmPath = fontsDir_ + "newcomputermodern/NewCM10-Regular.otf";
         if (msdfFont_.bakeCodepoints(loader, newcmPath.c_str(), exotic) > 0)
             anyNew = true;
 
@@ -525,9 +434,9 @@ bool PlayerWindow::bakeFallbackGlyphs() {
         // Song/Mincho/Batang are all serif designs, the closest visual match
         // to Latin Modern's serif Latin text (vs. a sans-serif system font).
         const std::string kCjkFallbacks[] = {
-            fontsDir_ + "fandol\\FandolSong-Regular.otf",         // Simplified Chinese
-            fontsDir_ + "haranoaji\\HaranoAjiMincho-Regular.otf", // Japanese
-            fontsDir_ + "unfonts-core\\UnBatang.ttf",             // Korean
+            fontsDir_ + "fandol/FandolSong-Regular.otf",         // Simplified Chinese
+            fontsDir_ + "haranoaji/HaranoAjiMincho-Regular.otf", // Japanese
+            fontsDir_ + "unfonts-core/UnBatang.ttf",             // Korean
         };
         for (const auto& path : kCjkFallbacks) {
             if (msdfFont_.bakeCodepoints(loader, path.c_str(), exotic) > 0)
@@ -542,38 +451,45 @@ void PlayerWindow::markDirty() {
     // Keep rendering for one frame per swapchain image (+1 for the frame
     // currently on screen) so a state change reaches every image in the
     // swapchain's rotation instead of leaving some presenting stale content.
-    // Guard against calls that land before renderer_ exists: WM_SIZE fires
-    // synchronously during CreateWindowExW (before create() constructs
-    // renderer_ a few lines later), and that WM_SIZE handler calls invalidate().
+    // Guard against calls that land before renderer_ exists: a resize can
+    // fire synchronously during window creation (before create() constructs
+    // renderer_ a few lines later), and that resize handler calls invalidate().
     pendingFrames_ = renderer_ ? renderer_->swapchainImageCount() + 1 : 1;
 }
 
-void PlayerWindow::invalidate(const RECT* rc) {
-    InvalidateRect(hwnd_, rc, FALSE);
+void PlayerWindow::invalidate() {
+    host_->invalidate();
+    markDirty();
+}
+
+void PlayerWindow::onHostResized() {
+    if (renderer_) renderer_->notifyResized();
+    recalcLayout();
+    invalidate();
+}
+
+void PlayerWindow::onHostLayoutInvalidated() {
+    recalcLayout();
+    invalidate();
+}
+
+void PlayerWindow::onHostExposed() {
     markDirty();
 }
 
 void PlayerWindow::run() {
     // Dirty-flag render-on-demand: only draw while pendingFrames_ (armed by
-    // markDirty()/invalidate()) is nonzero; otherwise block in
-    // MsgWaitForMultipleObjects instead of busy-spinning, so the app drops to
-    // ~0% CPU whenever nothing on screen actually needs to change. WM_TIMER
-    // (playback position) and WM_APP_* (async completions) wake the wait
-    // normally and mark dirty from their own handlers.
-    MSG msg;
+    // markDirty()/invalidate()) is nonzero; otherwise host_->pump() blocks
+    // instead of busy-spinning, so the app drops to ~0% CPU whenever nothing
+    // on screen actually needs to change. Timers and async completions wake
+    // the wait normally and mark dirty from their own handlers.
     while (running_) {
         bool haveWork = pendingFrames_ > 0 || artWin_.hasPendingFrames();
-        MsgWaitForMultipleObjects(0, nullptr, FALSE, haveWork ? 0 : INFINITE, QS_ALLINPUT);
-
-        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_QUIT) { running_ = false; break; }
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-        if (!running_) break;
+        host_->pump(haveWork);
+        if (host_->quitRequested()) { running_ = false; break; }
 
         if (pendingFrames_ > 0) { drawFrame(); pendingFrames_--; }
-        // ArtWindow is a second HWND on this same thread with its own
+        // ArtWindow is a second window on this same thread with its own
         // Renderer — no second message pump, so drive its frame here too.
         if (artWin_.isVisible()) artWin_.renderIfDirty();
     }
@@ -588,7 +504,7 @@ void PlayerWindow::run() {
 // like text does.
 enum class UiIcon { Play, Stop, Prev, Next };
 
-static void drawUiIcon(Canvas& c, const RECT& rc, UiIcon icon, Color col) {
+static void drawUiIcon(Canvas& c, const LayoutRect& rc, UiIcon icon, Color col) {
     Rect r = toRect(rc);
     float s = std::min(r.w, r.h);
     float ox = r.x + (r.w - s) * 0.5f, oy = r.y + (r.h - s) * 0.5f;
@@ -632,7 +548,7 @@ static float titleArtistAdvance(float titleSize) { return titleSize * 1.35f; }
 // truncation. Track rows and the transport now-playing title share this.
 static void drawNameWithModifier(Canvas& c, const std::string& name,
                                  float x, float y, float maxW, float size,
-                                 COLORREF baseColor, FontStyle baseStyle) {
+                                 ColorRef baseColor, FontStyle baseStyle) {
     std::string base, mod;
     splitNameModifier(name, base, mod);
     std::string t = truncateToWidth(c, base, maxW, size, baseStyle);
@@ -734,14 +650,14 @@ void PlayerWindow::drawFrame() {
             canvas.rect(artR.x, artR.y, artR.w, artR.h, toColor(CLR_TILE_PLACEHOLDER));
 
         Rect titleR = toRect(rcEssentialTitle_);
-        std::string titleStr = currentTitleW_.empty() ? "No track" : wideToUtf8(currentTitleW_);
+        std::string titleStr = currentTitle_.empty() ? "No track" : currentTitle_;
         float titleW = canvas.textWidthStyled(titleStr, textSizes_.transportTitle, FontStyle::Bold);
         canvas.textStyled(titleStr, titleR.x + std::max(0.0f, (titleR.w - titleW) * 0.5f), titleR.y,
                           textSizes_.transportTitle, toColor(CLR_TEXT_PRIMARY), FontStyle::Bold);
 
         // Single combined Play/Stop button (per design: not a separate
         // resume-vs-restart-from-zero distinction in Essential mode).
-        struct EBtn { RECT rc; int idx; UiIcon icon; COLORREF clr; };
+        struct EBtn { LayoutRect rc; int idx; UiIcon icon; ColorRef clr; };
         EBtn ebuttons[] = {
             { rcEssentialPrev_,     0, UiIcon::Prev, CLR_TEXT_PRIMARY },
             { rcEssentialPlayStop_, 1, isPlaying_ ? UiIcon::Stop : UiIcon::Play,
@@ -783,7 +699,7 @@ void PlayerWindow::drawFrame() {
             std::string shown = searchQuery_.empty() && !searchFocused_
                                 ? "Search" : searchQuery_;
             std::string caret = searchFocused_ ? "|" : "";
-            COLORREF clr = searchQuery_.empty() && !searchFocused_
+            ColorRef clr = searchQuery_.empty() && !searchFocused_
                            ? CLR_TEXT_DIM : CLR_TEXT_PRIMARY;
             std::string fit = truncateToWidth(canvas, shown, s.w - 16 - 8,
                                               textSizes_.secondary, FontStyle::Roman);
@@ -791,7 +707,7 @@ void PlayerWindow::drawFrame() {
                         textSizes_.secondary, toColor(clr));
         }
 
-        struct NavItem { const char* label; RECT rc; int idx; };
+        struct NavItem { const char* label; LayoutRect rc; int idx; };
         NavItem items[] = {
             { "Albums",   rcNavAlbums_,   0 },
             { "Settings", rcNavSettings_, 1 },
@@ -887,7 +803,7 @@ void PlayerWindow::drawFrame() {
                     // lines before ellipsis.
                     float textMaxW = a;
                     auto centered = [&](const std::string& s, float yy, float sz,
-                                        COLORREF clr, FontStyle st) {
+                                        ColorRef clr, FontStyle st) {
                         float w = canvas.textWidthStyled(s, sz, st);
                         canvas.textStyled(s, x + std::max(0.0f, (a - w) * 0.5f), yy,
                                           sz, toColor(clr), st);
@@ -924,7 +840,7 @@ void PlayerWindow::drawFrame() {
         // renders MSDF, and its baseline convention differs, so labels came
         // out visibly off-center both ways.
         auto centeredIn = [&](const std::string& s, const Rect& r, float sz,
-                              COLORREF clr, FontStyle st) {
+                              ColorRef clr, FontStyle st) {
             float w = canvas.textWidthStyled(s, sz, st);
             canvas.textStyled(s, r.x + std::max(0.0f, (r.w - w) * 0.5f),
                               r.y + r.h * 0.5f - sz * 0.5f, sz, toColor(clr), st);
@@ -939,7 +855,7 @@ void PlayerWindow::drawFrame() {
             ? "Mode: Bitperfect - click to switch to Reference EQ"
             : "Mode: Reference EQ - click to switch to Bitperfect";
 
-        struct SettItem { RECT rc; std::string label; int idx; };
+        struct SettItem { LayoutRect rc; std::string label; int idx; };
         SettItem items[] = {
             { rcSettingsAddFolder_, "Add Music Folder",      0 },
             { rcSettingsManage_,    "Manage Music Folders",  1 },
@@ -952,11 +868,11 @@ void PlayerWindow::drawFrame() {
             if (hoverSettingsItem_ == item.idx)
                 canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), 8.0f);
             bool isActiveModeRow = (item.idx == 4 && bp);
-            COLORREF borderClr = isActiveModeRow ? CLR_ACCENT : CLR_SEPARATOR;
+            ColorRef borderClr = isActiveModeRow ? CLR_ACCENT : CLR_SEPARATOR;
             float borderThick = isActiveModeRow ? 2.0f : 1.0f;
             canvas.rect(r.x, r.y, r.w, borderThick, toColor(borderClr));
             canvas.rect(r.x, r.y + r.h - borderThick, r.w, borderThick, toColor(borderClr));
-            COLORREF textClr = (item.idx == 3 && bp) ? CLR_TEXT_DIM : CLR_TEXT_PRIMARY;
+            ColorRef textClr = (item.idx == 3 && bp) ? CLR_TEXT_DIM : CLR_TEXT_PRIMARY;
             if (isActiveModeRow) textClr = CLR_ACCENT;
             centeredIn(item.label, r, textSizes_.nav, textClr, FontStyle::Roman);
         }
@@ -1153,10 +1069,10 @@ void PlayerWindow::drawFrame() {
         // the name itself (see splitNameModifier).
         Rect infoR = toRect(rcTransportInfo_);
         drawNameWithModifier(canvas,
-                             currentTitleW_.empty() ? "No track" : wideToUtf8(currentTitleW_),
+                             currentTitle_.empty() ? "No track" : currentTitle_,
                              infoR.x, infoR.y, infoR.w,
                              textSizes_.transportTitle, CLR_TEXT_PRIMARY, FontStyle::Bold);
-        std::string artist = wideToUtf8(currentArtistW_);
+        std::string artist = currentArtist_;
         if (!artist.empty()) {
             std::string a = truncateToWidth(canvas, artist, infoR.w,
                                             textSizes_.secondary, FontStyle::Italic);
@@ -1167,7 +1083,7 @@ void PlayerWindow::drawFrame() {
         // Three buttons only — prev / play-stop / next, same combined
         // play-stop toggle as Essential mode. No pause: this user only ever
         // stops or starts from zero.
-        struct BtnDef { RECT rc; int idx; UiIcon icon; COLORREF clr; };
+        struct BtnDef { LayoutRect rc; int idx; UiIcon icon; ColorRef clr; };
         BtnDef buttons[] = {
             { rcBtnPrev_, 0, UiIcon::Prev, CLR_TEXT_PRIMARY },
             { rcBtnPlay_, 1, isPlaying_ ? UiIcon::Stop : UiIcon::Play,
@@ -1190,7 +1106,7 @@ void PlayerWindow::drawFrame() {
         {
             bool bp = bitperfectMode_.load();
             const char* dsp = bp ? "BITPERFECT" : "REF EQ";
-            COLORREF dspClr = bp ? CLR_ACCENT : CLR_TEXT_DIM;
+            ColorRef dspClr = bp ? CLR_ACCENT : CLR_TEXT_DIM;
             float rightEdge = t.x + t.w - 16;
             float cy = t.y + t.h * 0.5f;
             float tagW = canvas.textWidthStyled(dsp, textSizes_.badge, FontStyle::Math);
@@ -1198,8 +1114,8 @@ void PlayerWindow::drawFrame() {
             // Hover hit rect always tracks the compact tag's home (with a
             // little slop), so the hover state stays stable while the
             // expanded readout is showing.
-            rcDspBadge_ = { (LONG)(rightEdge - tagW - 8), (LONG)(cy - textSizes_.badge),
-                            (LONG)(rightEdge + 8),        (LONG)(cy + textSizes_.badge) };
+            rcDspBadge_ = { (int)(rightEdge - tagW - 8), (int)(cy - textSizes_.badge),
+                            (int)(rightEdge + 8),        (int)(cy + textSizes_.badge) };
 
             if (hoverDspBadge_) {
                 std::string src;
@@ -1208,7 +1124,7 @@ void PlayerWindow::drawFrame() {
                     const Track& dt = albums_[displayAlbum_].tracks[displayTrack_];
                     src = formatQualityText(dt.sampleRate, dt.bitDepth);
                 }
-                struct Seg { std::string text; COLORREF clr; };
+                struct Seg { std::string text; ColorRef clr; };
                 std::vector<Seg> segs;
                 if (!src.empty()) {
                     segs.push_back({src, CLR_TEXT_DIM});
@@ -1250,8 +1166,7 @@ void PlayerWindow::drawFrame() {
 // ── Layout ───────────────────────────────────────────────────────────────────
 
 void PlayerWindow::recalcLayout() {
-    RECT rc; GetClientRect(hwnd_, &rc);
-    int W = rc.right, H = rc.bottom;
+    int W = (int)renderer_->width(), H = (int)renderer_->height();
 
     // Window-relative text sizes, floored at the geometric minimum (see
     // player_window.h) — a defensive backstop in case anything ever resizes
@@ -1315,7 +1230,7 @@ void PlayerWindow::recalcLayout() {
     // rcGrid_ stays the full content area in both states — the settings
     // page and the grid share it.
     rcGrid_ = { sidebarW, 0, W, H - transportH };
-    rcTrackPanel_ = trackPanelOpen_ ? rcGrid_ : RECT{ 0, 0, 0, 0 };
+    rcTrackPanel_ = trackPanelOpen_ ? rcGrid_ : LayoutRect{ 0, 0, 0, 0 };
 
     // Grid columns — derived from a target tile pitch (~220px art + margins)
     // rather than a fixed column count, so density stays consistent across
@@ -1395,7 +1310,7 @@ void PlayerWindow::recalcLayout() {
     int rowHalfW = (int)(220.0f * us);
     int rowH     = (int)(52.0f * us);
     int rowStep  = rowH + (int)(14.0f * us);
-    auto settRow = [&](int i) -> RECT {
+    auto settRow = [&](int i) -> LayoutRect {
         return { settCx - rowHalfW, settTop + i * rowStep,
                  settCx + rowHalfW, settTop + i * rowStep + rowH };
     };
@@ -1407,154 +1322,36 @@ void PlayerWindow::recalcLayout() {
 }
 
 // ── UI mode (Essential/Complete) ─────────────────────────────────────────────
-
-RECT PlayerWindow::computeCompleteWindowRect(HMONITOR mon) const {
-    // True fullscreen: the window covers the monitor's entire resolution,
-    // including over the taskbar (rcMonitor, not rcWork) — sized to whichever
-    // monitor the caller asks about, so this stays correct after the window
-    // (or its whole desktop) moves to a different display (see
-    // adaptToCurrentMonitor()). kFixedWindowStyle is WS_POPUP (no title bar,
-    // no borders), so the window rect and the monitor rect are the same
-    // thing — no AdjustWindowRectEx needed.
-    MONITORINFO mi = { sizeof(mi) };
-    GetMonitorInfoW(mon, &mi);
-    return mi.rcMonitor;
-}
-
-RECT PlayerWindow::computeEssentialWindowRect(HMONITOR mon) const {
-    MONITORINFO mi = { sizeof(mi) };
-    GetMonitorInfoW(mon, &mi);
-    int monW = mi.rcWork.right - mi.rcWork.left;
-    int monH = mi.rcWork.bottom - mi.rcWork.top;
-
-    // Anchor to whichever dimension is the monitor's constraint, phone-shaped
-    // (9:16) on the OPPOSITE axis from the monitor's own orientation — a
-    // portrait "phone" on a landscape monitor, a landscape one on a portrait
-    // monitor. Self-fitting by construction; see player_window.h's UiMode.
-    int contentW, contentH;
-    if (monW >= monH) {
-        contentH = monH;
-        contentW = (int)std::lround(contentH * 9.0 / 16.0);
-    } else {
-        contentW = monW;
-        contentH = (int)std::lround(contentW * 9.0 / 16.0);
-    }
-
-    RECT r = { 0, 0, contentW, contentH };
-    AdjustWindowRectEx(&r, kFixedWindowStyle, FALSE, kFixedWindowExStyle);
-    int w = std::min((int)(r.right - r.left), monW);
-    int h = std::min((int)(r.bottom - r.top), monH);
-    int x = mi.rcWork.left + (monW - w) / 2;
-    int y = mi.rcWork.top + (monH - h) / 2;
-    return { x, y, x + w, y + h };
-}
+// The actual monitor-fitting/positioning math (computeCompleteWindowRect,
+// computeEssentialWindowRect equivalents) now lives in os/windows_host.cc /
+// os/linux_host.cc — see host.hh's class comment for why Linux's versions of
+// adaptToCurrentMonitor/snapToEdge are real no-ops (Wayland clients cannot
+// query monitor work areas or set their own position) while applyUiMode's
+// Complete-mode fullscreen has a real Wayland equivalent.
 
 void PlayerWindow::toggleUiMode() {
     uiMode_ = (uiMode_ == UiMode::Complete) ? UiMode::Essential : UiMode::Complete;
-    HMONITOR mon = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
-    RECT r = (uiMode_ == UiMode::Complete)
-        ? computeCompleteWindowRect(mon)
-        : computeEssentialWindowRect(mon);
-    SetWindowPos(hwnd_, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
-    // The window just jumped straight to its new size in one step (Essential
-    // <-> Complete, the latter now fullscreen) rather than resizing
-    // gradually — draw() only discovers a resize lazily otherwise, so the
-    // very next frame would render at the stale swapchain extent and come
-    // out corrupted/torn. Same reasoning as ArtWindow::show()'s notifyResized().
-    if (renderer_) renderer_->notifyResized();
-    recalcLayout();
-    invalidate();
+    host_->applyUiMode(uiMode_);
 }
 
 void PlayerWindow::adaptToCurrentMonitor() {
-    // A minimized window's rect is Windows' off-screen placeholder
-    // (conventionally around (-32000,-32000)), not a real position — fitting
-    // against "whichever monitor is nearest that" is meaningless, and
-    // calling SetWindowPos on a minimized window here would fight the user's
-    // own minimize (each reposition re-fires WM_WINDOWPOSCHANGED, which previously
-    // could re-trigger this and thrash instead of settling, tanking the frame
-    // rate). Skip entirely while minimized; the real position is re-checked
-    // (and any real monitor change caught) as soon as it's restored.
-    if (IsIconic(hwnd_)) return;
-
-    HMONITOR mon = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
-    lastMonitor_ = mon;  // set first: avoids re-entering via the WM_WINDOWPOSCHANGED
-                         // this function's own SetWindowPos below will trigger
-
-    RECT r = (uiMode_ == UiMode::Complete)
-        ? computeCompleteWindowRect(mon)
-        : computeEssentialWindowRect(mon);
-
-    RECT cur{};
-    GetWindowRect(hwnd_, &cur);
-    if (cur.left == r.left && cur.top == r.top &&
-        cur.right - cur.left == r.right - r.left &&
-        cur.bottom - cur.top == r.bottom - r.top)
-        return;  // already correct for this monitor — nothing to do
-
-    SetWindowPos(hwnd_, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
-    // Same one-step-jump reasoning as toggleUiMode() — moving to a
-    // different-resolution monitor can be just as large a jump.
-    if (renderer_) renderer_->notifyResized();
-    // Re-layout and redraw IMMEDIATELY: without this, the frame rendered
-    // for the previous monitor's extent stayed on screen (letterboxed with
-    // black bars on a taller monitor) until some unrelated event happened
-    // to invalidate — the "black bars for a moment after moving monitors".
-    recalcLayout();
-    invalidate();
+    host_->adaptToCurrentMonitor(uiMode_);
 }
 
 int PlayerWindow::essentialHitTest(int x, int y) const {
-    POINT pt{ x, y };
-    if (PtInRect(&rcEssentialPrev_, pt))     return 0;
-    if (PtInRect(&rcEssentialPlayStop_, pt)) return 1;
-    if (PtInRect(&rcEssentialNext_, pt))     return 2;
+    auto in = [&](const LayoutRect& r) {
+        return x >= r.left && x < r.right && y >= r.top && y < r.bottom;
+    };
+    if (in(rcEssentialPrev_))     return 0;
+    if (in(rcEssentialPlayStop_)) return 1;
+    if (in(rcEssentialNext_))     return 2;
     return -1;
 }
 
 // Alt+F/J/C/U/G/H — the window-move mechanism in place of title-bar dragging
-// (there is no title bar; see kFixedWindowStyle). Keeps the window's current
-// size, aligns it to the given edge (or center) of its current monitor.
+// on Windows (there is no title bar). No-op on Linux; see the comment above.
 void PlayerWindow::snapToEdge(int hotkeyId) {
-    RECT wr{};
-    GetWindowRect(hwnd_, &wr);
-    int w = wr.right - wr.left, h = wr.bottom - wr.top;
-
-    HMONITOR mon = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
-    MONITORINFO mi = { sizeof(mi) };
-    GetMonitorInfoW(mon, &mi);
-    int monW = mi.rcWork.right - mi.rcWork.left;
-    int monH = mi.rcWork.bottom - mi.rcWork.top;
-
-    int x, y;
-    switch (hotkeyId) {
-    case kHotkeySnapLeft:
-        x = mi.rcWork.left;
-        y = mi.rcWork.top + std::max(0, (monH - h) / 2);
-        break;
-    case kHotkeySnapRight:
-        x = mi.rcWork.right - w;
-        y = mi.rcWork.top + std::max(0, (monH - h) / 2);
-        break;
-    case kHotkeySnapBottom:
-        x = mi.rcWork.left + std::max(0, (monW - w) / 2);
-        y = mi.rcWork.bottom - h;
-        break;
-    case kHotkeySnapTop:
-        x = mi.rcWork.left + std::max(0, (monW - w) / 2);
-        y = mi.rcWork.top;
-        break;
-    case kHotkeySnapCenterG:
-    case kHotkeySnapCenterH:
-        x = mi.rcWork.left + std::max(0, (monW - w) / 2);
-        y = mi.rcWork.top + std::max(0, (monH - h) / 2);
-        break;
-    default:
-        return;
-    }
-    SetWindowPos(hwnd_, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    host_->snapToEdge(hotkeyId);
 }
 
 // ── Art cache (Vulkan textures) ──────────────────────────────────────────────
@@ -1611,7 +1408,7 @@ void PlayerWindow::artDecodeWorker() {
             std::lock_guard<std::mutex> lk(artDecodeMu_);
             artDecodeDone_.push_back(std::move(res));
         }
-        PostMessageW(hwnd_, WM_APP_ART_DECODED, 0, 0);
+        host_->postAppEvent(AppEvent::ArtDecoded);
     }
 }
 
@@ -1835,6 +1632,12 @@ int PlayerWindow::gridHitTest(int x, int y) const {
     return gridIndices_[idx];  // real albums_ index (search-filtered mapping)
 }
 
+// Portable PtInRect replacement — left/top inclusive, right/bottom exclusive
+// (same semantics PtInRect always had).
+static bool ptInRect(const LayoutRect& r, int x, int y) {
+    return x >= r.left && x < r.right && y >= r.top && y < r.bottom;
+}
+
 int PlayerWindow::trackPanelHitTest(int x, int y) const {
     if (!trackPanelOpen_ || activeNavItem_ != 0) return -1;
     if (x < trackListLeft_ || x >= trackListRight_) return -1;
@@ -1850,38 +1653,40 @@ int PlayerWindow::trackPanelHitTest(int x, int y) const {
 }
 
 int PlayerWindow::sidebarHitTest(int x, int y) const {
-    POINT pt = { x, y };
-    if (PtInRect(&rcNavAlbums_, pt)) return 0;
-    if (PtInRect(&rcNavSettings_, pt)) return 1;
+    if (ptInRect(rcNavAlbums_, x, y)) return 0;
+    if (ptInRect(rcNavSettings_, x, y)) return 1;
     return -1;
 }
 
 int PlayerWindow::transportBtnHitTest(int x, int y) const {
-    POINT pt = { x, y };
-    if (PtInRect(&rcBtnPrev_, pt)) return 0;
-    if (PtInRect(&rcBtnPlay_, pt)) return 1;
-    if (PtInRect(&rcBtnNext_, pt)) return 2;
+    if (ptInRect(rcBtnPrev_, x, y)) return 0;
+    if (ptInRect(rcBtnPlay_, x, y)) return 1;
+    if (ptInRect(rcBtnNext_, x, y)) return 2;
     return -1;
 }
 
 int PlayerWindow::settingsHitTest(int x, int y) const {
-    POINT pt = { x, y };
-    if (PtInRect(&rcSettingsAddFolder_, pt)) return 0;
-    if (PtInRect(&rcSettingsManage_, pt)) return 1;
-    if (PtInRect(&rcSettingsAudio_, pt)) return 2;
-    if (PtInRect(&rcSettingsEq_, pt)) return 3;
-    if (PtInRect(&rcSettingsBitperfect_, pt)) return 4;
+    if (ptInRect(rcSettingsAddFolder_, x, y)) return 0;
+    if (ptInRect(rcSettingsManage_, x, y)) return 1;
+    if (ptInRect(rcSettingsAudio_, x, y)) return 2;
+    if (ptInRect(rcSettingsEq_, x, y)) return 3;
+    if (ptInRect(rcSettingsBitperfect_, x, y)) return 4;
     return -1;
 }
 
 // ── Mouse handling ───────────────────────────────────────────────────────────
 
 void PlayerWindow::onMouseMove(int x, int y) {
+#ifdef _WIN32
+    // Win32 doesn't generate a "mouse left the window" event unless you ask
+    // for it per-move; Wayland's wl_pointer.leave is unconditional (LinuxHost
+    // calls onMouseLeave() straight from that), so there's nothing to arm there.
     if (!mouseTracking_) {
-        TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd_, 0 };
+        TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, host_->nativeHandle(), 0 };
         TrackMouseEvent(&tme);
         mouseTracking_ = true;
     }
+#endif
 
     if (uiMode_ == UiMode::Essential) {
         int oldHoverEssential = hoverEssentialBtn_;
@@ -1905,16 +1710,15 @@ void PlayerWindow::onMouseMove(int x, int y) {
     hoverSettingsItem_ = -1;
     hoverDspBadge_ = false;
 
-    POINT pt = { x, y };
 
-    if (PtInRect(&rcSidebar_, pt)) {
+    if (ptInRect(rcSidebar_, x, y)) {
         hoverSidebarItem_ = sidebarHitTest(x, y);
-    } else if (PtInRect(&rcTransport_, pt)) {
+    } else if (ptInRect(rcTransport_, x, y)) {
         hoverTransportBtn_ = transportBtnHitTest(x, y);
-        hoverDspBadge_ = PtInRect(&rcDspBadge_, pt) != 0;
-    } else if (trackPanelOpen_ && activeNavItem_ == 0 && PtInRect(&rcTrackPanel_, pt)) {
+        hoverDspBadge_ = ptInRect(rcDspBadge_, x, y) != 0;
+    } else if (trackPanelOpen_ && activeNavItem_ == 0 && ptInRect(rcTrackPanel_, x, y)) {
         hoverTrackIdx_ = trackPanelHitTest(x, y);
-    } else if (PtInRect(&rcGrid_, pt)) {
+    } else if (ptInRect(rcGrid_, x, y)) {
         if (activeNavItem_ == 0)
             hoverAlbumIdx_ = gridHitTest(x, y);
         else
@@ -1944,7 +1748,6 @@ void PlayerWindow::onMouseLeave() {
 }
 
 void PlayerWindow::onLButtonDown(int x, int y) {
-    POINT pt = { x, y };
 
     if (uiMode_ == UiMode::Essential) {
         int btn = essentialHitTest(x, y);
@@ -1958,7 +1761,7 @@ void PlayerWindow::onLButtonDown(int x, int y) {
     // releases focus (the query itself stays, still filtering).
     {
         bool wasFocused = searchFocused_;
-        searchFocused_ = PtInRect(&rcSearch_, pt) != 0;
+        searchFocused_ = ptInRect(rcSearch_, x, y) != 0;
         if (searchFocused_ != wasFocused) invalidate();
         if (searchFocused_) return;
     }
@@ -1971,13 +1774,13 @@ void PlayerWindow::onLButtonDown(int x, int y) {
     if (btn == 2) { onNext(); return; }
 
     // Transport art -> fullscreen
-    if (PtInRect(&rcTransportArt_, pt) && transportArtTex_ != kInvalidTexture) {
+    if (ptInRect(rcTransportArt_, x, y) && transportArtTex_ != kInvalidTexture) {
         onArtClick();
         return;
     }
 
     // Sidebar
-    if (PtInRect(&rcSidebar_, pt)) {
+    if (ptInRect(rcSidebar_, x, y)) {
         int nav = sidebarHitTest(x, y);
         if (nav >= 0 && nav != activeNavItem_) {
             activeNavItem_ = nav;
@@ -1989,7 +1792,7 @@ void PlayerWindow::onLButtonDown(int x, int y) {
     // (No album view back button — Escape closes it.)
 
     // Album view track click
-    if (trackPanelOpen_ && activeNavItem_ == 0 && PtInRect(&rcTrackPanel_, pt)) {
+    if (trackPanelOpen_ && activeNavItem_ == 0 && ptInRect(rcTrackPanel_, x, y)) {
         int track = trackPanelHitTest(x, y);
         printf("[Click] Album view track click (%d,%d): hit=%d, tracks=%d\n",
                x, y, track,
@@ -2005,14 +1808,14 @@ void PlayerWindow::onLButtonDown(int x, int y) {
     }
 
     // Grid (albums view)
-    if (activeNavItem_ == 0 && !trackPanelOpen_ && PtInRect(&rcGrid_, pt)) {
+    if (activeNavItem_ == 0 && !trackPanelOpen_ && ptInRect(rcGrid_, x, y)) {
         int idx = gridHitTest(x, y);
         if (idx >= 0) openAlbumView(idx);
         return;
     }
 
     // Settings page
-    if (activeNavItem_ == 1 && PtInRect(&rcGrid_, pt)) {
+    if (activeNavItem_ == 1 && ptInRect(rcGrid_, x, y)) {
         int sett = settingsHitTest(x, y);
         if (sett == 0) onAddFolder();
         if (sett == 1) onManageFolders();
@@ -2024,10 +1827,9 @@ void PlayerWindow::onLButtonDown(int x, int y) {
 }
 
 void PlayerWindow::onLButtonDblClk(int x, int y) {
-    POINT pt = { x, y };
 
     // Double-click on grid tile: play first track
-    if (activeNavItem_ == 0 && !trackPanelOpen_ && PtInRect(&rcGrid_, pt)) {
+    if (activeNavItem_ == 0 && !trackPanelOpen_ && ptInRect(rcGrid_, x, y)) {
         int idx = gridHitTest(x, y);
         if (idx >= 0) {
             openAlbumView(idx);
@@ -2039,7 +1841,7 @@ void PlayerWindow::onLButtonDblClk(int x, int y) {
     }
 
     // Double-click on track panel: play that track
-    if (trackPanelOpen_ && PtInRect(&rcTrackPanel_, pt)) {
+    if (trackPanelOpen_ && ptInRect(rcTrackPanel_, x, y)) {
         int track = trackPanelHitTest(x, y);
         if (track >= 0) {
             currentAlbum_ = selectedAlbumIdx_;
@@ -2050,26 +1852,27 @@ void PlayerWindow::onLButtonDblClk(int x, int y) {
     }
 }
 
+// x,y are client-relative (the host converts from whatever coordinate space
+// its own wheel event delivers — Windows' WM_MOUSEWHEEL is screen-relative
+// and gets ScreenToClient()'d in windows_host.cc before calling this;
+// Wayland's pointer coords are already surface-relative).
 void PlayerWindow::onMouseWheel(int x, int y, int delta) {
-    POINT pt = { x, y };
-    ScreenToClient(hwnd_, &pt);
-
-    if (trackPanelOpen_ && activeNavItem_ == 0 && PtInRect(&rcTrackPanel_, pt)) {
+    if (trackPanelOpen_ && activeNavItem_ == 0 && ptInRect(rcTrackPanel_, x, y)) {
         // The album view scrolls as one page; its content height is
         // measured by the draw block (albumViewContentH_).
         trackScrollY_ -= delta;
         int panelH = rcTrackPanel_.bottom - rcTrackPanel_.top;
         trackScrollY_ = std::clamp(trackScrollY_, 0,
                                    std::max(0, albumViewContentH_ - panelH));
-        invalidate(&rcTrackPanel_);
+        invalidate();
         return;
     }
 
-    if (!trackPanelOpen_ && PtInRect(&rcGrid_, pt)) {
+    if (!trackPanelOpen_ && ptInRect(rcGrid_, x, y)) {
         gridScrollY_ -= delta;
         int gridH = rcGrid_.bottom - rcGrid_.top;
         gridScrollY_ = std::clamp(gridScrollY_, 0, std::max(0, gridTotalHeight_ - gridH));
-        invalidate(&rcGrid_);
+        invalidate();
     }
 }
 
@@ -2122,7 +1925,28 @@ void PlayerWindow::onPrev() {
     }
 }
 
-// ── Manage Folders dialog ─────────────────────────────────────────────────────
+// ── Bitperfect / DSP mode toggle ─────────────────────────────────────────────
+
+void PlayerWindow::toggleBitperfectMode() {
+    bool newMode = !bitperfectMode_.load();
+    bitperfectMode_.store(newMode);
+    db_.saveSetting("audio_mode", newMode ? "bitperfect" : "reference_eq");
+
+    // Both directions take effect on the next track started, not mid-play.
+    // (Don't clear the EQ engine here: the running Reference EQ callback checks
+    // isActive() every chunk, so clearing would kill EQ live and make the switch
+    // asymmetric. The bit-perfect branch of onPlay clears EQ itself next track.)
+    printf("[Audio] Switched to %s mode (applies on next track)\n",
+           newMode ? "BITPERFECT" : "REFERENCE EQ");
+    invalidate();
+}
+
+// ── Manage Folders / Audio Settings / EQ Settings / folder-picker dialogs ───
+// Still real native Win32 dialogs (listbox/edit controls, SHBrowseForFolderW)
+// — Phase 7 replaces all four with vk_canvas panels on BOTH platforms. Until
+// then they're Windows-only; Linux gets stub bodies below that do nothing
+// when their sidebar row is clicked (a real, tracked gap, not a silent one).
+#ifdef _WIN32
 
 #define ID_DLG_LIST   301
 #define ID_DLG_REMOVE 302
@@ -2186,7 +2010,7 @@ void PlayerWindow::onManageFolders() {
     if (!registered) {
         WNDCLASSW wc = {};
         wc.lpfnWndProc   = manageFoldersDlgProc;
-        wc.hInstance     = hInst_;
+        wc.hInstance     = host_->nativeInstance();
         wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
         wc.lpszClassName = L"MatrixManageFolders";
         wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
@@ -2194,13 +2018,13 @@ void PlayerWindow::onManageFolders() {
         registered = true;
     }
 
-    ManageDlgCtx ctx{ &db_, hwnd_, nullptr, false };
+    ManageDlgCtx ctx{ &db_, host_->nativeHandle(), nullptr, false };
     HWND dlg = CreateWindowExW(
         WS_EX_DLGMODALFRAME, L"MatrixManageFolders", L"Music Folders",
         WS_POPUP | WS_CAPTION | WS_SYSMENU,
-        0, 0, 510, 290, hwnd_, nullptr, hInst_, &ctx);
+        0, 0, 510, 290, host_->nativeHandle(), nullptr, host_->nativeInstance(), &ctx);
 
-    RECT pr; GetWindowRect(hwnd_, &pr);
+    RECT pr; GetWindowRect(host_->nativeHandle(), &pr);
     RECT dr; GetWindowRect(dlg, &dr);
     int dw = dr.right - dr.left, dh = dr.bottom - dr.top;
     SetWindowPos(dlg, nullptr,
@@ -2208,7 +2032,7 @@ void PlayerWindow::onManageFolders() {
         pr.top  + (pr.bottom - pr.top - dh) / 2,
         0, 0, SWP_NOSIZE | SWP_NOZORDER);
 
-    EnableWindow(hwnd_, FALSE);
+    EnableWindow(host_->nativeHandle(), FALSE);
     ShowWindow(dlg, SW_SHOW);
 
     MSG msg;
@@ -2217,8 +2041,8 @@ void PlayerWindow::onManageFolders() {
         DispatchMessageW(&msg);
     }
 
-    EnableWindow(hwnd_, TRUE);
-    SetForegroundWindow(hwnd_);
+    EnableWindow(host_->nativeHandle(), TRUE);
+    SetForegroundWindow(host_->nativeHandle());
     markDirty();  // repaint the main window, obscured/disabled while the dialog was up
 
     if (!ctx.changed) return;
@@ -2419,7 +2243,7 @@ void PlayerWindow::onAudioSettings() {
     if (!registered) {
         WNDCLASSW wc = {};
         wc.lpfnWndProc   = audioSettingsDlgProc;
-        wc.hInstance     = hInst_;
+        wc.hInstance     = host_->nativeInstance();
         wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
         wc.lpszClassName = L"MatrixAudioSettings";
         wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
@@ -2427,13 +2251,13 @@ void PlayerWindow::onAudioSettings() {
         registered = true;
     }
 
-    AudioSettingsDlgCtx ctx{ &db_, hwnd_ };
+    AudioSettingsDlgCtx ctx{ &db_, host_->nativeHandle() };
     HWND dlg = CreateWindowExW(
         WS_EX_DLGMODALFRAME, L"MatrixAudioSettings", L"Audio Settings",
         WS_POPUP | WS_CAPTION | WS_SYSMENU,
-        0, 0, 530, 297, hwnd_, nullptr, hInst_, &ctx);
+        0, 0, 530, 297, host_->nativeHandle(), nullptr, host_->nativeInstance(), &ctx);
 
-    RECT pr; GetWindowRect(hwnd_, &pr);
+    RECT pr; GetWindowRect(host_->nativeHandle(), &pr);
     RECT dr; GetWindowRect(dlg, &dr);
     int dw = dr.right - dr.left, dh = dr.bottom - dr.top;
     SetWindowPos(dlg, nullptr,
@@ -2441,7 +2265,7 @@ void PlayerWindow::onAudioSettings() {
         pr.top  + (pr.bottom - pr.top  - dh) / 2,
         0, 0, SWP_NOSIZE | SWP_NOZORDER);
 
-    EnableWindow(hwnd_, FALSE);
+    EnableWindow(host_->nativeHandle(), FALSE);
     ShowWindow(dlg, SW_SHOW);
 
     MSG msg;
@@ -2450,8 +2274,8 @@ void PlayerWindow::onAudioSettings() {
         DispatchMessageW(&msg);
     }
 
-    EnableWindow(hwnd_, TRUE);
-    SetForegroundWindow(hwnd_);
+    EnableWindow(host_->nativeHandle(), TRUE);
+    SetForegroundWindow(host_->nativeHandle());
     markDirty();  // repaint the main window, obscured/disabled while the dialog was up
 
     if (!ctx.applied) return;
@@ -2477,22 +2301,6 @@ void PlayerWindow::onAudioSettings() {
         if (usbOpen_) usbDriver_.parseDescriptors();
         output_ = std::make_unique<UsbAudioOutput>(usbDriver_);
     }
-}
-
-// ── Bitperfect / DSP mode toggle ─────────────────────────────────────────────
-
-void PlayerWindow::toggleBitperfectMode() {
-    bool newMode = !bitperfectMode_.load();
-    bitperfectMode_.store(newMode);
-    db_.saveSetting("audio_mode", newMode ? "bitperfect" : "reference_eq");
-
-    // Both directions take effect on the next track started, not mid-play.
-    // (Don't clear the EQ engine here: the running Reference EQ callback checks
-    // isActive() every chunk, so clearing would kill EQ live and make the switch
-    // asymmetric. The bit-perfect branch of onPlay clears EQ itself next track.)
-    printf("[Audio] Switched to %s mode (applies on next track)\n",
-           newMode ? "BITPERFECT" : "REFERENCE EQ");
-    invalidate();
 }
 
 // ── EQ Settings dialog ──────────────────────────────────────────────────────
@@ -2689,7 +2497,7 @@ void PlayerWindow::onEqSettings() {
     if (!registered) {
         WNDCLASSW wc = {};
         wc.lpfnWndProc   = eqSettingsDlgProc;
-        wc.hInstance     = hInst_;
+        wc.hInstance     = host_->nativeInstance();
         wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
         wc.lpszClassName = L"MatrixEqSettings";
         wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
@@ -2707,7 +2515,7 @@ void PlayerWindow::onEqSettings() {
 
     EqSettingsDlgCtx ctx{};
     ctx.db             = &db_;
-    ctx.parent         = hwnd_;
+    ctx.parent         = host_->nativeHandle();
     ctx.allProfiles    = &eqProfiles_.getAll();
     ctx.deviceKey      = getActiveDeviceKey();
     ctx.eqManager      = &eqManager_;
@@ -2719,9 +2527,9 @@ void PlayerWindow::onEqSettings() {
     HWND dlg = CreateWindowExW(
         WS_EX_DLGMODALFRAME, L"MatrixEqSettings", L"EQ / AutoEQ Profiles",
         WS_POPUP | WS_CAPTION | WS_SYSMENU,
-        0, 0, 500, 520, hwnd_, nullptr, hInst_, &ctx);
+        0, 0, 500, 520, host_->nativeHandle(), nullptr, host_->nativeInstance(), &ctx);
 
-    RECT pr; GetWindowRect(hwnd_, &pr);
+    RECT pr; GetWindowRect(host_->nativeHandle(), &pr);
     RECT dr; GetWindowRect(dlg, &dr);
     int dw = dr.right - dr.left, dh = dr.bottom - dr.top;
     SetWindowPos(dlg, nullptr,
@@ -2729,7 +2537,7 @@ void PlayerWindow::onEqSettings() {
         pr.top  + (pr.bottom - pr.top  - dh) / 2,
         0, 0, SWP_NOSIZE | SWP_NOZORDER);
 
-    EnableWindow(hwnd_, FALSE);
+    EnableWindow(host_->nativeHandle(), FALSE);
     ShowWindow(dlg, SW_SHOW);
 
     MSG msg;
@@ -2738,15 +2546,15 @@ void PlayerWindow::onEqSettings() {
         DispatchMessageW(&msg);
     }
 
-    EnableWindow(hwnd_, TRUE);
-    SetForegroundWindow(hwnd_);
+    EnableWindow(host_->nativeHandle(), TRUE);
+    SetForegroundWindow(host_->nativeHandle());
     markDirty();  // repaint the main window, obscured/disabled while the dialog was up
 }
 
 void PlayerWindow::onAddFolder() {
     wchar_t path[MAX_PATH] = {};
     BROWSEINFOW bi = {};
-    bi.hwndOwner = hwnd_;
+    bi.hwndOwner = host_->nativeHandle();
     bi.lpszTitle = L"Select music folder to add";
     bi.ulFlags   = BIF_RETURNONLYFSDIRS | BIF_USENEWUI;
     LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
@@ -2760,13 +2568,30 @@ void PlayerWindow::onAddFolder() {
     if (!root.empty() && root.back() == '\0') root.pop_back();
     db_.addMusicRoot(root);
 
-    HWND h = hwnd_;
+    HWND h = host_->nativeHandle();
     watcher_.watchRoot(root, [h](const std::string&) {
-        PostMessageW(h, WM_APP_SCAN_DONE, 1, 0);
+        host_->postAppEvent(AppEvent::ScanDone, 1);
     });
 
     startBackgroundScan();
 }
+
+#else  // !_WIN32 — not yet ported, see the comment above this block.
+
+void PlayerWindow::onManageFolders() {
+    printf("[Settings] Manage Folders is not yet available on Linux (Phase 7).\n");
+}
+void PlayerWindow::onAudioSettings() {
+    printf("[Settings] Audio Settings is not yet available on Linux (Phase 7).\n");
+}
+void PlayerWindow::onEqSettings() {
+    printf("[Settings] EQ Settings is not yet available on Linux (Phase 7).\n");
+}
+void PlayerWindow::onAddFolder() {
+    printf("[Settings] Add Folder is not yet available on Linux (Phase 7).\n");
+}
+
+#endif  // _WIN32
 
 // ── Album / Track selection (simplified for custom UI) ──────────────────────
 
@@ -2854,8 +2679,8 @@ void PlayerWindow::onPlay() {
     // played-frames timeline restarts from zero.
     displayAlbum_ = currentAlbum_;
     displayTrack_ = currentTrack_;
-    currentTitleW_ = utf8ToWide(t.title);
-    currentArtistW_ = utf8ToWide(t.artist);
+    currentTitle_ = t.title;
+    currentArtist_ = t.artist;
 
     lastPlayedAlbumName_  = albums_[currentAlbum_].name;
     lastPlayedArtistName_ = albums_[currentAlbum_].artist;
@@ -2905,13 +2730,13 @@ void PlayerWindow::onPlay() {
         if (isBitperfect) {
             printf("[Bitperfect][ERROR] DAC does not support native sample rate %d Hz, aborting\n", fileSr);
             fflush(stdout);
-            MessageBoxW(hwnd_, L"DAC does not support native sample rate.\nStrict Bitperfect mode active: playback aborted to preserve audio purity.",
-                L"Bitperfect Failure", MB_OK | MB_ICONERROR);
+            host_->showErrorMessage("Bitperfect Failure",
+                "DAC does not support native sample rate.\nStrict Bitperfect mode active: playback aborted to preserve audio purity.");
         } else {
             printf("[Audio][ERROR] Output failed to configure at %d Hz\n", fileSr);
             fflush(stdout);
-            MessageBoxW(hwnd_, L"Audio output failed to configure.\nCheck Audio Settings.",
-                L"Audio configure failed", MB_OK | MB_ICONERROR);
+            host_->showErrorMessage("Audio configure failed",
+                "Audio output failed to configure.\nCheck Audio Settings.");
         }
         active_->stop();
         isPlaying_ = false;
@@ -2921,11 +2746,14 @@ void PlayerWindow::onPlay() {
 
     // Query device's maximum supported bit depth for the final quantize step.
     int deviceMaxBits = 32;
+#ifdef _WIN32
     if (useWasapi_ && !isBitperfect) {
         auto* wasapi = static_cast<WasapiOutput*>(output_.get());
         deviceMaxBits = wasapi->getMaxBitDepth(outSr, active_->channels());
         if (deviceMaxBits <= 0) deviceMaxBits = 32;
-    } else if (!useWasapi_) {
+    } else
+#endif
+    if (!useWasapi_) {
         deviceMaxBits = usbDriver_.getConfiguredBitDepth();
         if (deviceMaxBits <= 0) deviceMaxBits = 32;
     }
@@ -2956,8 +2784,9 @@ void PlayerWindow::onPlay() {
         int frames = srcCh > 0 ? n / srcCh : n;
         int got = outPtr->writeInt32Blocking(d, n);
         if (got < n) {
-            static DWORD lastShortLog = 0;
-            DWORD nowMs = GetTickCount();
+            static int64_t lastShortLog = 0;
+            int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
             if ((nowMs - lastShortLog) >= 1000) {
                 printf("[Bitperfect][WARN] short write: wanted=%d got=%d\n", n, got);
                 fflush(stdout);
@@ -3067,8 +2896,8 @@ void PlayerWindow::onPlay() {
     if (!startOk) {
         printf("[onPlay][ERROR] Audio output failed to start\n");
         fflush(stdout);
-        MessageBoxW(hwnd_, L"Audio output failed to start.\nCheck Audio Settings.",
-            L"Audio start failed", MB_OK | MB_ICONERROR);
+        host_->showErrorMessage("Audio start failed",
+            "Audio output failed to start.\nCheck Audio Settings.");
         active_->stop();
         isPlaying_ = false;
         return;
@@ -3077,7 +2906,7 @@ void PlayerWindow::onPlay() {
     fflush(stdout);
 
     startGaplessCoordinator(callbackI32, capturedOutSr, capturedDacCh);
-    SetTimer(hwnd_, TIMER_SEEK_UPDATE, 250, nullptr);
+    host_->startTimer(TimerId::SeekUpdate, 250);
 }
 
 void PlayerWindow::onStop() {
@@ -3098,7 +2927,7 @@ void PlayerWindow::onStop() {
     nextDecoder_.close();
     active_ = &decoder_;
     nextAlbum_ = nextTrack_ = -1;
-    KillTimer(hwnd_, TIMER_SEEK_UPDATE);
+    host_->stopTimer(TimerId::SeekUpdate);
     isPlaying_ = false;
     playedFrames_.store(0);
     displayTrackStartFrame_ = 0;
@@ -3210,9 +3039,9 @@ void PlayerWindow::startGaplessCoordinator(PcmS32Callback cbI32, int outSr, int 
                 // so its last seconds play out instead of being discarded.
                 while (output_ && output_->pendingPlaybackMs() > 30 &&
                        !stopGapless_.load()) {
-                    Sleep(5);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
                 }
-                PostMessageW(hwnd_, WM_COMMAND, MAKEWPARAM(ID_BTN_PLAY, BN_CLICKED), 0);
+                host_->postAppEvent(AppEvent::RequestPlay);
                 break;
             }
 
@@ -3240,10 +3069,9 @@ void PlayerWindow::onTimer() {
         printf("[Audio][ERROR] WASAPI device fault detected, stopping playback\n");
         fflush(stdout);
         onStop();
-        MessageBoxW(hwnd_,
-            L"Audio device error (driver fault inside Windows' audio stack).\n"
-            L"Playback stopped. Try unplugging/replugging the DAC.",
-            L"Audio device error", MB_OK | MB_ICONERROR);
+        host_->showErrorMessage("Audio device error",
+            "Audio device error (driver fault).\n"
+            "Playback stopped. Try unplugging/replugging the DAC.");
         return;
     }
 
@@ -3279,7 +3107,7 @@ void PlayerWindow::onTimer() {
     if (posMs < 0) posMs = 0;
     if (seekTotalMs_ > 0 && posMs > seekTotalMs_) posMs = seekTotalMs_;
     seekPosMs_ = (int)posMs;
-    invalidate(&rcTransport_);
+    invalidate();
 }
 
 void PlayerWindow::onArtClick() {
@@ -3296,8 +3124,8 @@ void PlayerWindow::applyTrackMetadata(int album, int track) {
     const auto& nt = albums_[album].tracks[track];
     displayAlbum_   = album;
     displayTrack_   = track;
-    currentTitleW_  = utf8ToWide(nt.title);
-    currentArtistW_ = utf8ToWide(nt.artist);
+    currentTitle_  = nt.title;
+    currentArtist_ = nt.artist;
     seekTotalMs_    = nt.durationMs > 0 ? nt.durationMs : 0;
     seekPosMs_      = 0;
     loadTransportArtTexture(albums_[album].artPath);
@@ -3309,10 +3137,10 @@ void PlayerWindow::applyTrackMetadata(int album, int track) {
 // ── Background scan ──────────────────────────────────────────────────────────
 
 void PlayerWindow::setupWatchers() {
-    HWND h = hwnd_;
+    Host* host = host_.get();
     for (auto& root : db_.loadMusicRoots()) {
-        watcher_.watchRoot(root, [h](const std::string&) {
-            PostMessageW(h, WM_APP_SCAN_DONE, 1, 0);
+        watcher_.watchRoot(root, [host](const std::string&) {
+            host->postAppEvent(AppEvent::ScanDone, 1);
         });
     }
 }
@@ -3322,9 +3150,9 @@ void PlayerWindow::startBackgroundScan() {
     if (scanThread_.joinable()) scanThread_.join();
 
     scanning_.store(true);
-    HWND h = hwnd_;
+    Host* host = host_.get();
 
-    scanThread_ = std::thread([this, h]() {
+    scanThread_ = std::thread([this, host]() {
         auto roots = db_.loadMusicRoots();
         auto cache = db_.loadFileCache();
 
@@ -3362,7 +3190,7 @@ void PlayerWindow::startBackgroundScan() {
             scanResult_ = std::move(allAlbums);
         }
         scanning_.store(false);
-        PostMessageW(h, WM_APP_SCAN_DONE, 0, 0);
+        host_->postAppEvent(AppEvent::ScanDone, 0);
     });
 }
 
@@ -3411,196 +3239,99 @@ void PlayerWindow::onScanDone() {
 
 // ── Message loop ─────────────────────────────────────────────────────────────
 
-LRESULT CALLBACK PlayerWindow::wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    if (msg == WM_CREATE) {
-        auto* cs = (CREATESTRUCTW*)lp;
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams);
-    }
-    PlayerWindow* self = (PlayerWindow*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-    if (self) return self->handleMsg(msg, wp, lp);
-    return DefWindowProcW(hwnd, msg, wp, lp);
+// Message-loop/WM_*-dispatch (wndProc/handleMsg) now lives in
+// os/windows_host.cc / os/linux_host.cc — see host.hh. What follows are the
+// portable pieces that used to be inline in handleMsg's switch: hotkey
+// dispatch, search-box text entry, and playback-key handling, all called
+// from both hosts' input-translation code, plus the once-WM_DESTROY teardown
+// sequence (now shutdown(), called by both hosts before the window/renderer
+// actually go away).
+
+void PlayerWindow::onHotkey(int hotkeyId) {
+    if (hotkeyId == kHotkeyToggleMode) toggleUiMode();
+    else                               snapToEdge(hotkeyId);
 }
 
-LRESULT PlayerWindow::handleMsg(UINT msg, WPARAM wp, LPARAM lp) {
-    switch (msg) {
-    case WM_SIZE:
-        recalcLayout();
-        invalidate();
-        return 0;
-
-    case WM_HOTKEY:
-        if ((int)wp == kHotkeyToggleMode) toggleUiMode();
-        else                              snapToEdge((int)wp);
-        return 0;
-
-    case WM_DISPLAYCHANGE:
-        // Some monitor's resolution/topology changed. The window's own
-        // HMONITOR handle may not change even if its work area did (a
-        // resolution change on the same physical monitor), so re-fit
-        // unconditionally rather than gating on a monitor-handle diff.
-        adaptToCurrentMonitor();
-        return 0;
-
-    case WM_WINDOWPOSCHANGED: {
-        // Covers the window ending up on a different monitor by any means
-        // (Win+Shift+Arrow, dragging a secondary monitor's taskbar icon,
-        // etc.) — not just our own snapToEdge()/toggleUiMode(), which stay
-        // on the current monitor by construction anyway.
-        //
-        // Skip while minimized: a minimized window's rect is Windows' off-
-        // screen placeholder, not a real position, so "nearest monitor" for
-        // it is meaningless — treating it as a real monitor change caused
-        // adaptToCurrentMonitor() to fight the minimize (repeated reposition
-        // -> repeated WM_WINDOWPOSCHANGED), cratering the frame rate.
-        if (!IsIconic(hwnd_)) {
-            HMONITOR mon = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
-            if (mon != lastMonitor_) adaptToCurrentMonitor();
+void PlayerWindow::onCharPortable(uint32_t codepoint) {
+    if (!searchFocused_) return;
+    if (codepoint == 0x08) {  // backspace: pop one UTF-8 codepoint
+        while (!searchQuery_.empty() && (searchQuery_.back() & 0xC0) == 0x80)
+            searchQuery_.pop_back();
+        if (!searchQuery_.empty()) searchQuery_.pop_back();
+    } else if (codepoint >= 0x20 && codepoint != 0x7F) {
+        // Encode the codepoint as UTF-8 directly — portable, no wide-char
+        // detour (Windows' WM_CHAR delivers UTF-16 code units, which for the
+        // BMP codepoints a search box actually sees are numerically the same
+        // value this function receives).
+        char u8[4]; int n = 0;
+        if (codepoint < 0x80) {
+            u8[n++] = (char)codepoint;
+        } else if (codepoint < 0x800) {
+            u8[n++] = (char)(0xC0 | (codepoint >> 6));
+            u8[n++] = (char)(0x80 | (codepoint & 0x3F));
+        } else if (codepoint < 0x10000) {
+            u8[n++] = (char)(0xE0 | (codepoint >> 12));
+            u8[n++] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+            u8[n++] = (char)(0x80 | (codepoint & 0x3F));
+        } else {
+            u8[n++] = (char)(0xF0 | (codepoint >> 18));
+            u8[n++] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
+            u8[n++] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+            u8[n++] = (char)(0x80 | (codepoint & 0x3F));
         }
-        break;  // let DefWindowProc still generate WM_SIZE/WM_MOVE as usual
+        searchQuery_.append(u8, n);
+    } else {
+        return;  // control chars: consumed, no query change
     }
+    rebuildGridIndices();
+    gridScrollY_ = 0;
+    recalcLayout();
+    invalidate();
+}
 
-    case WM_ERASEBKGND:
-        return 1;
-
-    case WM_PAINT: {
-        // Vulkan (drawFrame(), driven from run() while pendingFrames_ > 0)
-        // owns presentation — just validate the update region so Windows
-        // doesn't keep resending WM_PAINT. Windows sends this whenever the
-        // window is exposed (uncovered by another window, alt-tab, etc.),
-        // independent of our own invalidate() call sites, so it must still
-        // mark a frame dirty or an exposed-but-otherwise-unchanged window
-        // would stay stale until some unrelated interaction.
-        PAINTSTRUCT ps;
-        BeginPaint(hwnd_, &ps);
-        EndPaint(hwnd_, &ps);
-        markDirty();
-        return 0;
-    }
-
-    case WM_TIMER:
-        if (wp == TIMER_SEEK_UPDATE) onTimer();
-        return 0;
-
-    case WM_APP_SCAN_DONE:
-        if (wp == 1) startBackgroundScan();
-        else         onScanDone();
-        return 0;
-
-    case WM_APP_TRACK_CHANGE:
-        applyTrackMetadata((int)wp, (int)lp);
-        return 0;
-
-    case WM_APP_ART_DECODED:
-        onArtDecoded();
-        return 0;
-
-    case WM_COMMAND:
-        if (LOWORD(wp) == ID_BTN_PLAY && HIWORD(wp) == BN_CLICKED)
-            onPlay();
-        return 0;
-
-    case WM_MOUSEMOVE:
-        onMouseMove(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
-        return 0;
-
-    case WM_MOUSELEAVE:
-        onMouseLeave();
-        return 0;
-
-    case WM_LBUTTONDOWN:
-        onLButtonDown(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
-        return 0;
-
-    case WM_LBUTTONDBLCLK:
-        onLButtonDblClk(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
-        return 0;
-
-    case WM_MOUSEWHEEL:
-        onMouseWheel(GET_X_LPARAM(lp), GET_Y_LPARAM(lp),
-                     GET_WHEEL_DELTA_WPARAM(wp));
-        return 0;
-
-    case WM_CHAR:
-        if (searchFocused_) {
-            wchar_t ch = (wchar_t)wp;
-            if (ch == 0x08) {  // backspace: pop one UTF-8 codepoint
-                while (!searchQuery_.empty() && (searchQuery_.back() & 0xC0) == 0x80)
-                    searchQuery_.pop_back();
-                if (!searchQuery_.empty()) searchQuery_.pop_back();
-            } else if (ch >= 0x20 && ch != 0x7F) {
-                char u8[8];
-                int n = WideCharToMultiByte(CP_UTF8, 0, &ch, 1, u8, sizeof(u8), nullptr, nullptr);
-                if (n > 0) searchQuery_.append(u8, n);
-            } else {
-                return 0;  // control chars: consumed, no query change
-            }
+void PlayerWindow::onKeyDownPortable(int keyCode) {
+    switch (keyCode) {
+    case key::Space:
+        if (searchFocused_) return;  // typing a space, not play/stop
+        if (isPlaying_) onStop(); else if (currentAlbum_ >= 0) onPlay();
+        return;
+    case key::Escape:
+        if (searchFocused_ || !searchQuery_.empty()) {
+            // First Escape: leave the box and clear the filter.
+            searchFocused_ = false;
+            searchQuery_.clear();
             rebuildGridIndices();
             gridScrollY_ = 0;
             recalcLayout();
             invalidate();
-            return 0;
+        } else if (trackPanelOpen_) {
+            trackPanelOpen_ = false;
+            recalcLayout();
+            invalidate();
         }
-        break;
-
-    case WM_KEYDOWN:
-        switch (wp) {
-        case VK_SPACE:
-            if (searchFocused_) break;  // typing a space, not play/stop
-            if (isPlaying_) onStop(); else if (currentAlbum_ >= 0) onPlay();
-            return 0;
-        case VK_ESCAPE:
-            if (searchFocused_ || !searchQuery_.empty()) {
-                // First Escape: leave the box and clear the filter.
-                searchFocused_ = false;
-                searchQuery_.clear();
-                rebuildGridIndices();
-                gridScrollY_ = 0;
-                recalcLayout();
-                invalidate();
-            } else if (trackPanelOpen_) {
-                trackPanelOpen_ = false;
-                recalcLayout();
-                invalidate();
-            }
-            return 0;
-        }
-        break;
-
-    case WM_DESTROY:
-        UnregisterHotKey(hwnd_, kHotkeySnapLeft);
-        UnregisterHotKey(hwnd_, kHotkeySnapRight);
-        UnregisterHotKey(hwnd_, kHotkeySnapBottom);
-        UnregisterHotKey(hwnd_, kHotkeySnapTop);
-        UnregisterHotKey(hwnd_, kHotkeySnapCenterG);
-        UnregisterHotKey(hwnd_, kHotkeySnapCenterH);
-        UnregisterHotKey(hwnd_, kHotkeyToggleMode);
-
-        onStop();
-        watcher_.unwatchAll();
-        if (scanThread_.joinable()) scanThread_.join();
-        // Join the art-decode worker before tearing down textures/renderer —
-        // it never touches the Renderer, but a decode completing after this
-        // point would PostMessage to a dying HWND.
-        stopArtDecodeThread();
-        usbDriver_.close();
-
-        // Texture caches must be torn down before the Renderer that owns
-        // their VkImages/descriptor sets.
-        clearGridArtTexCache();
-        if (trackPanelArtTex_ != kInvalidTexture) renderer_->destroy_texture(trackPanelArtTex_);
-        if (transportArtTex_ != kInvalidTexture) renderer_->destroy_texture(transportArtTex_);
-        if (artistImgTex_ != kInvalidTexture) renderer_->destroy_texture(artistImgTex_);
-
-        // Destroy the Vulkan swapchain/surface while hwnd_ is still valid,
-        // rather than waiting for PlayerWindow's own destructor (which runs
-        // after DestroyWindow has fully torn down the HWND).
-        renderer_.reset();
-        vkSurface_.reset();
-
-        if (thumbBitmap_) { DeleteObject(thumbBitmap_); thumbBitmap_ = nullptr; }
-
-        PostQuitMessage(0);
-        return 0;
+        return;
     }
-    return DefWindowProcW(hwnd_, msg, wp, lp);
+}
+
+void PlayerWindow::shutdown() {
+    onStop();
+    watcher_.unwatchAll();
+    if (scanThread_.joinable()) scanThread_.join();
+    // Join the art-decode worker before tearing down textures/renderer — it
+    // never touches the Renderer, but a decode completing after this point
+    // would notify a dying window.
+    stopArtDecodeThread();
+    usbDriver_.close();
+
+    // Texture caches must be torn down before the Renderer that owns their
+    // VkImages/descriptor sets.
+    clearGridArtTexCache();
+    if (trackPanelArtTex_ != kInvalidTexture) renderer_->destroy_texture(trackPanelArtTex_);
+    if (transportArtTex_ != kInvalidTexture) renderer_->destroy_texture(transportArtTex_);
+    if (artistImgTex_ != kInvalidTexture) renderer_->destroy_texture(artistImgTex_);
+
+    // Destroy the Vulkan swapchain/renderer while the host's native window
+    // still exists — host_ (and the SurfaceProvider it owns) is torn down
+    // after this returns.
+    renderer_.reset();
 }

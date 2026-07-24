@@ -1,5 +1,4 @@
 #pragma once
-#include <windows.h>
 #include <string>
 #include <vector>
 #include <atomic>
@@ -15,10 +14,16 @@
 #include "core/db.h"
 #include "art_view.hh"
 #include "audio_output.h"
+#ifdef _WIN32
 #include "wasapi_output.hh"
+#endif
 #include "core/eq_profiles.h"
 #include "core/eq_manager.h"
-#include "win32_platform.hh"
+#include "color.hh"
+#include "layout_rect.hh"
+#include "host.hh"
+#include "hotkey_ids.hh"
+#include "keys.hh"
 #include "renderer.hh"
 #include "canvas.hh"
 #include "texture.hh"
@@ -27,33 +32,24 @@
 #include "responsive_text.hh"
 #include "ui_min_text_size.gen.h"
 
-// Timer IDs
-#define TIMER_SEEK_UPDATE    1
-#define WM_APP_TRACK_CHANGE  (WM_APP+1)
-#define WM_APP_SCAN_DONE     (WM_APP+2)
-#define WM_APP_ART_DECODED   (WM_APP+3)
-
-// Keep these IDs for the gapless coordinator's PostMessage fallback
-#define ID_BTN_PLAY     104
-
 // Theme colors
-static constexpr COLORREF CLR_BG_MAIN        = RGB(10, 10, 10);
-static constexpr COLORREF CLR_BG_SIDEBAR     = RGB(18, 18, 18);
-static constexpr COLORREF CLR_BG_TRANSPORT   = RGB(22, 22, 22);
-static constexpr COLORREF CLR_BG_TRACKPANEL  = RGB(14, 14, 14);
-static constexpr COLORREF CLR_TEXT_PRIMARY    = RGB(242, 242, 242);
-static constexpr COLORREF CLR_TEXT_SECONDARY  = RGB(128, 128, 128);
+static constexpr ColorRef CLR_BG_MAIN        = RGB(10, 10, 10);
+static constexpr ColorRef CLR_BG_SIDEBAR     = RGB(18, 18, 18);
+static constexpr ColorRef CLR_BG_TRANSPORT   = RGB(22, 22, 22);
+static constexpr ColorRef CLR_BG_TRACKPANEL  = RGB(14, 14, 14);
+static constexpr ColorRef CLR_TEXT_PRIMARY    = RGB(242, 242, 242);
+static constexpr ColorRef CLR_TEXT_SECONDARY  = RGB(128, 128, 128);
 // 140 (was 80): rgb(80) on the rgb(10) background was ~2.4:1 contrast —
 // below WCAG AA's 4.5:1 for the real information it carries (quality badge,
 // REF EQ, hints). 140 ≈ 5.6:1, still clearly de-emphasized vs SECONDARY.
-static constexpr COLORREF CLR_TEXT_DIM        = RGB(140, 140, 140);
-static constexpr COLORREF CLR_ACCENT          = RGB(0, 200, 83);
-static constexpr COLORREF CLR_HOVER           = RGB(38, 38, 38);
-static constexpr COLORREF CLR_SEPARATOR       = RGB(36, 36, 36);
-static constexpr COLORREF CLR_SEEKBAR_TRACK   = RGB(55, 55, 55);
-static constexpr COLORREF CLR_SEEKBAR_FILL    = RGB(0, 200, 83);
-static constexpr COLORREF CLR_TILE_PLACEHOLDER = RGB(28, 28, 28);
-static constexpr COLORREF CLR_TEXT_ALBUM_TITLE = RGB(255, 255, 255);
+static constexpr ColorRef CLR_TEXT_DIM        = RGB(140, 140, 140);
+static constexpr ColorRef CLR_ACCENT          = RGB(0, 200, 83);
+static constexpr ColorRef CLR_HOVER           = RGB(38, 38, 38);
+static constexpr ColorRef CLR_SEPARATOR       = RGB(36, 36, 36);
+static constexpr ColorRef CLR_SEEKBAR_TRACK   = RGB(55, 55, 55);
+static constexpr ColorRef CLR_SEEKBAR_FILL    = RGB(0, 200, 83);
+static constexpr ColorRef CLR_TILE_PLACEHOLDER = RGB(28, 28, 28);
+static constexpr ColorRef CLR_TEXT_ALBUM_TITLE = RGB(255, 255, 255);
 
 // ── UI text sizing: window-relative, floored at a geometric minimum ────────
 //
@@ -113,26 +109,46 @@ struct UiTextSizes {
     float badge, secondary, body, nav, transportTitle, trackPanelTitle, header;
 };
 
-// Complete: today's full browsing UI (sidebar/grid/track panel/transport),
-// true fullscreen — sized to the current monitor's entire resolution
-// (covers the taskbar; see computeCompleteWindowRect()), used whenever that
-// monitor is tall enough to clear kMinWindowContentH. Essential: a minimal
-// "now playing" widget (art, title, prev/play-stop/next) sized as a
-// phone-shaped panel anchored to whichever of the current monitor's
-// dimensions is the constraint — the fallback for monitors too short even
-// for a fullscreen Complete layout; always fits, any monitor, any
-// orientation, with no interactive resize involved (see PlayerWindow::create()).
-enum class UiMode { Essential, Complete };
+// UiMode itself is declared in host.hh (Host's window-sizing methods need it
+// too): Complete = today's full browsing UI, true fullscreen; Essential = a
+// minimal "now playing" widget for monitors too short for Complete.
 
 class PlayerWindow {
 public:
-    bool create(HINSTANCE hInst);
+    bool create();
     void run();
 
-private:
-    static LRESULT CALLBACK wndProc(HWND, UINT, WPARAM, LPARAM);
-    LRESULT handleMsg(UINT, WPARAM, LPARAM);
+    // Host callbacks — public because Host (a separate object, not a
+    // PlayerWindow subclass) dispatches into these directly, the same way
+    // handleMsg used to before it moved into os/windows_host.cc /
+    // os/linux_host.cc. Not part of the app's own conceptual API.
+    void onHostResized();          // an explicit UI-mode/monitor change: notifyResized() + relayout
+    void onHostLayoutInvalidated(); // routine resize notification (no notifyResized(), see .cc)
+    void onHostExposed();          // window newly visible/uncovered — just mark a frame dirty
+    void onKeyDownPortable(int keyCode);      // key::* space (keys.hh) — shared key handling
+    void onCharPortable(uint32_t codepoint);  // search-box text entry
+    void onHotkey(int hotkeyId);              // Alt+F/J/C/U/G/H/L — see hotkey_ids.hh
+    void adaptToCurrentMonitor();             // WM_DISPLAYCHANGE/WM_WINDOWPOSCHANGED re-fit
+    void shutdown();               // teardown before the window/renderer die (was WM_DESTROY)
 
+    // Mouse — dispatched from Host's input translation.
+    void onMouseMove(int x, int y);
+    void onMouseLeave();
+    void onLButtonDown(int x, int y);
+    void onLButtonDblClk(int x, int y);
+    void onMouseWheel(int x, int y, int delta);
+
+    void onTimer();  // periodic playback-position tick, see host_->startTimer()
+
+    // Cross-thread completions, delivered via host_->postAppEvent() from a
+    // background thread and dispatched back here on the UI thread by Host.
+    void applyTrackMetadata(int album, int track);
+    void onScanDone();
+    void onArtDecoded();
+    void startBackgroundScan();
+    void onPlay();
+
+private:
     // Actions
     void onAddFolder();
     void onManageFolders();
@@ -141,18 +157,13 @@ private:
     void startGaplessCoordinator(PcmS32Callback cbI32, int outSr, int dacCh);
     void onAlbumSelected(int idx);
     void onTrackSelected(int idx);
-    void onPlay();
     void onStop();
     void onNext();
     void onPrev();
     void onSeek(int posMs);
-    void onTimer();
-    void applyTrackMetadata(int album, int track);
     void onArtClick();
-    void onScanDone();
     void onEqSettings();
     void toggleBitperfectMode();
-    void startBackgroundScan();
     void setupWatchers();
     std::string getActiveDeviceKey();
     void applyDeviceEq(int sampleRate, int channels);
@@ -160,33 +171,24 @@ private:
     // Layout
     void recalcLayout();
 
-    // UI mode (Essential/Complete) — see UiMode's comment.
+    // UI mode (Essential/Complete) — see UiMode's comment in host.hh.
     void toggleUiMode();
-    RECT computeCompleteWindowRect(HMONITOR mon) const;
-    RECT computeEssentialWindowRect(HMONITOR mon) const;
     int  essentialHitTest(int x, int y) const;  // -1 none, else EssentialBtn index
-    void snapToEdge(int hotkeyId);  // Alt+F/J/C/U/G/H — see kHotkeySnap* in player_window.cpp
-    void adaptToCurrentMonitor();   // re-fit the current mode's size to whatever monitor/resolution is now current
+    void snapToEdge(int hotkeyId);  // Alt+F/J/C/U/G/H — thin wrapper over host_->snapToEdge()
 
-    // Vulkan rendering (vk_canvas). Constructed in create() once hwnd_
-    // exists; drawFrame() is called from run() only while a frame is pending
-    // (see markDirty()/pendingFrames_), instead of relying on WM_PAINT.
+    // Vulkan rendering (vk_canvas). Constructed in create() once the host
+    // window exists; drawFrame() is called from run() only while a frame is
+    // pending (see markDirty()/pendingFrames_), instead of relying on a
+    // paint/expose event.
     void drawFrame();
 
     // Dirty-flag render-on-demand: markDirty() arms enough pending frames to
     // reach every swapchain image (so nothing skipped shows stale content);
     // run() only calls drawFrame() while pendingFrames_ > 0, and otherwise
-    // blocks instead of busy-spinning. invalidate() is a drop-in replacement
-    // for InvalidateRect() call sites that also marks the frame dirty.
+    // blocks instead of busy-spinning. invalidate() additionally pokes the
+    // host in case the platform needs an explicit repaint request.
     void markDirty();
-    void invalidate(const RECT* rc = nullptr);
-
-    // Mouse
-    void onMouseMove(int x, int y);
-    void onMouseLeave();
-    void onLButtonDown(int x, int y);
-    void onLButtonDblClk(int x, int y);
-    void onMouseWheel(int x, int y, int delta);
+    void invalidate();
 
     // Art cache (Vulkan texture path, via stb_image — used by drawFrame())
     TextureHandle getGridArtTexture(int albumIdx);
@@ -223,55 +225,54 @@ private:
     int  transportBtnHitTest(int x, int y) const;
     int  settingsHitTest(int x, int y) const;
 
-    HWND      hwnd_  = nullptr;
-    HINSTANCE hInst_ = nullptr;
+    // Real window/monitor/message-pump handle — see host.hh.
+    std::unique_ptr<Host> host_;
 
     // Transport/UI icons are drawn as native vector shapes (Canvas
     // triangle/rect/segment) directly in drawFrame() — no SVG rasterization,
-    // no textures, crisp at any size. See drawUiIcon() in player_window.cpp.
+    // no textures, crisp at any size. See drawUiIcon() in player_view.cc.
 
     // UI mode state
     UiMode  uiMode_ = UiMode::Complete;
     // (Essential/Complete toggle is keyboard-only: Alt+L. No on-screen button.)
-    HMONITOR lastMonitor_ = nullptr;  // last monitor adaptToCurrentMonitor() fit to; detects monitor changes
 
-    // Essential-mode layout zones (see toggleUiMode()/computeEssentialWindowRect())
-    RECT rcEssentialArt_      = {};
-    RECT rcEssentialTitle_    = {};
-    RECT rcEssentialPrev_     = {};
-    RECT rcEssentialPlayStop_ = {};
-    RECT rcEssentialNext_     = {};
+    // Essential-mode layout zones (see toggleUiMode())
+    LayoutRect rcEssentialArt_      = {};
+    LayoutRect rcEssentialTitle_    = {};
+    LayoutRect rcEssentialPrev_     = {};
+    LayoutRect rcEssentialPlayStop_ = {};
+    LayoutRect rcEssentialNext_     = {};
     int  hoverEssentialBtn_   = -1;  // 0=prev,1=playStop,2=next
 
     // Layout zones
-    RECT rcSidebar_    = {};
-    RECT rcGrid_       = {};
-    RECT rcTrackPanel_ = {};
-    RECT rcTransport_  = {};
+    LayoutRect rcSidebar_    = {};
+    LayoutRect rcGrid_       = {};
+    LayoutRect rcTrackPanel_ = {};
+    LayoutRect rcTransport_  = {};
 
     // Transport sub-regions. rcBtnPlay_ is the combined play/stop toggle —
     // there is deliberately no pause and no seek anywhere (this user only
     // ever stops or starts from zero). rcDspBadge_ is written by drawFrame()
     // (its width is the measured badge text) and read by onMouseMove() to
     // reveal the full signal-path readout on hover.
-    RECT rcTransportArt_  = {};
-    RECT rcTransportInfo_ = {};
-    RECT rcBtnPrev_       = {};
-    RECT rcBtnPlay_       = {};
-    RECT rcBtnNext_       = {};
-    RECT rcDspBadge_      = {};
+    LayoutRect rcTransportArt_  = {};
+    LayoutRect rcTransportInfo_ = {};
+    LayoutRect rcBtnPrev_       = {};
+    LayoutRect rcBtnPlay_       = {};
+    LayoutRect rcBtnNext_       = {};
+    LayoutRect rcDspBadge_      = {};
 
     // Sidebar items
-    RECT rcBrand_       = {};
-    RECT rcNavAlbums_   = {};
-    RECT rcNavSettings_ = {};
+    LayoutRect rcBrand_       = {};
+    LayoutRect rcNavAlbums_   = {};
+    LayoutRect rcNavSettings_ = {};
 
     // Settings page items
-    RECT rcSettingsAddFolder_    = {};
-    RECT rcSettingsManage_       = {};
-    RECT rcSettingsAudio_        = {};
-    RECT rcSettingsEq_           = {};
-    RECT rcSettingsBitperfect_   = {};
+    LayoutRect rcSettingsAddFolder_    = {};
+    LayoutRect rcSettingsManage_       = {};
+    LayoutRect rcSettingsAudio_        = {};
+    LayoutRect rcSettingsEq_           = {};
+    LayoutRect rcSettingsBitperfect_   = {};
 
     // Grid state. gridTileSize_/gridArtSize_ are recomputed every recalcLayout()
     // from a fixed target column count and the available width (see
@@ -302,7 +303,7 @@ private:
     // single indirection: tile position → albums_ index. Draw loop and
     // gridHitTest() both go through it, so every click/hover consumer keeps
     // receiving real album indices whether or not a filter is active.
-    RECT             rcSearch_ = {};
+    LayoutRect       rcSearch_ = {};
     std::string      searchQuery_;       // UTF-8
     bool             searchFocused_ = false;
     std::vector<int> gridIndices_;
@@ -351,9 +352,10 @@ private:
     std::string lastPlayedAlbumName_;
     std::string lastPlayedArtistName_;
 
-    // Now-playing display state
-    std::wstring currentTitleW_;
-    std::wstring currentArtistW_;
+    // Now-playing display state (UTF-8; Canvas::text() wants UTF-8 directly,
+    // so there's no wide-string round-trip here as there was pre-reorg).
+    std::string currentTitle_;
+    std::string currentArtist_;
     int          seekPosMs_   = 0;
     int          seekTotalMs_ = 0;
 
@@ -368,9 +370,10 @@ private:
     // drawFrame() (getGridArtTexture()), so revealing a new grid row while
     // scrolling stalled the UI thread for a whole row of decodes. Decodes now
     // run on a worker thread; the main thread only uploads finished RGBA to a
-    // Vulkan texture when WM_APP_ART_DECODED arrives (create_texture must stay
-    // on the render thread). `gen` guards against stale results landing after
-    // a rescan reshuffled album indices; artDecodePending_ is main-thread-only.
+    // Vulkan texture when notified (see onHostArtDecoded()) (create_texture
+    // must stay on the render thread). `gen` guards against stale results
+    // landing after a rescan reshuffled album indices; artDecodePending_ is
+    // main-thread-only.
     struct ArtDecodeResult { int albumIdx; std::vector<uint8_t> rgba; int w = 0, h = 0; uint64_t gen = 0; };
     struct ArtDecodeJob    { int albumIdx; std::string path; int targetSize; uint64_t gen; };
     std::thread                 artDecodeThread_;
@@ -382,7 +385,6 @@ private:
     std::atomic<uint64_t>       artCacheGen_{0};
     std::unordered_map<int, char> artDecodePending_;
     void artDecodeWorker();
-    void onArtDecoded();
     void stopArtDecodeThread();
 
     // Bound the grid-art VRAM footprint on large libraries: scrolling through
@@ -428,10 +430,10 @@ private:
     std::unique_ptr<AudioOutput> output_;
     bool             useWasapi_     = false;
     std::atomic<bool> bitperfectMode_{false};
+#ifdef _WIN32
     std::wstring     wasapiDeviceId_;
     WasapiMode       wasapiMode_    = WasapiMode::Shared;
-
-    HBITMAP thumbBitmap_ = nullptr;
+#endif
 
     // True playback position is "frames written to the output minus the output's
     // still-pending buffer". playedFrames_ is a session-monotonic count of
@@ -467,9 +469,11 @@ private:
     bool isPlaying_ = false;
     bool mouseTracking_ = false;
 
-    // Vulkan rendering (vk_canvas)
-    std::unique_ptr<Win32SurfaceProvider> vkSurface_;
-    FileAssetReader                       vkAssets_;
+    // Vulkan rendering (vk_canvas). The concrete SurfaceProvider/AssetReader
+    // (Win32SurfaceProvider+FileAssetReader vs WaylandSurfaceProvider+
+    // FileAssetReader) live inside host_ — Renderer only ever sees the
+    // portable base-class references vk_canvas itself defines
+    // (core/platform.hh), so no per-platform type appears here.
     std::unique_ptr<Renderer>             renderer_;
     std::vector<float>                    frameCurves_;
     std::vector<float>                    frameShapes_;  // SDF shape quads (Canvas::useShapes)
@@ -492,7 +496,7 @@ private:
     // Set once in create(); reused by onScanDone() to re-save the cache
     // (now possibly including fresh fallback-script glyphs) after a rescan.
     std::string          msdfCachePath_;
-    // Set once in create(); exe-relative "fonts\" dir, reused by
+    // Set once in create(); exe-relative "fonts/" dir, reused by
     // bakeFallbackGlyphs() to find the bundled fallback-script font files.
     std::string          fontsDir_;
 

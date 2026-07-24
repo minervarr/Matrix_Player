@@ -1,17 +1,19 @@
 # ---------------------------------------------------------------------------
-# matrix_player executable. Windows-only until Phase 3's host abstraction
-# lands — player_view.hh/.cc, art_view.hh/.cc, gui_main.cc, wasapi_output.hh/.cc
-# are still Win32-typed (HWND/HMONITOR/RECT/win32_platform.hh throughout).
-# A Linux gui target is added once that abstraction lands; until then the
-# Linux build only produces matrix_core + the engine/canvas libraries.
+# matrix_player executable. Shared portable sources (player_view.cc,
+# art_view.cc, gui_main.cc, ...) plus exactly one platform Host backend
+# (os/windows_host.cc or os/linux_host.cc — see src/host.hh).
 # ---------------------------------------------------------------------------
+
+set(MATRIX_PLAYER_PORTABLE_SOURCES
+    src/gui_main.cc
+    src/player_view.cc
+    src/art_view.cc)
 
 if(WIN32)
     add_executable(matrix_player WIN32
-        src/gui_main.cc
-        src/player_view.cc
+        ${MATRIX_PLAYER_PORTABLE_SOURCES}
         src/wasapi_output.cc
-        src/art_view.cc
+        src/os/windows_host.cc
         src/app.rc
         ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/windows/win32_platform.cc)
 
@@ -34,18 +36,6 @@ if(WIN32)
         UNICODE
         _UNICODE)
 
-    # Copy EQ profiles JSON next to the executable
-    add_custom_command(TARGET matrix_player POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_SOURCE_DIR}/eq_profiles.json
-            $<TARGET_FILE_DIR:matrix_player>/eq_profiles.json)
-
-    # Copy bundled fonts (Latin Modern + multi-script fallback faces) next to the executable
-    add_custom_command(TARGET matrix_player POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${CMAKE_SOURCE_DIR}/assets/fonts
-            $<TARGET_FILE_DIR:matrix_player>/fonts)
-
     add_dependencies(matrix_player compile_shared_shaders compile_vk_canvas_shaders generate_ui_min_text_size)
 
     target_link_libraries(matrix_player PRIVATE
@@ -65,7 +55,52 @@ if(WIN32)
         avrt
         dbghelp)
 else()
-    message(STATUS "matrix_player GUI executable not yet built on this platform "
-                    "(Phase 3 host abstraction pending) — only matrix_core and the "
-                    "engine/canvas libraries build here for now.")
+    add_executable(matrix_player
+        ${MATRIX_PLAYER_PORTABLE_SOURCES}
+        src/os/linux_host.cc
+        ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/linux/wayland_platform.cc)
+
+    target_include_directories(matrix_player PRIVATE
+        src
+        ${CMAKE_SOURCE_DIR}/third_party
+        ${CMAKE_SOURCE_DIR}/third_party/soxr/src
+        ${CMAKE_BINARY_DIR}/generated
+        ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/linux)
+
+    target_compile_options(matrix_player PRIVATE -Wall)
+
+    add_dependencies(matrix_player compile_shared_shaders compile_vk_canvas_shaders generate_ui_min_text_size)
+
+    find_package(Threads REQUIRED)
+    target_link_libraries(matrix_player PRIVATE
+        matrix_core
+        ae_usb
+        sqlite3
+        soxr
+        turbojpeg-static
+        vk_canvas_core
+        vk_canvas_wayland
+        Threads::Threads)
 endif()
+
+# Copy EQ profiles JSON next to the executable
+add_custom_command(TARGET matrix_player POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/eq_profiles.json
+        $<TARGET_FILE_DIR:matrix_player>/eq_profiles.json)
+
+# Compiled shaders land at ${CMAKE_BINARY_DIR}/assets/shaders (root
+# CMakeLists.txt's vce_compile_slang calls) — on Windows that's already the
+# exe's own directory (single-target build), but here the exe lives one
+# level down in gui/, so FileAssetReader (which reads <exe dir>/assets/...)
+# wouldn't find them without this copy.
+add_custom_command(TARGET matrix_player POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_BINARY_DIR}/assets
+        $<TARGET_FILE_DIR:matrix_player>/assets)
+
+# Copy bundled fonts (Latin Modern + multi-script fallback faces) next to the executable
+add_custom_command(TARGET matrix_player POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/assets/fonts
+        $<TARGET_FILE_DIR:matrix_player>/fonts)

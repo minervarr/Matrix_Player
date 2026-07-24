@@ -1,4 +1,5 @@
 #include "art_view.hh"
+#ifdef _WIN32
 #include "art_texture.hh"
 #include "ui_min_text_size.gen.h"
 #include <cstdio>
@@ -8,7 +9,8 @@
 
 static const wchar_t* ART_CLASS = L"MatrixArtWindow";
 
-bool ArtWindow::create(HINSTANCE hInst) {
+bool ArtWindow::create() {
+    HINSTANCE hInst = GetModuleHandleW(nullptr);
     WNDCLASSEXW wc = {};
     wc.cbSize       = sizeof(wc);
     wc.style        = CS_DBLCLKS;
@@ -72,12 +74,12 @@ bool ArtWindow::create(HINSTANCE hInst) {
     return true;
 }
 
-void ArtWindow::show(const std::string& imagePath, HMONITOR preferMonitor) {
+void ArtWindow::show(const std::string& imagePath) {
     currentPath_ = imagePath;
 
-    // Pick monitor — use preferMonitor or primary if null
-    HMONITOR mon = preferMonitor;
-    if (!mon) mon = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTOPRIMARY);
+    // Always the primary monitor — no call site has ever asked for a
+    // specific one (the old preferMonitor param was never passed).
+    HMONITOR mon = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTOPRIMARY);
     MONITORINFO mi = { sizeof(mi) };
     GetMonitorInfoW(mon, &mi);
 
@@ -207,3 +209,16 @@ LRESULT CALLBACK ArtWindow::wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
+
+#else  // !_WIN32 — not yet ported, see art_view.hh's class comment.
+
+bool ArtWindow::create() { return false; }
+void ArtWindow::show(const std::string&) {}
+void ArtWindow::updateImage(const std::string&) {}
+void ArtWindow::hide() {}
+bool ArtWindow::isVisible() const { return false; }
+void ArtWindow::drawFrame() {}
+void ArtWindow::markDirty() {}
+void ArtWindow::renderIfDirty() {}
+
+#endif  // _WIN32
