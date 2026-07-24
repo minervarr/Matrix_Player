@@ -89,6 +89,18 @@ else()
         ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/linux)
 
     target_compile_options(matrix_player PRIVATE -Wall)
+    # LTO is on for Release (see root CMakeLists.txt): GCC's whole-program
+    # analysis for these two warning classes runs at the final LINK step, not
+    # per-TU compile — CMake does not forward target_compile_options to the
+    # link line, so these have to be target_link_options, not
+    # target_compile_options (confirmed empirically: adding them as compile
+    # options here, and on the sqlite3/freetype targets themselves, left the
+    # link-time warnings unaffected). They fire on vendored C we don't own
+    # (sqlite3.c's amalgamation, vk_canvas's vendored FreeType) and are
+    # well-known GCC LTO false positives on well-tested code (GCC's own
+    # diagnostic hedges with "likely" / "note: source object is likely at
+    # address zero"), not bugs to fix by editing that source.
+    target_link_options(matrix_player PRIVATE -Wno-stringop-overflow -Wno-stringop-overread)
 
     add_dependencies(matrix_player compile_shared_shaders compile_vk_canvas_shaders generate_ui_min_text_size)
 

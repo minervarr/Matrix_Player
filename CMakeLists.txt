@@ -29,6 +29,7 @@ add_subdirectory(framework/audio_engine)
 # ---------- vk_canvas (Vulkan 2D canvas engine, framework/, firstparty submodule) ----------
 add_subdirectory(framework/vk_canvas/core vk_canvas_build)
 
+
 # Linux platform backend: builds vk_canvas_wayland (raw Wayland + xkbcommon).
 # The Windows equivalent (win32_platform.cc) has no such subdirectory —
 # framework/vk_canvas/platform/windows is vk_canvas's own standalone demo

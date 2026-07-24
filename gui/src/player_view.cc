@@ -444,6 +444,17 @@ bool PlayerWindow::create() {
 #endif
 #endif
 
+    // Arm the first frame explicitly rather than relying on an initial
+    // resize/configure event to do it: this window is fixed-size and
+    // non-resizable, so on Wayland no such event is guaranteed to arrive
+    // before the compositor is itself waiting on our first buffer commit to
+    // map the surface (a real deadlock otherwise — confirmed by tracing
+    // WAYLAND_DEBUG=1 output: the surface never gets attach()/commit() and
+    // the window never appears, even though the process runs and logs look
+    // healthy). Windows happens to get an implicit initial WM_SIZE that
+    // covers this, but that's a fragile assumption to depend on there too.
+    invalidate();
+
     host_->showWindow();
     return true;
 }
