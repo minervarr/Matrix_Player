@@ -1,72 +1,137 @@
-# Matrix Player Windows — CLAUDE.md
+# CLAUDE.md
+
+Guidance for Claude Code (claude.ai/code) working in this repository.
 
 ## What this project is
 
-A native Windows C++ music player that drives a USB DAC **directly** via libusbK,
-bypassing WASAPI and the Windows audio stack entirely. Audio goes from file → decoder
-→ ring buffer → isochronous USB transfers to the DAC. No OS audio mixer involved.
+Matrix Player — a native C++17 music player that drives a USB DAC **directly**
+via a first-party `audio_engine` library (libusbK/libusb, bypassing the OS
+audio mixer entirely) and renders its GUI through a first-party Vulkan engine,
+`vk_canvas`. **Windows and Linux are equal peers** — both build a real,
+running GUI from this same source tree. ALSA and JACK2 are Linux's secondary
+output backends (parallel to WASAPI on Windows); USB direct is primary and
+bit-perfect everywhere.
 
-This is the Windows sibling of an Android music player
-(`C:\Users\incxiuefb\Documents\Files\clone\media_player`) which has a rich reference
-implementation. When in doubt about a feature (artwork loading, gapless, scan strategy,
-EQ), read the Android player's Java/C++ code — the architecture maps 1:1.
+Both engines are consumed as git submodules, each authored by "minervarr" and
+developed independently — read their own `CLAUDE.md` files
+(`framework/audio_engine/CLAUDE.md`, `framework/vk_canvas/CLAUDE.md`) before
+touching anything inside them.
 
 ---
 
 ## Repository layout
 
 ```
-windows_matrix_player/
-  src/
-    main.cpp            — WinMain, CoInit, launches PlayerWindow
-    player_window.h/cpp — Main Win32 window: album list, track list, seekbar, art thumb
-    art_window.h/cpp    — Separate fullscreen artwork window (dual-monitor friendly)
-    library.h/cpp       — Folder scan, Track/Album structs, art resolution
-    decoder.h/cpp       — dr_flac wrapper with async decode thread + seek
-    db.h/cpp            — SQLite persistence (tracks, albums tables)
-  libs/
-    firstparty/
-      audio_engine/     — git submodule → github.com/minervarr/audio_engine (our own code)
-    thirdparty/
-      dr_flac.h         — Single-header FLAC decoder (mackron/dr_libs)
-      sqlite3.h / .c    — SQLite amalgamation 3.46.1 (vendored, not a submodule)
-      soxr/             — git submodule → github.com/chirlu/soxr (resampler)
-  build.bat             — One-shot build: loads MSVC vcvars64, runs cmake+ninja
-  CMakeLists.txt        — Ninja + MSVC, C++17, links audio_engine_windows.lib
-  TODO.md               — Prioritized feature backlog
-  .gitignore            — Excludes build/, .db, .vs/
+matrix_player/
+  core/                       — pure C++17 app logic, zero OS headers (one exception, see below)
+    include/core/             — public headers: library.h, decoder.h, db.h, eq_manager.h, eq_profiles.h
+    src/                      — library.cpp, decoder.cpp, db.cpp, eq_manager.cpp, eq_profiles.cpp
+    src/os/                   — the ONE platform split in core/: FolderWatcher's backend
+                                 (windows_folder_watch.cpp: ReadDirectoryChangesW;
+                                  linux_folder_watch.cpp: inotify) behind a PIMPL'd
+                                 FolderWatcher::Impl — library.h itself has no OS types.
+    CMakeLists.txt             — builds matrix_core (STATIC), links ae_core + sqlite3
+  gui/
+    src/
+      gui_main.cc              — portable entry point: env/self-test parsing, constructs
+                                  PlayerWindow, calls create()/run()
+      player_view.hh/.cc        — the app: layout, drawing (Canvas), hit-testing, playback
+                                  orchestration, gapless coordinator. Never touches a raw
+                                  HWND/HMONITOR/wl_* type directly — everything real-OS goes
+                                  through host_ (a Host*, see host.hh)
+      host.hh                  — the Host interface: window creation, message pump, monitor
+                                  info, timers, cross-thread events. Two implementations:
+      os/windows_host.cc        — real Win32 window/message pump (WM_* dispatch, DPI,
+                                  minidump crash handler, WinMain bootstrap)
+      os/linux_host.cc          — real Wayland backend (vk_canvas's WaylandDisplay/
+                                  WaylandWindow), timerfd for the seek-update timer,
+                                  eventfd-woken cross-thread event queue, main() bootstrap
+      os/alsa_output.cc/.hh     — Linux secondary output: thin AudioOutput adapter over
+                                  audio_engine's AlsaSink (only built if ALSA was found —
+                                  see MATRIX_HAVE_ALSA)
+      os/jack_output.cc/.hh     — Linux secondary output: thin AudioOutput adapter over
+                                  audio_engine's JackSink (MATRIX_HAVE_JACK)
+      wasapi_output.cc/.hh      — Windows secondary output (unchanged, Windows-only)
+      panels/settings_panels.hh/.cc — shared row-list/button/panel-header widgets used by
+                                  all four settings panels (see "Settings panels" below)
+      theme.hh                  — the color palette; player_view.cc and the panels both
+                                  draw from this one place
+      color.hh, layout_rect.hh  — portable ColorRef/LayoutRect (replace COLORREF/RECT)
+      hotkey_ids.hh, art_view.hh/.cc, audio_output.h, log_util.h
+    CMakeLists.txt              — builds the matrix_player executable, per-platform source/lib lists
+  framework/
+    audio_engine/               — git submodule (github.com/minervarr/audio_engine).
+                                  core/ (pure C++) + backends/{usb,alsa,jack,wasapi,flac,mp3,dsd}/
+                                  + api/ (C ABI, not used by this app — we link the C++ targets
+                                  ae_core/ae_usb/ae_alsa/ae_jack directly)
+    vk_canvas/                  — git submodule (github.com/minervarr/Vk_Canvas_Lb_LAW).
+                                  core/ (Renderer, Canvas, MSDF text, platform.hh seam) +
+                                  platform/windows/ (Win32SurfaceProvider) +
+                                  platform/linux/ (WaylandDisplay/WaylandWindow — real, not a stub)
+  third_party/
+    dr_flac.h, dr_wav.h         — single-header decoders (mackron/dr_libs), vendored
+    sqlite3.c/.h                — SQLite amalgamation, vendored
+    soxr/                       — git submodule (resampler)
+    libjpeg-turbo/              — git submodule (JPEG art decode, built via ExternalProject_Add)
+  assets/fonts/                 — Latin Modern + multi-script fallback faces (Cyrillic/Greek/CJK/Hangul)
+  scripts/
+    linux/build.sh               — cmake+ninja -> build/linux/
+    windows/build.ps1            — vswhere -> vcvars64 -> cmake+ninja -> build/ or build_debug/
+  tools/ab_test.cpp              — Windows-only A/B EQ listening-test tool (matrix_ab_test)
+  manifest.json                 — name/version/platforms/audio backends, machine-readable
+  CMakeLists.txt                 — root: third-party targets (sqlite3/soxr/libjpeg-turbo/shaders),
+                                  add_subdirectory(framework/...), add_subdirectory(core), add_subdirectory(gui)
+  git_wrapper[.exe]              — mandatory commit tool, see USAGE_gitWrapper.md
 ```
+
+**The `core/` rule**: zero OS headers, checked by `grep -rn "windows.h" core/` returning
+nothing except inside `#ifdef _WIN32` blocks. The one intentional platform split is
+`FolderWatcher`: its public interface (`core/include/core/library.h`) holds only an
+opaque `std::unique_ptr<Impl>`; the real HANDLE/inotify-fd state lives in
+`core/src/os/{windows,linux}_folder_watch.cpp`, picked by CMake's
+`$<IF:$<PLATFORM_ID:Windows>,...>` generator expression.
 
 ---
 
 ## Build
 
-Requires: Visual Studio Build Tools (MSVC cl.exe), CMake, Ninja, libusbK driver
-on the target USB DAC.
+**Linux** (this machine): needs cmake ≥ 3.22, ninja, GCC/Clang with C++17, ALSA
+headers, jack2 dev headers (**never** pipewire-jack — verify with `ldd` + `pacman -Qo`
+after building), wayland-client/wayland-cursor/xkbcommon dev headers, a Vulkan
+loader + headers, and the Slang shader compiler (`slangc`).
 
-```bat
-build.bat
+```bash
+scripts/linux/build.sh
 ```
 
-Output: `build\matrix_player_windows.exe`
+`vk_canvas`'s `VceShaders.cmake` resolves `slangc` from `$VULKAN_SDK/bin/slangc`,
+falling back to a hardcoded **Windows** path if unset (that cmake file belongs to the
+vk_canvas submodule — never patched in place). `scripts/linux/build.sh` already probes
+for a `slangc` on `PATH` or at a couple of known locations and passes
+`-DVCE_SLANGC=...` automatically; pass it yourself if your `slangc` lives elsewhere:
+`scripts/linux/build.sh -DVCE_SLANGC=/path/to/slangc`.
 
-The build pulls in `libs/firstparty/audio_engine` via submodule. If submodule is empty:
+Output: `build/linux/gui/matrix_player` (plus `matrix_player.log` and `eq_profiles.json`/
+`fonts/`/`assets/` copied next to it by the build's POST_BUILD steps).
+
+**Windows**: Visual Studio Build Tools (MSVC `cl.exe`), CMake, Ninja, libusbK driver
+bound to the target USB DAC via Zadig.
+
 ```bat
-git submodule update --init --recursive
+scripts\windows\build.ps1
 ```
 
-The MSVC path in `build.bat` is:
-`C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat`
+Output: `build\matrix_player.exe` (Release) or `build_debug\matrix_player.exe` (Debug).
+
+**Both platforms**: submodules first if empty —
+`git submodule update --init --recursive`.
 
 ---
 
-## Audio engine (`libs/firstparty/audio_engine/`)
+## Audio engine (`framework/audio_engine/`)
 
-The submodule lives at `C:\Users\incxiuefb\Documents\Files\clone\audio_engine`.
-It is a **C++ static library** (`audio_engine_windows.lib`) that drives USB Audio Class
-devices (UAC1/UAC2) directly via libusbK, bypassing WASAPI.
-
-### Key class: `UsbAudioDriver` (`libs/firstparty/audio_engine/src/main/cpp/usb_audio.h`)
+**`UsbAudioDriver`** (`framework/audio_engine/backends/usb/usb_audio.h`) — the
+primary, bit-perfect path on both platforms:
 
 ```cpp
 UsbAudioDriver driver;
@@ -74,48 +139,97 @@ driver.open(0x32BB, 0x0004);   // Hiby FC4: VID=0x32BB PID=0x0004
 driver.parseDescriptors();
 driver.configure(44100, 2, 16);
 driver.start();
-driver.writeFloat32(pcmData, numSamples);  // call from decode loop
+driver.writeFloat32(pcmData, numSamples);  // call from the decode loop
 driver.stop();
 driver.close();
 ```
 
-**Windows open signature differs from Android:**
-- Android: `open(int fd)` — receives file descriptor from UsbManager
-- Windows:  `open(uint16_t vid, uint16_t pid)` — opens by VID/PID via libusb
+`open(vid, pid)` is the same signature on Windows and Linux (both go through
+libusb/libusbK); this app wires it into `PlayerWindow::onPlay()` via the
+`AudioOutput` interface (`gui/src/audio_output.h`) — see `UsbAudioOutput`.
+
+### Secondary output backends (Audio Settings panel)
+
+| Platform | Secondary backend(s) | Adapter |
+|---|---|---|
+| Windows | WASAPI (shared/exclusive) | `gui/src/wasapi_output.hh/.cc` |
+| Linux | ALSA (system default device) | `gui/src/os/alsa_output.hh/.cc` — wraps `AlsaSink` |
+| Linux | JACK (auto-connects to physical outputs) | `gui/src/os/jack_output.hh/.cc` — wraps `JackSink` |
+
+ALSA/JACK are only compiled in when `audio_engine`'s own CMake found their dev
+headers (`ae_alsa`/`ae_jack` targets exist) — `gui/CMakeLists.txt` checks
+`if(TARGET ae_alsa)` and defines `MATRIX_HAVE_ALSA`/`MATRIX_HAVE_JACK`
+accordingly, so the Audio Settings panel only ever offers backends this build
+actually has.
 
 ### Tested device
+
 - Hiby FC4 — VID `0x32BB`, PID `0x0004`, UAC2, High-Speed USB
-- MI_00 (interface 0) must have **libusbK** bound via Zadig
+- Windows: MI_00 (interface 0) must have **libusbK** bound via Zadig
+- Linux: no driver binding needed (libusb talks to the kernel's usbfs directly)
 - Supports: 44.1k–768kHz PCM, 16/24/32-bit, DSD native (alt=4)
 
-### Audio formats the engine supports
-- PCM: `writeFloat32()`, `writeInt16()`, `writeInt24Packed()`, `writeInt32()`
-- Native DSD: `configure(rate, 2, 32, preferDsd=true)` then `write()` raw bytes
-- DoP: **TODO** — needs C++ port of `DsdPackager.java`
-  (see `libs/firstparty/audio_engine/src/main/java/com/nerio/audioengine/DsdPackager.java`)
+### Not yet wired
+
+- **DoP** (DSD-over-PCM): needs a C++ port of the Android sibling player's
+  `DsdPackager.java` → `UsbAudioDriver::writeDop()`.
 
 ---
 
-## Current skeleton state
+## GUI engine (`framework/vk_canvas/`)
 
-### What works (skeleton)
-- Win32 window with album list, track list, seekbar, time label, art thumbnail
-- Folder picker → recursive FLAC scan → SQLite persistence
-- Album art resolution: cover.jpg/folder.jpg priority → single image fallback
-- GDI+ image loading scaled to fit (thumbnail 180×180, fullscreen on separate window)
-- dr_flac async decode with seek support
-- Fullscreen art window (Escape or double-click to close, multi-monitor aware)
+The GUI is **entirely vk_canvas-rendered** — no native OS controls anywhere in
+the app (the four settings panels, described below, replaced the last native
+Win32 dialogs). `player_view.cc` draws through `Canvas` (rect/text/image
+primitives, MSDF text) and never allocates a raw window/control itself — the
+real window, message pump, and monitor queries live behind `Host` (`host.hh`).
 
-### What is NOT yet wired (most important next steps)
-1. **USB audio output** — `PlayerWindow::onPlay()` has a silent PCM sink.
-   Wire `Decoder`'s `PcmCallback` into `UsbAudioDriver::writeFloat32()`.
-   See `TODO(engine)` comment in `player_window.h`.
+### The Host abstraction
 
-2. **FLAC metadata** — `library.cpp:quickParseFLAC()` only reads filename as title.
-   Use `drflac_get_vorbis_comment_iterator` to parse title/artist/album/duration.
+```cpp
+class Host {
+public:
+    virtual bool init(PlayerWindow* owner, UiMode initialMode) = 0;
+    virtual SurfaceProvider& surfaceProvider() = 0;
+    virtual AssetReader&     assetReader()     = 0;
+    virtual MonitorInfo primaryMonitor() const = 0;
+    virtual void pump(bool haveWork) = 0;
+    virtual void postAppEvent(AppEvent id, intptr_t p1, intptr_t p2 = 0) = 0;
+    virtual void startTimer(TimerId, int intervalMs) = 0;
+    // ... window/mode/hotkey/error-dialog methods, see gui/src/host.hh
+};
+std::unique_ptr<Host> make_host();  // os/windows_host.cc or os/linux_host.cc
+```
 
-3. **Seekbar position** — currently reads trackbar position, not actual playback time.
-   Wire from `UsbAudioDriver` once audio output is connected.
+`PlayerWindow` calls `host_->` for anything OS-real; `Host::pump()` dispatches
+back into `PlayerWindow`'s public `on*()` methods (`onMouseMove`, `onTimer`,
+`onHostResized`, ...) — the same methods `windows_host.cc`'s old `wndProc`
+switch and `linux_host.cc`'s Wayland callbacks both call into, so
+`player_view.cc`'s layout/drawing/hit-testing code is identical on both
+platforms.
+
+**What has no Wayland equivalent, by design** (documented narrowing, not a
+silent gap): global hotkeys (Alt+F/J/C/U/G/H/L edge-snap/mode-toggle) are
+system-wide `RegisterHotKey` calls on Windows but focused-window-only checks
+on Linux (no cross-compositor equivalent); `adaptToCurrentMonitor()`/
+`snapToEdge()` are no-ops on Linux (Wayland clients cannot query "which
+monitor" or reposition themselves); Essential UI mode has no Linux window-
+sizing logic yet (always opens at a 1200×700 default); `ArtWindow`
+(fullscreen album-art second window) remains Windows-only — Wayland has no
+per-monitor window-targeting API, so this needs its own design pass.
+
+### Settings panels (`gui/src/panels/settings_panels.hh/.cc`)
+
+Four vk_canvas-native panels replaced the app's last native OS chrome —
+Manage Folders, Audio Settings, EQ Settings, and a from-scratch subfolder
+browser (replacing `SHBrowseForFolderW` on **both** platforms, not just
+stubbing it on Linux). They're full-page overlays over the content area
+(the same pattern the album view already used), not modal popups — Wayland
+has no child/owned-window primitive to build a real modal on. Shared
+row-list/button/header widgets live in `settings_panels.cc`; per-panel
+draw/click/hover logic lives in `player_view.cc` (`drawManageFolders`,
+`drawAudioSettings`, `drawEqSettings`, `drawFolderPicker`, and the
+`onPanel*` dispatchers).
 
 ---
 
@@ -123,35 +237,55 @@ driver.close();
 
 | Decision | Choice | Why |
 |---|---|---|
-| GUI | Win32 raw | No framework overhead, user owns every pixel |
-| FLAC decoder | dr_flac (single-header) | Zero deps, SIMD fast, swap for FFmpeg later |
+| GUI | vk_canvas (Vulkan) | Custom-rendered, no OS control chrome anywhere — "squeeze the most of every platform," not generic dialogs bolted onto custom UI |
+| Platforms | Windows + Linux, equal peers | Both build and run the real GUI from this tree; no platform is "the" project |
+| FLAC decoder | dr_flac (single-header) | Zero deps, SIMD fast |
 | Other formats | TODO via FFmpeg | dr_flac first, FFmpeg when DSF/WAV/MP3 needed |
-| DB | SQLite (embedded) | Same model as Android player, single file |
-| USB driver | libusbK | Best isochronous support on Windows, FOSS (LGPL) |
-| Audio stack | Bypassed entirely | No WASAPI — raw USB isochronous to DAC |
-| Album art (fullscreen) | Separate window | Dual-monitor: art on one screen, controls on other |
-| Submodule | audio_engine only | dr_flac + sqlite3 vendored (designed for it) |
-| Build | CMake + Ninja + MSVC cl.exe | No .sln files, matches audio_engine build pattern |
+| DB | SQLite (embedded) | Single file, same model as the Android sibling player |
+| USB driver | libusb/libusbK | Best isochronous support cross-platform; libusbK (Zadig) only needed on Windows |
+| Audio stack | Bypassed entirely for the primary path | No WASAPI/PulseAudio mixer — raw USB isochronous to DAC |
+| Linux secondary outputs | ALSA + JACK2 (never pipewire-jack) | Mirrors WASAPI's role: a fallback when no DAC is plugged in, or for testing without hardware |
+| Album art (fullscreen) | Separate window (Windows only for now) | Dual-monitor: art on one screen, controls on other |
+| Submodules | `audio_engine`, `vk_canvas`, `soxr`, `libjpeg-turbo` | dr_flac + sqlite3 vendored directly (single-header / amalgamation, no submodule needed) |
+| Build | CMake + Ninja | MSVC `cl.exe` on Windows, GCC/Clang on Linux, no `.sln`/Makefiles |
+| `core/` | Zero OS headers (one PIMPL'd exception: FolderWatcher) | Portable app logic reusable without dragging in either platform's headers |
 
 ---
 
-## Reference: Android player
+## Reference: Android sibling player
 
-`C:\Users\incxiuefb\Documents\Files\clone\media_player` — study this for:
-- Parallel scan strategy (`MainActivity.java` lines 860–989)
-- Three-tier artwork cache (`ArtworkCache.java`)
-- Gapless decode pipeline (`AudioEngine.java`, `NativeGaplessDecoder`)
-- DSD mode handling (`DsdMode.java`, `DsdPackager.java`)
-- EQ biquad implementation (`eq_processor.h`) — already in `libs/firstparty/audio_engine`, no port needed
-- Play history / stats schema (`TrackDao.java`, `StatsDao.java`)
+A separate Android music player by the same author shares this project's
+architecture (scan strategy, artwork cache, gapless pipeline, EQ, DSD
+handling). Its path is a **Windows-machine-specific local clone path** from
+earlier work on this project and is **unconfirmed from this (Linux) machine**
+— don't assume it still exists at any specific path; ask before relying on it.
 
 ---
 
-## Key TODOs (see TODO.md for full list)
+## Committing
 
-1. Wire USB audio output into play button
-2. Parse FLAC Vorbis comment tags for metadata
-3. Port `DsdPackager.java` → C++ `writeDop()` in `UsbAudioDriver`
-4. Swap GDI+ JPEG for libjpeg-turbo (same as Android's `NativeImageDecoder`)
-5. Parallel folder scan (std::thread pool, one per CPU core)
-6. Dark theme + green accent (#00C853)
+Use `git_wrapper` (`./git_wrapper` on Linux, `git_wrapper.exe` on Windows) —
+**never** plain `git commit`/`git push`. It forces author/committer identity to
+`nava <nava@noreply.com>`, strips stray `Co-Authored-By:`/"Generated with"
+trailers, and pushes submodules before the parent so fresh clones don't break.
+See `USAGE_gitWrapper.md`. Three verbs: `commit` (commit only), `push`
+(push only, submodule-order-aware), `save` (both).
+
+---
+
+## manifest.json
+
+Machine-readable project metadata (name/version/platforms/language/audio
+backends/database) — see the file itself. Folder names describe
+*architecture* (`core/`, `framework/`, `gui/`); this file is where project
+identity/metadata lives, never encoded into a folder name.
+
+---
+
+## Key TODOs (see TODO.md for the full list)
+
+1. Parse FLAC Vorbis comment tags for metadata (title/artist/album/duration)
+2. Port `DsdPackager.java` → C++ `writeDop()` in `UsbAudioDriver`
+3. Parallel folder scan (`std::thread` pool, one per CPU core)
+4. Essential UI mode's Linux window-sizing (currently always 1200×700)
+5. `ArtWindow` (fullscreen album art) on Linux — needs a real Wayland design pass

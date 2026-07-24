@@ -1,0 +1,128 @@
+# ---------------------------------------------------------------------------
+# matrix_player executable. Shared portable sources (player_view.cc,
+# art_view.cc, gui_main.cc, ...) plus exactly one platform Host backend
+# (os/windows_host.cc or os/linux_host.cc — see src/host.hh).
+# ---------------------------------------------------------------------------
+
+set(MATRIX_PLAYER_PORTABLE_SOURCES
+    src/gui_main.cc
+    src/player_view.cc
+    src/art_view.cc
+    src/panels/settings_panels.cc)
+
+if(WIN32)
+    add_executable(matrix_player WIN32
+        ${MATRIX_PLAYER_PORTABLE_SOURCES}
+        src/wasapi_output.cc
+        src/os/windows_host.cc
+        src/app.rc
+        ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/windows/win32_platform.cc)
+
+    target_include_directories(matrix_player PRIVATE
+        src
+        ${CMAKE_SOURCE_DIR}/third_party
+        ${CMAKE_SOURCE_DIR}/third_party/soxr/src
+        ${CMAKE_BINARY_DIR}/generated
+        ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/windows)
+
+    # No hardcoded /O2 here: CMAKE_CXX_FLAGS_RELEASE/_DEBUG (set by
+    # CMAKE_BUILD_TYPE) already apply the right optimization level per config —
+    # forcing /O2 unconditionally would win over Debug's /Od on the command line
+    # (MSVC takes the last /O flag) and silently turn a debug build into an
+    # optimized build anyway.
+    target_compile_options(matrix_player PRIVATE /W3)
+
+    target_compile_definitions(matrix_player PRIVATE
+        NOMINMAX
+        UNICODE
+        _UNICODE)
+
+    add_dependencies(matrix_player compile_shared_shaders compile_vk_canvas_shaders generate_ui_min_text_size)
+
+    target_link_libraries(matrix_player PRIVATE
+        matrix_core
+        ae_usb
+        winusb
+        setupapi
+        sqlite3
+        soxr
+        turbojpeg-static
+        vk_canvas_core
+        ole32
+        mmdevapi
+        avrt
+        dbghelp)
+else()
+    # AlsaOutput/JackOutput are secondary Linux outputs (see gui/src/os/) —
+    # only built when audio_engine actually found ALSA/jack2 dev headers and
+    # defined the corresponding target (same optionality as the ae_alsa/
+    # ae_jack tools in framework/audio_engine/CMakeLists.txt).
+    set(MATRIX_LINUX_AUDIO_SOURCES)
+    set(MATRIX_LINUX_AUDIO_LIBS)
+    if(TARGET ae_alsa)
+        list(APPEND MATRIX_LINUX_AUDIO_SOURCES src/os/alsa_output.cc)
+        list(APPEND MATRIX_LINUX_AUDIO_LIBS ae_alsa)
+    endif()
+    if(TARGET ae_jack)
+        list(APPEND MATRIX_LINUX_AUDIO_SOURCES src/os/jack_output.cc)
+        list(APPEND MATRIX_LINUX_AUDIO_LIBS ae_jack)
+    endif()
+
+    add_executable(matrix_player
+        ${MATRIX_PLAYER_PORTABLE_SOURCES}
+        ${MATRIX_LINUX_AUDIO_SOURCES}
+        src/os/linux_host.cc
+        ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/linux/wayland_platform.cc)
+
+    if(TARGET ae_alsa)
+        target_compile_definitions(matrix_player PRIVATE MATRIX_HAVE_ALSA)
+    endif()
+    if(TARGET ae_jack)
+        target_compile_definitions(matrix_player PRIVATE MATRIX_HAVE_JACK)
+    endif()
+
+    target_include_directories(matrix_player PRIVATE
+        src
+        ${CMAKE_SOURCE_DIR}/third_party
+        ${CMAKE_SOURCE_DIR}/third_party/soxr/src
+        ${CMAKE_BINARY_DIR}/generated
+        ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/linux)
+
+    target_compile_options(matrix_player PRIVATE -Wall)
+
+    add_dependencies(matrix_player compile_shared_shaders compile_vk_canvas_shaders generate_ui_min_text_size)
+
+    find_package(Threads REQUIRED)
+    target_link_libraries(matrix_player PRIVATE
+        matrix_core
+        ae_usb
+        ${MATRIX_LINUX_AUDIO_LIBS}
+        sqlite3
+        soxr
+        turbojpeg-static
+        vk_canvas_core
+        vk_canvas_wayland
+        Threads::Threads)
+endif()
+
+# Copy EQ profiles JSON next to the executable
+add_custom_command(TARGET matrix_player POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/eq_profiles.json
+        $<TARGET_FILE_DIR:matrix_player>/eq_profiles.json)
+
+# Compiled shaders land at ${CMAKE_BINARY_DIR}/assets/shaders (root
+# CMakeLists.txt's vce_compile_slang calls) — on Windows that's already the
+# exe's own directory (single-target build), but here the exe lives one
+# level down in gui/, so FileAssetReader (which reads <exe dir>/assets/...)
+# wouldn't find them without this copy.
+add_custom_command(TARGET matrix_player POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_BINARY_DIR}/assets
+        $<TARGET_FILE_DIR:matrix_player>/assets)
+
+# Copy bundled fonts (Latin Modern + multi-script fallback faces) next to the executable
+add_custom_command(TARGET matrix_player POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/assets/fonts
+        $<TARGET_FILE_DIR:matrix_player>/fonts)
