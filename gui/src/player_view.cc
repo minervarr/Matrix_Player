@@ -125,8 +125,55 @@ static const char* backendDisplayName(AudioBackend b) {
 static Rect toRect(const LayoutRect& r) {
     return { (float)r.left, (float)r.top, (float)(r.right - r.left), (float)(r.bottom - r.top) };
 }
+static LayoutRect toLayoutRect(const Rect& r) {
+    return { (int)r.x, (int)r.y, (int)(r.x + r.w), (int)(r.y + r.h) };
+}
 static Color toColor(ColorRef c, float a = 1.0f) {
     return { GetRValue(c) / 255.0f, GetGValue(c) / 255.0f, GetBValue(c) / 255.0f, a };
+}
+
+// The app's palette/selection language for the reusable vk_canvas widgets
+// (radio rows + scroll lists), defined once so every settings panel shares one
+// look. Defaults in the framework reproduce vk_canvas's own col:: theme; these
+// override them with Matrix Player's green accent + bottom-border selection.
+static widgets::RadioStyle matrixRadioStyle() {
+    widgets::RadioStyle s;
+    s.dotOn   = toColor(CLR_ACCENT);   s.dotOff  = toColor(CLR_SEPARATOR);
+    s.textOn  = toColor(CLR_ACCENT);   s.textOff = toColor(CLR_TEXT_PRIMARY);
+    s.hoverBg = toColor(CLR_HOVER);              // grey pill behind a hovered row
+    s.selBg   = toColor(CLR_ACCENT, 0.16f);      // accent-tint pill behind the selected row
+    s.selBar  = toColor(CLR_ACCENT);             // thin green left bar on the selected row
+    s.radius  = UI_CORNER_RADIUS;
+    return s;
+}
+static widgets::ScrollListStyle matrixListStyle() {
+    widgets::ScrollListStyle s;
+    s.background  = toColor(CLR_BG_MAIN);         // invisible against the page bg
+    s.rowText     = toColor(CLR_TEXT_PRIMARY);
+    s.hoverBg     = toColor(CLR_HOVER);           // grey pill on hover
+    s.selection   = widgets::ListSelectionStyle::Pill;
+    s.pillColor   = toColor(CLR_ACCENT, 0.16f);   // accent-tint pill on the selected row
+    s.pillText    = toColor(CLR_ACCENT);          // green text on the selected row
+    s.selectedBar = toColor(CLR_ACCENT);          // thin green left bar
+    s.radius      = UI_CORNER_RADIUS;
+    return s;
+}
+
+// One text-input field, shared by the sidebar album search and the EQ-profile
+// search: CLR_INPUT_BG fill at the uniform radius, a bottom underline that
+// turns accent on focus, dim placeholder when empty+unfocused, and a caret
+// while focused. Keeps both searches visually identical (see UI_DESIGN_SYSTEM).
+static void drawSearchField(Canvas& canvas, const LayoutRect& rc, const std::string& text,
+                            bool focused, const char* placeholder, float textSize) {
+    Rect s = toRect(rc);
+    canvas.rect(s.x, s.y, s.w, s.h, toColor(CLR_INPUT_BG), UI_CORNER_RADIUS);
+    canvas.rect(s.x, s.y + s.h - 1, s.w, 1, toColor(focused ? CLR_ACCENT : CLR_SEPARATOR));
+    bool empty = text.empty() && !focused;
+    std::string shown = empty ? placeholder : text;
+    ColorRef clr = empty ? CLR_TEXT_DIM : CLR_TEXT_PRIMARY;
+    std::string fit = truncateToWidth(canvas, shown, s.w - 16 - 8, textSize, FontStyle::Roman);
+    if (focused) fit += "|";
+    canvas.text(fit, s.x + 8, s.y + s.h * 0.5f - textSize * 0.5f, textSize, toColor(clr));
 }
 
 // truncateToWidth / splitTwoLines / wrapText / stripHtmlToPlain moved into
@@ -760,7 +807,7 @@ void PlayerWindow::drawFrame() {
         for (auto& b : ebuttons) {
             if (hoverEssentialBtn_ == b.idx) {
                 Rect r = toRect(b.rc);
-                canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), 8.0f);
+                canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
             }
             drawUiIcon(canvas, b.rc, b.icon, toColor(b.clr));
         }
@@ -784,21 +831,8 @@ void PlayerWindow::drawFrame() {
                           textSizes_.nav, toColor(CLR_ACCENT), FontStyle::Bold);
 
         // Search box — filters the album grid live as the user types.
-        {
-            Rect s = toRect(rcSearch_);
-            canvas.rect(s.x, s.y, s.w, s.h, toColor(RGB(24, 24, 24)), 6.0f);
-            canvas.rect(s.x, s.y + s.h - 1, s.w, 1,
-                        toColor(searchFocused_ ? CLR_ACCENT : CLR_SEPARATOR));
-            std::string shown = searchQuery_.empty() && !searchFocused_
-                                ? "Search" : searchQuery_;
-            std::string caret = searchFocused_ ? "|" : "";
-            ColorRef clr = searchQuery_.empty() && !searchFocused_
-                           ? CLR_TEXT_DIM : CLR_TEXT_PRIMARY;
-            std::string fit = truncateToWidth(canvas, shown, s.w - 16 - 8,
-                                              textSizes_.secondary, FontStyle::Roman);
-            canvas.text(fit + caret, s.x + 8, s.y + s.h * 0.5f - textSizes_.secondary * 0.5f,
-                        textSizes_.secondary, toColor(clr));
-        }
+        drawSearchField(canvas, rcSearch_, searchQuery_, searchFocused_, "Search",
+                        textSizes_.secondary);
 
         struct NavItem { const char* label; LayoutRect rc; int idx; };
         NavItem items[] = {
@@ -809,10 +843,18 @@ void PlayerWindow::drawFrame() {
             bool active = (activeNavItem_ == item.idx);
             bool hovered = (hoverSidebarItem_ == item.idx && !active);
             Rect r = toRect(item.rc);
-            if (hovered) canvas.rect(r.x + 4, r.y, r.w - 8, r.h, toColor(CLR_HOVER), 6.0f);
-            if (active) canvas.rect(r.x, r.y + 6, 2, r.h - 12, toColor(CLR_ACCENT));
+            if (active) {
+                // Selected: accent-tint pill + left bar (the one selection family).
+                float vin = r.h * 0.14f, ph = r.h - vin * 2.0f;
+                canvas.rect(r.x + 4, r.y + vin, r.w - 8, ph,
+                            toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
+                canvas.rect(r.x + 4, r.y + vin + UI_CORNER_RADIUS * 0.5f, 3.0f,
+                            ph - UI_CORNER_RADIUS, toColor(CLR_ACCENT), 1.5f);
+            } else if (hovered) {
+                canvas.rect(r.x + 4, r.y, r.w - 8, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+            }
             canvas.text(item.label, r.x + 20, r.y + r.h * 0.5f - textSizes_.nav * 0.5f,
-                       textSizes_.nav, toColor(active ? CLR_TEXT_PRIMARY : CLR_TEXT_SECONDARY));
+                       textSizes_.nav, toColor(active ? CLR_ACCENT : CLR_TEXT_SECONDARY));
         }
 
         // (The now-playing mini card that used to fill the space below the
@@ -855,12 +897,12 @@ void PlayerWindow::drawFrame() {
 
                     bool nowPlaying = isPlaying_ && idx == displayAlbum_;
 
-                    // Hover: soft accent glow instead of the old grey slab —
-                    // two stacked low-alpha rounded rects read as a halo once
-                    // the art covers their centers.
-                    if (hoverAlbumIdx_ == idx && !nowPlaying) {
-                        canvas.rect(x - 8, y - 8, a + 16, a + 16, toColor(CLR_ACCENT, 0.10f), 10.0f);
-                        canvas.rect(x - 4, y - 4, a + 8,  a + 8,  toColor(CLR_ACCENT, 0.22f), 8.0f);
+                    // Hover: neutral grey focus frame (hover is never accent —
+                    // accent signals state only). A grey rounded rect slightly
+                    // larger than the art reads as a border halo once the art
+                    // (drawn above the vector layer) covers its center.
+                    if (hoverAlbumIdx_ == idx && !nowPlaying && selectedAlbumIdx_ != idx) {
+                        canvas.rect(x - 6, y - 6, a + 12, a + 12, toColor(CLR_HOVER), UI_CORNER_RADIUS);
                     }
                     // Now-playing: unmistakable green glow border (stronger
                     // than hover, stronger than selection).
@@ -879,12 +921,13 @@ void PlayerWindow::drawFrame() {
                     // (the art itself can't carry a badge: imageFg composites
                     // above the vector layer). Replaces the old offset dot,
                     // which broke the grid's column alignment.
+                    // Only last-played needs this bar; now-playing is already
+                    // unmistakable from its glow (no double-marking).
                     bool lastPlayed = !nowPlaying &&
                         alb.name == lastPlayedAlbumName_ &&
                         alb.artist == lastPlayedArtistName_;
-                    if (nowPlaying || lastPlayed)
-                        canvas.rect(x, y + a + 2, a, 2,
-                                   toColor(CLR_ACCENT, nowPlaying ? 1.0f : 0.4f));
+                    if (lastPlayed)
+                        canvas.rect(x, y + a + 2, a, 2, toColor(CLR_ACCENT, 0.4f));
 
                     // Tile text is centered under the art and confined to
                     // exactly the art's width — the grid's vertical edges are
@@ -962,13 +1005,21 @@ void PlayerWindow::drawFrame() {
         };
         for (auto& item : items) {
             Rect r = toRect(item.rc);
-            if (hoverSettingsItem_ == item.idx)
-                canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), 8.0f);
             bool isActiveModeRow = (item.idx == 4 && bp);
-            ColorRef borderClr = isActiveModeRow ? CLR_ACCENT : CLR_SEPARATOR;
-            float borderThick = isActiveModeRow ? 2.0f : 1.0f;
-            canvas.rect(r.x, r.y, r.w, borderThick, toColor(borderClr));
-            canvas.rect(r.x, r.y + r.h - borderThick, r.w, borderThick, toColor(borderClr));
+            if (isActiveModeRow) {
+                // Active toggle state: accent-tint pill + left bar (one family).
+                float vin = r.h * 0.14f, ph = r.h - vin * 2.0f;
+                canvas.rect(r.x, r.y + vin, r.w, ph,
+                            toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
+                canvas.rect(r.x, r.y + vin + UI_CORNER_RADIUS * 0.5f, 3.0f,
+                            ph - UI_CORNER_RADIUS, toColor(CLR_ACCENT), 1.5f);
+            } else {
+                if (hoverSettingsItem_ == item.idx)
+                    canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+                // Thin neutral separators keep the list divided.
+                canvas.rect(r.x, r.y, r.w, 1.0f, toColor(CLR_SEPARATOR));
+                canvas.rect(r.x, r.y + r.h - 1.0f, r.w, 1.0f, toColor(CLR_SEPARATOR));
+            }
             ColorRef textClr = (item.idx == 3 && bp) ? CLR_TEXT_DIM : CLR_TEXT_PRIMARY;
             if (isActiveModeRow) textClr = CLR_ACCENT;
             centeredIn(item.label, r, textSizes_.nav, textClr, FontStyle::Roman);
@@ -988,7 +1039,7 @@ void PlayerWindow::drawFrame() {
             const Album& album = albums_[selectedAlbumIdx_];
             canvas.setClip(tp.x, tp.y, tp.w, tp.h);
 
-            float pad = 40.0f * uiScale_;
+            float pad = SP_XL * uiScale_;
             float scroll = (float)trackScrollY_;
             float artSize = std::min(tp.w * 0.32f, tp.h * 0.55f);
             float artX = tp.x + pad;
@@ -1064,8 +1115,17 @@ void PlayerWindow::drawFrame() {
                 if (rowY > tp.y + tp.h) break;
 
                 bool isPlayingRow = (displayAlbum_ == selectedAlbumIdx_ && displayTrack_ == i && isPlaying_);
-                if (hoverTrackIdx_ == i)
-                    canvas.rect(colX - 12, rowY, colW + 24, (float)trackRowHeight_, toColor(CLR_HOVER), 6.0f);
+                float rpx = colX - 12, rpw = colW + 24;
+                if (isPlayingRow) {
+                    // Playing row: accent-tint pill + left bar (one selection family).
+                    float vin = trackRowHeight_ * 0.10f, ph = trackRowHeight_ - vin * 2.0f;
+                    canvas.rect(rpx, rowY + vin, rpw, ph,
+                                toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
+                    canvas.rect(rpx, rowY + vin + UI_CORNER_RADIUS * 0.5f, 3.0f,
+                                ph - UI_CORNER_RADIUS, toColor(CLR_ACCENT), 1.5f);
+                } else if (hoverTrackIdx_ == i) {
+                    canvas.rect(rpx, rowY, rpw, (float)trackRowHeight_, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+                }
 
                 // Track number / duration are numeric readouts: Mono (repurposed
                 // Math style slot) keeps digits from jittering column-to-column.
@@ -1190,7 +1250,7 @@ void PlayerWindow::drawFrame() {
         for (auto& b : buttons) {
             if (hoverTransportBtn_ == b.idx) {
                 Rect r = toRect(b.rc);
-                canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), 8.0f);
+                canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
             }
             drawUiIcon(canvas, b.rc, b.icon, toColor(b.clr));
         }
@@ -1735,6 +1795,15 @@ static bool ptInRect(const LayoutRect& r, int x, int y) {
     return x >= r.left && x < r.right && y >= r.top && y < r.bottom;
 }
 
+// Row index at (x,y) among the rows widgets::drawScrollList cached last frame,
+// or -1 if none. Replaces panels::hitTestRows: the visible-row rects the widget
+// returns already encode scroll offset and off-screen clipping.
+static int hitTestListRows(const std::vector<widgets::ListRow>& rows, int x, int y) {
+    for (auto& r : rows)
+        if (r.rect.contains((float)x, (float)y)) return r.index;
+    return -1;
+}
+
 int PlayerWindow::trackPanelHitTest(int x, int y) const {
     if (!trackPanelOpen_ || activeNavItem_ != 0) return -1;
     if (x < trackListLeft_ || x >= trackListRight_) return -1;
@@ -2088,7 +2157,7 @@ void PlayerWindow::onPanelMouseMove(int x, int y) {
         bool hc = ptInRect(mfCloseRc_, x, y);  if (hc != mfHoverClose_)  { mfHoverClose_  = hc; changed = true; }
         bool hr = ptInRect(mfBtnRemove_, x, y); if (hr != mfHoverRemove_) { mfHoverRemove_ = hr; changed = true; }
         bool hd = ptInRect(mfBtnDone_, x, y);   if (hd != mfHoverDone_)   { mfHoverDone_   = hd; changed = true; }
-        int row = panels::hitTestRows(mfListArea_, kPanelRowH, mfScrollY_, (int)mfRoots_.size(), x, y);
+        int row = hitTestListRows(mfListRows_, x, y);
         if (row != mfHoverRow_) { mfHoverRow_ = row; changed = true; }
         break;
     }
@@ -2100,22 +2169,10 @@ void PlayerWindow::onPanelMouseMove(int x, int y) {
             if (ptInRect(asBackendRowRects_[i], x, y)) { hb = i; break; }
         if (hb != asHoverBackendRow_) { asHoverBackendRow_ = hb; changed = true; }
 
-        AudioBackend sel = asBackendOptions_.empty() ? AudioBackend::Usb : asBackendOptions_[asBackendSelIdx_];
-        int rowCount = 0;
-        if (sel == AudioBackend::Usb) rowCount = (int)asUsbDevices_.size();
-#ifdef _WIN32
-        else if (sel == AudioBackend::Wasapi) rowCount = (int)asWasapiDevices_.size() + 1;
-#else
-#ifdef MATRIX_HAVE_ALSA
-        else if (sel == AudioBackend::Alsa) rowCount = (int)asAlsaDevices_.size() + 1;
-#endif
-#ifdef MATRIX_HAVE_JACK
-        else if (sel == AudioBackend::Jack) rowCount = (int)asJackPorts_.size() + 1;
-#endif
-#endif
-        int hdv = panels::hitTestRows(asDeviceListArea_, kPanelRowH, 0, rowCount, x, y);
+        int hdv = hitTestListRows(asDeviceListRows_, x, y);
         if (hdv != asHoverDeviceRow_) { asHoverDeviceRow_ = hdv; changed = true; }
 #ifdef _WIN32
+        AudioBackend sel = asBackendOptions_.empty() ? AudioBackend::Usb : asBackendOptions_[asBackendSelIdx_];
         int hm = -1;
         if (sel == AudioBackend::Wasapi)
             for (int i = 0; i < 2; i++) if (ptInRect(asModeRows_[i], x, y)) { hm = i; break; }
@@ -2127,7 +2184,7 @@ void PlayerWindow::onPanelMouseMove(int x, int y) {
         bool hc = ptInRect(eqCloseRc_, x, y); if (hc != eqHoverClose_) { eqHoverClose_ = hc; changed = true; }
         bool ha = ptInRect(eqBtnAssign_, x, y); if (ha != eqHoverAssign_) { eqHoverAssign_ = ha; changed = true; }
         bool hcl = ptInRect(eqBtnClear_, x, y); if (hcl != eqHoverClear_) { eqHoverClear_ = hcl; changed = true; }
-        int row = panels::hitTestRows(eqListArea_, kPanelRowH, eqScrollY_, (int)eqFilteredIndices_.size(), x, y);
+        int row = hitTestListRows(eqListRows_, x, y);
         if (row != eqHoverRow_) { eqHoverRow_ = row; changed = true; }
         break;
     }
@@ -2135,8 +2192,7 @@ void PlayerWindow::onPanelMouseMove(int x, int y) {
         bool hc = ptInRect(fpCloseRc_, x, y);   if (hc != fpHoverClose_)  { fpHoverClose_  = hc; changed = true; }
         bool hs = ptInRect(fpBtnSelect_, x, y); if (hs != fpHoverSelect_) { fpHoverSelect_ = hs; changed = true; }
         bool ha = ptInRect(fpBtnCancel_, x, y); if (ha != fpHoverCancel_) { fpHoverCancel_ = ha; changed = true; }
-        int rowCount = (int)fpEntries_.size() + (fpHasParent_ ? 1 : 0);
-        int row = panels::hitTestRows(fpListArea_, kPanelRowH, fpScrollY_, rowCount, x, y);
+        int row = hitTestListRows(fpListRows_, x, y);
         if (row != fpHoverRow_) { fpHoverRow_ = row; changed = true; }
         break;
     }
@@ -2164,7 +2220,7 @@ void PlayerWindow::onPanelClick(int x, int y) {
             }
             return;
         }
-        int row = panels::hitTestRows(mfListArea_, kPanelRowH, mfScrollY_, (int)mfRoots_.size(), x, y);
+        int row = hitTestListRows(mfListRows_, x, y);
         if (row >= 0) { mfSelectedRow_ = row; invalidate(); }
         return;
     }
@@ -2174,28 +2230,25 @@ void PlayerWindow::onPanelClick(int x, int y) {
             if (ptInRect(asBackendRowRects_[i], x, y)) { asBackendSelIdx_ = i; invalidate(); return; }
 
         AudioBackend sel = asBackendOptions_.empty() ? AudioBackend::Usb : asBackendOptions_[asBackendSelIdx_];
+        int devRow = hitTestListRows(asDeviceListRows_, x, y);
         if (sel == AudioBackend::Usb) {
-            int row = panels::hitTestRows(asDeviceListArea_, kPanelRowH, 0, (int)asUsbDevices_.size(), x, y);
-            if (row >= 0) { asUsbSel_ = row; invalidate(); return; }
+            if (devRow >= 0) { asUsbSel_ = devRow; invalidate(); return; }
         }
 #ifdef _WIN32
         else if (sel == AudioBackend::Wasapi) {
-            int row = panels::hitTestRows(asDeviceListArea_, kPanelRowH, 0, (int)asWasapiDevices_.size() + 1, x, y);
-            if (row >= 0) { asWasapiSel_ = row; invalidate(); return; }
+            if (devRow >= 0) { asWasapiSel_ = devRow; invalidate(); return; }
             for (int i = 0; i < 2; i++)
                 if (ptInRect(asModeRows_[i], x, y)) { asExclusive_ = (i == 1); invalidate(); return; }
         }
 #else
 #ifdef MATRIX_HAVE_ALSA
         else if (sel == AudioBackend::Alsa) {
-            int row = panels::hitTestRows(asDeviceListArea_, kPanelRowH, 0, (int)asAlsaDevices_.size() + 1, x, y);
-            if (row >= 0) { asAlsaSel_ = row; invalidate(); return; }
+            if (devRow >= 0) { asAlsaSel_ = devRow; invalidate(); return; }
         }
 #endif
 #ifdef MATRIX_HAVE_JACK
         else if (sel == AudioBackend::Jack) {
-            int row = panels::hitTestRows(asDeviceListArea_, kPanelRowH, 0, (int)asJackPorts_.size() + 1, x, y);
-            if (row >= 0) { asJackSel_ = row; invalidate(); return; }
+            if (devRow >= 0) { asJackSel_ = devRow; invalidate(); return; }
         }
 #endif
 #endif
@@ -2234,7 +2287,7 @@ void PlayerWindow::onPanelClick(int x, int y) {
             invalidate();
             return;
         }
-        int row = panels::hitTestRows(eqListArea_, kPanelRowH, eqScrollY_, (int)eqFilteredIndices_.size(), x, y);
+        int row = hitTestListRows(eqListRows_, x, y);
         if (row >= 0) { eqSelectedRow_ = row; invalidate(); }
         return;
     }
@@ -2245,10 +2298,7 @@ void PlayerWindow::onPanelClick(int x, int y) {
             closeActivePanel();
             return;
         }
-        std::vector<std::string> labels;
-        if (fpHasParent_) labels.push_back("..");
-        labels.insert(labels.end(), fpEntries_.begin(), fpEntries_.end());
-        int row = panels::hitTestRows(fpListArea_, kPanelRowH, fpScrollY_, (int)labels.size(), x, y);
+        int row = hitTestListRows(fpListRows_, x, y);
         if (row < 0) return;
         if (fpHasParent_ && row == 0) {
             fpLoadDir(std::filesystem::path(fpCurrentDir_).parent_path().string());
@@ -2310,14 +2360,15 @@ void PlayerWindow::onManageFolders() {
 
 void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
     LayoutRect content = panels::drawHeader(canvas, area, "Music Folders", uiScale_, textSizes_.header, mfCloseRc_);
-    float pad = 20.0f * uiScale_;
+    float pad = SP_LG * uiScale_;
     float btnH = 36.0f * uiScale_;
 
     LayoutRect listArea = { content.left, (int)(content.top + pad),
                             content.right, (int)(content.bottom - (btnH + pad * 2)) };
     mfListArea_ = listArea;
-    panels::drawRowList(canvas, listArea, mfRoots_, kPanelRowH, mfScrollY_,
-                         mfHoverRow_, mfSelectedRow_, textSizes_.nav, uiScale_);
+    mfListRows_ = widgets::drawScrollList(canvas, toRect(listArea), mfRoots_,
+                                          mfSelectedRow_, (float)mfScrollY_, (float)kPanelRowH,
+                                          mfHoverRow_, widgets::kTextFree, matrixListStyle());
     if (mfRoots_.empty()) {
         Rect a = toRect(listArea);
         canvas.textStyled("No music folders added yet.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,
@@ -2411,7 +2462,7 @@ void PlayerWindow::onAudioSettings() {
 void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     LayoutRect content = panels::drawHeader(canvas, area, "Audio Output Settings", uiScale_, textSizes_.header, asCloseRc_);
     Rect c = toRect(content);
-    float pad = 20.0f * uiScale_;
+    float pad = SP_LG * uiScale_;
     float y = c.y + pad;
 
     canvas.textStyled("Output backend:", c.x + pad, y, textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Roman);
@@ -2421,16 +2472,11 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     asBackendRowRects_.assign(asBackendOptions_.size(), LayoutRect{});
     for (int i = 0; i < (int)asBackendOptions_.size(); i++) {
         LayoutRect rc = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + rowH) };
-        asBackendRowRects_[i] = rc;
         bool sel = (i == asBackendSelIdx_);
-        if (i == asHoverBackendRow_) {
-            Rect r = toRect(rc);
-            canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), 6.0f);
-        }
-        std::string bullet = sel ? "( * )  " : "(   )  ";
-        canvas.textStyled(bullet + backendDisplayName(asBackendOptions_[i]),
-                          c.x + pad + 8.0f * uiScale_, y + rowH * 0.5f - textSizes_.nav * 0.5f,
-                          textSizes_.nav, toColor(sel ? CLR_ACCENT : CLR_TEXT_PRIMARY), FontStyle::Roman);
+        Rect hit = widgets::drawRadioRow(canvas, toRect(rc), sel, (i == asHoverBackendRow_),
+                                         backendDisplayName(asBackendOptions_[i]),
+                                         widgets::kTextFree, matrixRadioStyle());
+        asBackendRowRects_[i] = toLayoutRect(hit);
         y += rowH;
     }
     y += 12.0f * uiScale_;
@@ -2444,8 +2490,9 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
         std::vector<std::string> labels;
         for (auto& d : asUsbDevices_) labels.push_back(d.name);
-        panels::drawRowList(canvas, asDeviceListArea_, labels, kPanelRowH, 0, asHoverDeviceRow_, asUsbSel_,
-                            textSizes_.nav, uiScale_);
+        asDeviceListRows_ = widgets::drawScrollList(canvas, toRect(asDeviceListArea_), labels,
+                                                    asUsbSel_, 0.0f, (float)kPanelRowH,
+                                                    asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
         if (labels.empty()) {
             Rect a = toRect(asDeviceListArea_);
             canvas.textStyled("No USB audio devices found.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,
@@ -2461,8 +2508,9 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         std::vector<std::string> labels;
         labels.push_back("(Default device)");
         for (auto& d : asWasapiDevices_) labels.push_back(wideToUtf8(d.name));
-        panels::drawRowList(canvas, asDeviceListArea_, labels, kPanelRowH, 0, asHoverDeviceRow_, asWasapiSel_,
-                            textSizes_.nav, uiScale_);
+        asDeviceListRows_ = widgets::drawScrollList(canvas, toRect(asDeviceListArea_), labels,
+                                                    asWasapiSel_, 0.0f, (float)kPanelRowH,
+                                                    asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
         y += listH + 12.0f * uiScale_;
 
         canvas.textStyled("Mode:", c.x + pad, y, textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Roman);
@@ -2472,16 +2520,10 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
             "Exclusive \xE2\x80\x94 lower latency, blocks other apps" };
         for (int i = 0; i < 2; i++) {
             LayoutRect rc = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + rowH) };
-            asModeRows_[i] = rc;
             bool s2 = (asExclusive_ == (i == 1));
-            if (i == asHoverModeRow_) {
-                Rect r = toRect(rc);
-                canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), 6.0f);
-            }
-            std::string bullet = s2 ? "( * )  " : "(   )  ";
-            canvas.textStyled(bullet + std::string(kModeLabels[i]), c.x + pad + 8.0f * uiScale_,
-                              y + rowH * 0.5f - textSizes_.nav * 0.5f,
-                              textSizes_.nav, toColor(s2 ? CLR_ACCENT : CLR_TEXT_PRIMARY), FontStyle::Roman);
+            Rect hit = widgets::drawRadioRow(canvas, toRect(rc), s2, (i == asHoverModeRow_),
+                                             kModeLabels[i], widgets::kTextFree, matrixRadioStyle());
+            asModeRows_[i] = toLayoutRect(hit);
             y += rowH;
         }
         y += 12.0f * uiScale_;
@@ -2495,8 +2537,9 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         std::vector<std::string> labels;
         labels.push_back("(System default)");
         for (auto& d : asAlsaDevices_) labels.push_back(d.name);
-        panels::drawRowList(canvas, asDeviceListArea_, labels, kPanelRowH, 0, asHoverDeviceRow_, asAlsaSel_,
-                            textSizes_.nav, uiScale_);
+        asDeviceListRows_ = widgets::drawScrollList(canvas, toRect(asDeviceListArea_), labels,
+                                                    asAlsaSel_, 0.0f, (float)kPanelRowH,
+                                                    asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
         y += listH + 12.0f * uiScale_;
     }
 #endif
@@ -2508,8 +2551,9 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         std::vector<std::string> labels;
         labels.push_back("(Auto-connect to first available ports)");
         for (auto& p : asJackPorts_) labels.push_back(p.portName);
-        panels::drawRowList(canvas, asDeviceListArea_, labels, kPanelRowH, 0, asHoverDeviceRow_, asJackSel_,
-                            textSizes_.nav, uiScale_);
+        asDeviceListRows_ = widgets::drawScrollList(canvas, toRect(asDeviceListArea_), labels,
+                                                    asJackSel_, 0.0f, (float)kPanelRowH,
+                                                    asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
         if (asJackPorts_.empty()) {
             Rect a = toRect(asDeviceListArea_);
             canvas.textStyled("No running JACK server found (or no physical playback ports).",
@@ -2624,7 +2668,7 @@ void PlayerWindow::eqRefilter() {
 void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     LayoutRect content = panels::drawHeader(canvas, area, "EQ / AutoEQ Profiles", uiScale_, textSizes_.header, eqCloseRc_);
     Rect c = toRect(content);
-    float pad = 20.0f * uiScale_;
+    float pad = SP_LG * uiScale_;
     float y = c.y + pad;
 
     canvas.textStyled("Device: " + eqDeviceKey_, c.x + pad, y, textSizes_.secondary, toColor(CLR_TEXT_DIM), FontStyle::Roman);
@@ -2644,16 +2688,8 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     }
 
     eqSearchRc_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + 34.0f * uiScale_) };
-    {
-        Rect s = toRect(eqSearchRc_);
-        canvas.rect(s.x, s.y, s.w, s.h, toColor(RGB(24, 24, 24)), 6.0f);
-        canvas.rect(s.x, s.y, s.w, 1.0f, toColor(eqSearchFocused_ ? CLR_ACCENT : CLR_SEPARATOR));
-        std::string shown = (eqSearch_.empty() && !eqSearchFocused_) ? "Search profiles" : eqSearch_;
-        if (eqSearchFocused_) shown += "|";
-        ColorRef clr = (eqSearch_.empty() && !eqSearchFocused_) ? CLR_TEXT_DIM : CLR_TEXT_PRIMARY;
-        canvas.textStyled(shown, s.x + 10.0f * uiScale_, s.y + s.h * 0.5f - textSizes_.nav * 0.5f,
-                          textSizes_.nav, toColor(clr), FontStyle::Roman);
-    }
+    drawSearchField(canvas, eqSearchRc_, eqSearch_, eqSearchFocused_, "Search profiles",
+                    textSizes_.nav);
     y += 34.0f * uiScale_ + 10.0f * uiScale_;
 
     float btnH = 36.0f * uiScale_;
@@ -2668,8 +2704,9 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
         if (!all[idx].form.empty()) label += "  (" + all[idx].form + ")";
         labels.push_back(label);
     }
-    panels::drawRowList(canvas, listArea, labels, kPanelRowH, eqScrollY_, eqHoverRow_, eqSelectedRow_,
-                        textSizes_.nav, uiScale_);
+    eqListRows_ = widgets::drawScrollList(canvas, toRect(listArea), labels,
+                                          eqSelectedRow_, (float)eqScrollY_, (float)kPanelRowH,
+                                          eqHoverRow_, widgets::kTextFree, matrixListStyle());
     if (labels.empty()) {
         Rect a = toRect(listArea);
         canvas.textStyled("No profiles match.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,
@@ -2735,7 +2772,7 @@ void PlayerWindow::onAddFolder() {
 void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
     LayoutRect content = panels::drawHeader(canvas, area, "Select Music Folder", uiScale_, textSizes_.header, fpCloseRc_);
     Rect c = toRect(content);
-    float pad = 20.0f * uiScale_;
+    float pad = SP_LG * uiScale_;
 
     canvas.textStyled(truncateToWidth(canvas, fpCurrentDir_, c.w - 2.0f * pad, textSizes_.secondary, FontStyle::Roman),
                       c.x + pad, c.y + pad, textSizes_.secondary, toColor(CLR_TEXT_DIM), FontStyle::Roman);
@@ -2751,8 +2788,9 @@ void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
     if (fpHasParent_) labels.push_back(".. (parent folder)");
     labels.insert(labels.end(), fpEntries_.begin(), fpEntries_.end());
 
-    panels::drawRowList(canvas, listArea, labels, kPanelRowH, fpScrollY_, fpHoverRow_, -1,
-                        textSizes_.nav, uiScale_);
+    fpListRows_ = widgets::drawScrollList(canvas, toRect(listArea), labels,
+                                          -1, (float)fpScrollY_, (float)kPanelRowH,
+                                          fpHoverRow_, widgets::kTextFree, matrixListStyle());
     if (labels.empty()) {
         Rect a = toRect(listArea);
         canvas.textStyled("No subfolders here.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,

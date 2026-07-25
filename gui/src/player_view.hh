@@ -33,6 +33,7 @@
 #include "keys.hh"
 #include "renderer.hh"
 #include "canvas.hh"
+#include "widgets.hh"
 #include "texture.hh"
 #include "font.hh"
 #include "msdf.hh"
@@ -307,6 +308,7 @@ private:
     bool mfChanged_     = false;
     LayoutRect mfListArea_ = {}, mfCloseRc_ = {}, mfBtnRemove_ = {}, mfBtnDone_ = {};
     bool mfHoverClose_ = false, mfHoverRemove_ = false, mfHoverDone_ = false;
+    std::vector<widgets::ListRow> mfListRows_;  // cached during draw, read by hit-test
 
     // Audio Settings. asBackendOptions_ lists whichever backends this build
     // actually has (USB always; WASAPI on Windows; ALSA/JACK on Linux, each
@@ -320,6 +322,7 @@ private:
     int  asUsbSel_      = -1;
     int  asHoverDeviceRow_ = -1;
     LayoutRect asDeviceListArea_ = {};
+    std::vector<widgets::ListRow> asDeviceListRows_;  // cached during draw, read by hit-test
 #ifdef _WIN32
     std::vector<WasapiDeviceInfo> asWasapiDevices_;  // index 0 shown as "(Default device)"
     int  asWasapiSel_   = 0;
@@ -350,6 +353,7 @@ private:
     bool eqBitperfectActive_ = false;
     LayoutRect eqSearchRc_ = {}, eqListArea_ = {}, eqCloseRc_ = {}, eqBtnAssign_ = {}, eqBtnClear_ = {};
     bool eqHoverClose_ = false, eqHoverAssign_ = false, eqHoverClear_ = false;
+    std::vector<widgets::ListRow> eqListRows_;  // cached during draw, read by hit-test
 
     // Folder picker (also reached via "Add Music Folder")
     std::string fpCurrentDir_;
@@ -359,6 +363,7 @@ private:
     int  fpScrollY_    = 0;
     LayoutRect fpListArea_ = {}, fpCloseRc_ = {}, fpBtnSelect_ = {}, fpBtnCancel_ = {};
     bool fpHoverClose_ = false, fpHoverSelect_ = false, fpHoverCancel_ = false;
+    std::vector<widgets::ListRow> fpListRows_;  // cached during draw, read by hit-test
 
     // Grid state. gridTileSize_/gridArtSize_ are recomputed every recalcLayout()
     // from a fixed target column count and the available width (see

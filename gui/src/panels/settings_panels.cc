@@ -1,7 +1,10 @@
 #include "settings_panels.hh"
 #include "theme.hh"
 #include "canvas.hh"
+#include "widgets.hh"
 #include "msdf.hh"
+
+#include <algorithm>
 
 namespace {
 Rect toRect(const LayoutRect& r) {
@@ -10,61 +13,35 @@ Rect toRect(const LayoutRect& r) {
 Color toColor(ColorRef c, float a = 1.0f) {
     return { GetRValue(c) / 255.0f, GetGValue(c) / 255.0f, GetBValue(c) / 255.0f, a };
 }
+// A theme color lifted toward white by `amt` (0-255 per channel) — used to
+// synthesize hover/elevated button fills from the base palette.
+Color lift(ColorRef c, int amt) {
+    auto cl = [](int v) { return std::clamp(v, 0, 255); };
+    return { cl(GetRValue(c) + amt) / 255.0f,
+             cl(GetGValue(c) + amt) / 255.0f,
+             cl(GetBValue(c) + amt) / 255.0f, 1.0f };
+}
 } // namespace
 
 namespace panels {
 
-LayoutRect rowRect(const LayoutRect& area, int index, int rowH, int scrollY) {
-    int top = area.top + index * rowH - scrollY;
-    return { area.left, top, area.right, top + rowH };
-}
-
-int hitTestRows(const LayoutRect& area, int rowH, int scrollY, int rowCount, int x, int y) {
-    if (x < area.left || x >= area.right || y < area.top || y >= area.bottom) return -1;
-    int rel = y - area.top + scrollY;
-    if (rel < 0) return -1;
-    int row = rel / rowH;
-    if (row < 0 || row >= rowCount) return -1;
-    return row;
-}
-
-void drawRowList(Canvas& canvas, const LayoutRect& area,
-                  const std::vector<std::string>& labels,
-                  int rowH, int scrollY, int hoverIdx, int selectedIdx,
-                  float textSize, float uiScale) {
-    canvas.setClip(area.left, area.top, area.right - area.left, area.bottom - area.top);
-    float pad = 14.0f * uiScale;
-    for (int i = 0; i < (int)labels.size(); ++i) {
-        LayoutRect rc = rowRect(area, i, rowH, scrollY);
-        if (rc.bottom < area.top || rc.top > area.bottom) continue;
-        Rect r = toRect(rc);
-        if (i == hoverIdx)
-            canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER));
-        bool sel = (i == selectedIdx);
-        ColorRef borderClr = sel ? CLR_ACCENT : CLR_SEPARATOR;
-        float borderThick = sel ? 2.0f : 1.0f;
-        canvas.rect(r.x, r.y + r.h - borderThick, r.w, borderThick, toColor(borderClr));
-        ColorRef textClr = sel ? CLR_ACCENT : CLR_TEXT_PRIMARY;
-        canvas.textStyled(labels[i], r.x + pad, r.y + r.h * 0.5f - textSize * 0.5f,
-                          textSize, toColor(textClr), FontStyle::Roman);
-    }
-    canvas.clearClip();
-}
-
 void drawButton(Canvas& canvas, const LayoutRect& rc, const std::string& label,
                  bool hover, float textSize, bool primary) {
+    (void)textSize;   // drawFitButton sizes the label to the button proportionally
     Rect r = toRect(rc);
-    ColorRef borderClr = primary ? CLR_ACCENT : CLR_SEPARATOR;
-    if (hover)
-        canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), 6.0f);
-    canvas.rect(r.x, r.y, r.w, 1.0f, toColor(borderClr));
-    canvas.rect(r.x, r.y + r.h - 1.0f, r.w, 1.0f, toColor(borderClr));
-    canvas.rect(r.x, r.y, 1.0f, r.h, toColor(borderClr));
-    canvas.rect(r.x + r.w - 1.0f, r.y, 1.0f, r.h, toColor(borderClr));
-    ColorRef textClr = primary ? CLR_ACCENT : CLR_TEXT_PRIMARY;
-    float w = canvas.textWidthStyled(label, textSize, FontStyle::Roman);
-    canvas.textStyled(label, r.x + (r.w - w) * 0.5f, r.y + r.h * 0.5f - textSize * 0.5f,
-                      textSize, toColor(textClr), FontStyle::Roman);
+    float radius = UI_CORNER_RADIUS;   // uniform rounding — reads as a real button
+    Color bg, fg;
+    if (primary) {
+        // High-emphasis action: solid accent fill, dark label for contrast.
+        bg = hover ? lift(CLR_ACCENT, 28) : toColor(CLR_ACCENT);
+        fg = toColor(CLR_BG_MAIN);
+    } else {
+        // Secondary action: subtle elevated fill above the page background.
+        bg = lift(CLR_BG_MAIN, hover ? 56 : 34);
+        fg = toColor(CLR_TEXT_PRIMARY);
+    }
+    // Single line: shrink-then-ellipsis rather than wrapping a button label.
+    widgets::drawFitButton(canvas, r, label, bg, fg, radius, widgets::kTextFit, false);
 }
 
 LayoutRect drawHeader(Canvas& canvas, const LayoutRect& area, const std::string& title,

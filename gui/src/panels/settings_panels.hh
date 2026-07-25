@@ -17,24 +17,13 @@ enum class FontStyle : unsigned char;
 
 enum class SettingsPanel { None, ManageFolders, AudioSettings, EqSettings, FolderPicker };
 
+// The scrollable/selectable text row list these panels used to draw with a
+// local panels::drawRowList (+ rowRect/hitTestRows) now comes from the
+// framework: widgets::drawScrollList (framework/vk_canvas/core/widgets.hh),
+// styled per-app via PlayerWindow::matrixListStyle(). Its returned ListRow
+// rects are cached and hit-tested by PlayerWindow::hitTestListRows().
+
 namespace panels {
-
-// One row's screen rect within a scrollable list area, given the list's
-// current scroll offset — the same "compute during draw, hit-test reads it
-// back" split PlayerWindow's trackPanelHitTest() already uses.
-LayoutRect rowRect(const LayoutRect& area, int index, int rowH, int scrollY);
-
-// Row index at (x,y), or -1 if outside the area or past the last row.
-// rowCount bounds the result so a click below the last real row misses.
-int hitTestRows(const LayoutRect& area, int rowH, int scrollY, int rowCount, int x, int y);
-
-// Draws a vertically-scrolled list of single-line text rows: hover highlight,
-// top/bottom separators, optional accent border + text color on the selected
-// row. Clips to `area` so rows scrolled partway out don't bleed past it.
-void drawRowList(Canvas& canvas, const LayoutRect& area,
-                  const std::vector<std::string>& labels,
-                  int rowH, int scrollY, int hoverIdx, int selectedIdx,
-                  float textSize, float uiScale);
 
 // A small rectangular action button (Done/Cancel/Remove/Assign/Select),
 // right-aligned text inside a border, matching the settings-page row style.

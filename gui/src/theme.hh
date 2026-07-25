@@ -18,8 +18,27 @@ static constexpr ColorRef CLR_TEXT_DIM        = RGB(140, 140, 140);
 static constexpr ColorRef CLR_ACCENT          = RGB(0, 200, 83);
 static constexpr ColorRef CLR_HOVER           = RGB(38, 38, 38);
 static constexpr ColorRef CLR_SEPARATOR       = RGB(36, 36, 36);
-static constexpr ColorRef CLR_SEEKBAR_TRACK   = RGB(55, 55, 55);
-static constexpr ColorRef CLR_SEEKBAR_FILL    = RGB(0, 200, 83);
+static constexpr ColorRef CLR_INPUT_BG        = RGB(24, 24, 24);   // search / text-field fill
 static constexpr ColorRef CLR_TILE_PLACEHOLDER = RGB(28, 28, 28);
 static constexpr ColorRef CLR_TEXT_ALBUM_TITLE = RGB(255, 255, 255);
-static constexpr ColorRef CLR_ERROR           = RGB(220, 70, 70);
+static constexpr ColorRef CLR_ERROR           = RGB(220, 70, 70);  // reserved (error UI)
+
+// ── Shape ───────────────────────────────────────────────────────────────────
+// Uniform corner radius for interactive chrome (buttons, hover/selection
+// pills, search fields). Matches the main UI's de-facto 8px rounding so every
+// surface shares one rounding language instead of a grab-bag of radii. The
+// only larger radii in the app are the decorative multi-layer tile glows.
+static constexpr float UI_CORNER_RADIUS = 8.0f;
+
+// ── Spacing scale ────────────────────────────────────────────────────────────
+// Base pixel rhythm for pads/gaps/margins; callers multiply by uiScale_ (the
+// one proportion factor, = textSizes_.nav / 13). Prefer these over ad-hoc
+// literals so the layout keeps a consistent step. See docs/UI_DESIGN_SYSTEM.md.
+static constexpr float SP_XS = 4.0f;
+static constexpr float SP_SM = 8.0f;
+static constexpr float SP_MD = 12.0f;
+static constexpr float SP_LG = 20.0f;
+static constexpr float SP_XL = 40.0f;
+
+// Selection tint alpha for the accent-on-state pill (lists, nav, playing row).
+static constexpr float UI_SELECT_TINT_ALPHA = 0.16f;

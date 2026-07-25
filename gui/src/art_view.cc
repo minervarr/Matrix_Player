@@ -2,12 +2,18 @@
 #ifdef _WIN32
 #include "art_texture.hh"
 #include "ui_min_text_size.gen.h"
+#include "theme.hh"
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <algorithm>
 
 static const wchar_t* ART_CLASS = L"MatrixArtWindow";
+
+// Draw from the app palette (theme.hh), not the framework's bluer col:: default.
+static Color toColor(ColorRef c) {
+    return { GetRValue(c) / 255.0f, GetGValue(c) / 255.0f, GetBValue(c) / 255.0f, 1.0f };
+}
 
 bool ArtWindow::create() {
     HINSTANCE hInst = GetModuleHandleW(nullptr);
@@ -166,14 +172,14 @@ void ArtWindow::drawFrame() {
         float dstW = artTexW_ * scale, dstH = artTexH_ * scale;
         canvas.image(artTex_, (canvas.w() - dstW) * 0.5f, (canvas.h() - dstH) * 0.5f, dstW, dstH);
     } else {
-        canvas.clear(col::bg);
+        canvas.clear(toColor(CLR_BG_MAIN));
         // Floored at the geometric minimum (ui_min_text_size.gen.h) like every
         // other text size in the app — see player_window.h for the full
         // window-relative system this fullscreen fallback text doesn't need
         // (this window is either fullscreen art or this one rarely-shown
         // placeholder string, not a dense UI needing per-role scaling).
         canvas.textCentered("No artwork", canvas.w() * 0.5f, canvas.h() * 0.5f,
-                            std::max(18.0f, kMinReadableTextSizePx), col::dim);
+                            std::max(18.0f, kMinReadableTextSizePx), toColor(CLR_TEXT_DIM));
     }
     renderer_->draw(frameCurves_, /*overlay_rotation_deg=*/0, frameImages_, {}, msdfQuads_,
                     frameShapes_);
