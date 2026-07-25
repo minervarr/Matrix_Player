@@ -156,6 +156,7 @@ static widgets::ScrollListStyle matrixListStyle() {
     s.pillText    = toColor(CLR_ACCENT);          // green text on the selected row
     s.selectedBar = toColor(CLR_ACCENT);          // thin green left bar
     s.radius      = UI_CORNER_RADIUS;
+    s.fitWidth    = true;                          // hug each row's text (matches radio rows)
     return s;
 }
 
@@ -1006,22 +1007,19 @@ void PlayerWindow::drawFrame() {
         for (auto& item : items) {
             Rect r = toRect(item.rc);
             bool isActiveModeRow = (item.idx == 4 && bp);
-            if (isActiveModeRow) {
-                // Active toggle state: accent-tint pill + left bar (one family).
-                float vin = r.h * 0.14f, ph = r.h - vin * 2.0f;
-                canvas.rect(r.x, r.y + vin, r.w, ph,
-                            toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
-                canvas.rect(r.x, r.y + vin + UI_CORNER_RADIUS * 0.5f, 3.0f,
-                            ph - UI_CORNER_RADIUS, toColor(CLR_ACCENT), 1.5f);
-            } else {
-                if (hoverSettingsItem_ == item.idx)
-                    canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
-                // Thin neutral separators keep the list divided.
-                canvas.rect(r.x, r.y, r.w, 1.0f, toColor(CLR_SEPARATOR));
-                canvas.rect(r.x, r.y + r.h - 1.0f, r.w, 1.0f, toColor(CLR_SEPARATOR));
-            }
-            ColorRef textClr = (item.idx == 3 && bp) ? CLR_TEXT_DIM : CLR_TEXT_PRIMARY;
-            if (isActiveModeRow) textClr = CLR_ACCENT;
+            // Hover fills the box (below the border so the outline stays crisp).
+            if (hoverSettingsItem_ == item.idx && !isActiveModeRow)
+                canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+            // Outlined box: a full 4-side rectangle border per row. The active
+            // bitperfect toggle gets a 2px accent border; the rest a 1px hairline.
+            ColorRef border = isActiveModeRow ? CLR_ACCENT : CLR_SEPARATOR;
+            float bt = isActiveModeRow ? 2.0f : 1.0f;
+            canvas.rect(r.x, r.y, r.w, bt, toColor(border));
+            canvas.rect(r.x, r.y + r.h - bt, r.w, bt, toColor(border));
+            canvas.rect(r.x, r.y, bt, r.h, toColor(border));
+            canvas.rect(r.x + r.w - bt, r.y, bt, r.h, toColor(border));
+            ColorRef textClr = (item.idx == 3 && bp) ? CLR_TEXT_DIM
+                             : isActiveModeRow ? CLR_ACCENT : CLR_TEXT_PRIMARY;
             centeredIn(item.label, r, textSizes_.nav, textClr, FontStyle::Roman);
         }
     }

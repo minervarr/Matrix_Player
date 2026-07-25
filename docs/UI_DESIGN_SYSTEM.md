@@ -22,9 +22,12 @@ the look, update both the code and this doc.
 2. **Dark, serif-typographic, single-accent.** A near-black stack of surfaces,
    Latin Modern (a serif) for all text, and exactly one accent — a vivid green
    (`CLR_ACCENT` `rgb(0,200,83)`).
-3. **Square content, softly-rounded chrome.** Album artwork and structural
-   surfaces (panels, separators) are square. Interactive chrome (buttons,
-   hover/selection pills, search fields) is rounded at a single radius.
+3. **Square throughout.** Artwork, structural surfaces, and interactive chrome
+   (buttons, hover/selection highlights, search fields) all use square corners
+   (`UI_CORNER_RADIUS = 0`). The only rounded shapes are the circular radio dot
+   and the decorative tile glows. Selection/hover highlights fill the full row
+   height (matching the action-button height) and, in lists/radios, hug their
+   text.
 4. **Accent = state, hover = neutral.** Green *only* signals state — focus,
    selected, active, playing. Merely hovering something is always a **neutral
    grey** treatment, never green. This is the rule that keeps the accent
@@ -150,13 +153,15 @@ density.
 
 ## 5. Shape & radius
 
-- **One interactive radius:** `UI_CORNER_RADIUS = 8px` for every button, hover
-  pill, selection pill, and search field.
-- **Decorative glow radii (10/12px)** exist only in the multi-layer now-playing
-  tile glow (§8.2) — concentric layers need increasing radii; not a general
-  radius.
+- **One radius token:** `UI_CORNER_RADIUS = 0` — the whole app is square
+  (buttons, hover/selection highlights, search fields, grid hover frame). This
+  single token enforces it; nudge it up if a softer look is ever wanted.
+- **Exceptions (own radii):** the circular radio dot (`dot.w*0.5`) and the
+  decorative multi-layer now-playing tile glow (10/12px, §8.2).
 - **Icons** use their own 36-unit design grid (§7).
-- Structure (panel/header backgrounds, separators, album art) is **square**.
+- **Highlights** fill the full row height (match the action-button height); in
+  lists and radio groups they hug the row's text rather than spanning full
+  width.
 
 ---
 
@@ -196,14 +201,16 @@ transport bar and Essential mode. There are no other icons.
 
 The universal state rules (apply everywhere):
 
-- **Hover** → neutral grey (`CLR_HOVER`) rounded pill/frame at `UI_CORNER_RADIUS`.
-- **Selected / active / playing (lists & rows)** → accent-tint pill
+- **Hover** → neutral grey (`CLR_HOVER`) square, full-height highlight.
+- **Selected / active / playing (lists & rows)** → accent-tint fill
   (`CLR_ACCENT @ UI_SELECT_TINT_ALPHA`) + a thin accent **left bar** + accent
-  text. One family across sidebar nav, settings rows/radios, the settings-page
-  active toggle, and the album-view playing row.
+  text, square and full-height, hugging the row's text. One family across
+  sidebar nav, settings lists/radios, and the album-view playing row.
 - **Content emphasis (album art)** → accent **ring** (selected) or multi-layer
-  **glow** (now-playing); artwork can't carry a pill+bar, so this is the
+  **glow** (now-playing); artwork can't carry a fill+bar, so this is the
   documented content variant.
+- **Settings-menu rows** (Add Music Folder, etc.) → an **outlined box** (4-side
+  border); hover fills the box, the active toggle gets a 2px accent border.
 - **Empty states** → italic `CLR_TEXT_DIM` sentence.
 
 ### 8.1 Sidebar / nav
@@ -269,8 +276,8 @@ not a gap. If motion is ever added, it belongs behind the framework's
 
 1. **Hover is neutral, accent is state.** Never use `CLR_ACCENT` for a plain
    hover. Never leave a selected/active row with no accent.
-2. **One interactive radius.** New rounded chrome uses `UI_CORNER_RADIUS`. Only
-   the tile glow may use 10/12.
+2. **One radius token.** All chrome uses `UI_CORNER_RADIUS` (currently 0 —
+   square). Only the radio dot and the tile glow define their own radii.
 3. **One selection family for rows.** Reuse the accent-tint pill + left bar +
    accent text (see `matrixListStyle()` / `matrixRadioStyle()`); don't invent a
    new selected look.

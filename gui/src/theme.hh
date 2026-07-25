@@ -25,10 +25,11 @@ static constexpr ColorRef CLR_ERROR           = RGB(220, 70, 70);  // reserved (
 
 // ── Shape ───────────────────────────────────────────────────────────────────
 // Uniform corner radius for interactive chrome (buttons, hover/selection
-// pills, search fields). Matches the main UI's de-facto 8px rounding so every
-// surface shares one rounding language instead of a grab-bag of radii. The
-// only larger radii in the app are the decorative multi-layer tile glows.
-static constexpr float UI_CORNER_RADIUS = 8.0f;
+// pills, search fields). The app uses a fully-square look — this is the single
+// knob that enforces it everywhere. The only rounded shapes left are the
+// circular radio dot and the decorative multi-layer tile glows (both drawn with
+// their own radii, independent of this token).
+static constexpr float UI_CORNER_RADIUS = 0.0f;
 
 // ── Spacing scale ────────────────────────────────────────────────────────────
 // Base pixel rhythm for pads/gaps/margins; callers multiply by uiScale_ (the
