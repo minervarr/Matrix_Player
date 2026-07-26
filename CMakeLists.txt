@@ -15,6 +15,41 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif()
 
+# Optional x86-64 psABI microarchitecture level (v2/v3/v4, or "native").
+# Empty (default) leaves the compiler's generic x86-64 baseline untouched —
+# a binary compiled for v4 (AVX-512 etc.) SIGILLs on any CPU that lacks it,
+# and GCC/Clang only recognize -march=x86-64-v2/v3/v4 from GCC 11 / Clang 12
+# onward, so hardcoding this would break compiling *and* running on another
+# machine or an older toolchain. Opt in explicitly per build:
+#   cmake -B build/linux -DMATRIX_ARCH_LEVEL=v4 ...
+# Appended to CMAKE_CXX_FLAGS/CMAKE_C_FLAGS (not add_compile_options) so the
+# ExternalProject_Add sub-builds below (libjpeg-turbo, min_text_size), which
+# forward those same variables into their own separate `cmake` invocations,
+# pick it up too — an add_compile_options() directory property would not
+# cross that boundary.
+set(MATRIX_ARCH_LEVEL "" CACHE STRING "x86-64 target to compile for: v2/v3/v4 (psABI level), native, or a specific -march name (e.g. znver4). Empty = compiler default (portable).")
+if(MATRIX_ARCH_LEVEL AND NOT MSVC)
+    if(MATRIX_ARCH_LEVEL MATCHES "^v[234]$" OR MATRIX_ARCH_LEVEL STREQUAL "v1")
+        set(MATRIX_ARCH_FLAG "-march=x86-64-${MATRIX_ARCH_LEVEL}")
+    else()
+        # "native", or any other -march value GCC/Clang recognizes directly
+        # (znver1..znver4 for AMD Zen-tuned builds, etc.)
+        set(MATRIX_ARCH_FLAG "-march=${MATRIX_ARCH_LEVEL}")
+    endif()
+    include(CheckCXXCompilerFlag)
+    check_cxx_compiler_flag("${MATRIX_ARCH_FLAG}" MATRIX_ARCH_FLAG_SUPPORTED)
+    if(NOT MATRIX_ARCH_FLAG_SUPPORTED)
+        message(FATAL_ERROR "Compiler does not support ${MATRIX_ARCH_FLAG} "
+                             "(x86-64-v2/v3/v4 need GCC 11+ or Clang 12+). "
+                             "Leave MATRIX_ARCH_LEVEL unset to build portably.")
+    endif()
+    string(APPEND CMAKE_CXX_FLAGS " ${MATRIX_ARCH_FLAG}")
+    string(APPEND CMAKE_C_FLAGS " ${MATRIX_ARCH_FLAG}")
+elseif(MATRIX_ARCH_LEVEL AND MSVC)
+    message(WARNING "MATRIX_ARCH_LEVEL is a GCC/Clang psABI flag and has no "
+                     "MSVC equivalent for v4 (MSVC tops out at /arch:AVX2) — ignored.")
+endif()
+
 # Standalone dev tool, not part of the shipped player — off by default so a
 # normal build never compiles or links it. Turn on with
 # `cmake -B build -DMATRIX_BUILD_AB_TEST=ON`. Windows-only (uses <windows.h>

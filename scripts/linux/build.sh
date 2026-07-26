@@ -4,11 +4,22 @@
 # (NOT pipewire-jack), wayland-client/wayland-cursor/xkbcommon dev headers,
 # a Vulkan loader + headers, and the Slang shader compiler (slangc).
 #
-# Usage: scripts/linux/build.sh [--debug|--release] [--clean] [cmake args...]
-# Default is --release. Matches scripts/windows/build.ps1's -Debug/-Release
-# split: Ninja is a single-config generator, so flipping CMAKE_BUILD_TYPE in
-# the same directory forces a near-total recompile — separate directories
-# keep switching back and forth fast.
+# Usage: scripts/linux/build.sh [--debug|--release|--share] [--clean] [cmake args...]
+# Passing a mode flag explicitly (scripts, CI) always skips straight to the
+# build — same for non-interactive stdin (defaults to Release, Universal).
+#
+# Run with no mode flag on an interactive terminal and two prompts run in
+# sequence — microarchitecture target, then build type — since they're
+# orthogonal (e.g. Native+Debug is a legitimate combination, not just
+# Universal+Release):
+#   Scene 1 — microarch target:
+#     1) Universal (default) -- portable generic x86-64 baseline
+#     2) Native               -- tuned to this exact CPU (-march=native)
+#     3) Custom                -- enter any -march value (v2/v3/v4/znver4/...)
+#     4) All                   -- build universal/v3/v4/zen4 in one pass
+#   Scene 2 — build type:
+#     1) Release (default)
+#     2) Debug
 #
 # Release: only matrix_player — audio_engine's smoke-test tool executables
 #   (list_usb_devices, capture_alsa_to_wav, etc.) and the Windows-only
@@ -16,34 +27,72 @@
 #   one binary that ships.
 # Debug: everything — smoke-test tools included, LTO off, debug info on, no
 #   optimization — for actually stepping through any of it.
+# All (formerly --share): builds four binaries — Universal plus the v3/v4
+#   x86-64 microarch levels plus a Zen4-tuned build (see MATRIX_ARCH_LEVEL in
+#   the root CMakeLists.txt) — so you can hand out whichever one matches the
+#   recipient's CPU instead of one lowest-common-denominator binary. Each
+#   variant gets its own build dir under build/linux_share/ (same
+#   one-config-per-directory reasoning as Debug/Release above). Release
+#   variants are packaged as tarballs under dist/linux/; Debug variants
+#   (an "All" + Debug combo picked interactively) are left unpackaged in
+#   build/linux_share_debug/ — Debug output, with symbols and smoke-test
+#   tools baked in, isn't the kind of thing you hand someone.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 BUILD_TYPE=Release
-BUILD_DIR=build/linux
+SHARE=0
 CLEAN=0
+MODE_SET=0
+ARCH_LEVEL=""
+ARCH_SUFFIX=""
 CMAKE_ARGS=()
 
 for arg in "$@"; do
     case "$arg" in
-        --debug)   BUILD_TYPE=Debug; BUILD_DIR=build/linux_debug ;;
-        --release) BUILD_TYPE=Release; BUILD_DIR=build/linux ;;
+        --debug)   BUILD_TYPE=Debug; MODE_SET=1 ;;
+        --release) BUILD_TYPE=Release; MODE_SET=1 ;;
+        --share)   SHARE=1; MODE_SET=1 ;;
         --clean)   CLEAN=1 ;;
         *)         CMAKE_ARGS+=("$arg") ;;
     esac
 done
 
-if [[ "$CLEAN" -eq 1 && -d "$BUILD_DIR" ]]; then
-    echo "Cleaning $BUILD_DIR..."
-    rm -rf "$BUILD_DIR"
-fi
+# No mode flag given: ask, if there's actually someone at the keyboard to
+# answer (stdin a tty) — a non-interactive caller (CI, a pipe) falls through
+# to the Release/Universal default above instead of hanging on `read`.
+if [[ "$MODE_SET" -eq 0 && -t 0 ]]; then
+    echo "Select microarchitecture target:"
+    echo "  1) Universal (default) -- portable generic x86-64 baseline"
+    echo "  2) Native -- tuned to this exact CPU (-march=native)"
+    echo "  3) Custom -- enter a specific -march value (v2/v3/v4/znver4/...)"
+    echo "  4) All -- build universal/v3/v4/zen4 in one pass"
+    read -r -p "Enter choice [1-4, default 1]: " arch_choice
+    case "$arch_choice" in
+        ""|1) ;;
+        2) ARCH_LEVEL="native"; ARCH_SUFFIX="_native" ;;
+        3)
+            read -r -p "Enter -march value (e.g. v3, v4, znver4): " custom_level
+            if [[ -z "$custom_level" ]]; then
+                echo "error: no value entered" >&2
+                exit 2
+            fi
+            ARCH_LEVEL="$custom_level"
+            ARCH_SUFFIX="_custom-${custom_level}"
+            ;;
+        4) SHARE=1 ;;
+        *) echo "error: invalid choice '$arch_choice'" >&2; exit 2 ;;
+    esac
 
-if [[ "$BUILD_TYPE" == "Debug" ]]; then
-    TOOLS_ARG=ON
-    AB_TEST_ARG=ON
-else
-    TOOLS_ARG=OFF
-    AB_TEST_ARG=OFF
+    echo "Select build type:"
+    echo "  1) Release (default)"
+    echo "  2) Debug"
+    read -r -p "Enter choice [1-2, default 1]: " type_choice
+    case "$type_choice" in
+        ""|1) BUILD_TYPE=Release ;;
+        2)     BUILD_TYPE=Debug ;;
+        *)     echo "error: invalid choice '$type_choice'" >&2; exit 2 ;;
+    esac
 fi
 
 # vk_canvas resolves slangc from $VULKAN_SDK/bin/slangc, falling back to a
@@ -58,12 +107,106 @@ if [[ "${CMAKE_ARGS[*]:-}" != *"VCE_SLANGC"* && -z "${VULKAN_SDK:-}" ]]; then
     fi
 fi
 
-echo "Configuring CMake (Ninja, $BUILD_TYPE) -> $BUILD_DIR..."
+if [[ "$SHARE" -eq 1 ]]; then
+    # variant name -> MATRIX_ARCH_LEVEL value ("" = compiler default baseline)
+    declare -A SHARE_VARIANTS=(
+        [universal]=""
+        [v3]="v3"
+        [v4]="v4"
+        [zen4]="znver4"
+    )
+
+    if [[ "$BUILD_TYPE" == "Debug" ]]; then
+        SHARE_ROOT=build/linux_share_debug
+        TOOLS_ARG=ON
+        AB_TEST_ARG=ON
+    else
+        SHARE_ROOT=build/linux_share
+        TOOLS_ARG=OFF
+        AB_TEST_ARG=OFF
+    fi
+    DIST_DIR=dist/linux
+
+    if [[ "$CLEAN" -eq 1 ]]; then
+        echo "Cleaning $SHARE_ROOT and $DIST_DIR..."
+        rm -rf "$SHARE_ROOT" "$DIST_DIR"
+    fi
+    [[ "$BUILD_TYPE" == "Release" ]] && mkdir -p "$DIST_DIR"
+
+    for variant in "${!SHARE_VARIANTS[@]}"; do
+        level="${SHARE_VARIANTS[$variant]}"
+        variant_dir="$SHARE_ROOT/$variant"
+        arch_arg=()
+        [[ -n "$level" ]] && arch_arg=(-DMATRIX_ARCH_LEVEL="$level")
+
+        echo
+        echo "==> Configuring '$variant' ($BUILD_TYPE) -> $variant_dir..."
+        cmake -S . -B "$variant_dir" -G Ninja \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DAUDIO_ENGINE_BUILD_TOOLS="$TOOLS_ARG" \
+            -DMATRIX_BUILD_AB_TEST="$AB_TEST_ARG" \
+            "${arch_arg[@]}" "${SLANGC_ARG[@]}" "${CMAKE_ARGS[@]}"
+        cmake --build "$variant_dir"
+
+        if [[ "$BUILD_TYPE" == "Release" ]]; then
+            # Only the runtime files ship — $variant_dir/gui also holds
+            # CMakeFiles/ and other build-tree clutter that cp -r'ing the
+            # whole directory would otherwise drag into the tarball.
+            pkg_name="matrix_player-linux-$variant"
+            pkg_dir="$DIST_DIR/$pkg_name"
+            rm -rf "$pkg_dir"
+            mkdir -p "$pkg_dir"
+            cp "$variant_dir/gui/matrix_player" "$pkg_dir/"
+            cp "$variant_dir/gui/eq_profiles.json" "$pkg_dir/"
+            cp -r "$variant_dir/gui/assets" "$pkg_dir/assets"
+            cp -r "$variant_dir/gui/fonts" "$pkg_dir/fonts"
+            tar -C "$DIST_DIR" -czf "$DIST_DIR/$pkg_name.tar.gz" "$pkg_name"
+            rm -rf "$pkg_dir"
+            echo "==> Packaged $DIST_DIR/$pkg_name.tar.gz"
+        else
+            echo "==> Built $variant_dir/gui/matrix_player (Debug, not packaged)"
+        fi
+    done
+
+    echo
+    if [[ "$BUILD_TYPE" == "Release" ]]; then
+        echo "All-variant build done. Tarballs in $DIST_DIR/:"
+        for variant in "${!SHARE_VARIANTS[@]}"; do
+            echo "  $DIST_DIR/matrix_player-linux-$variant.tar.gz"
+        done
+    else
+        echo "All-variant build done (Debug, unpackaged). Binaries:"
+        for variant in "${!SHARE_VARIANTS[@]}"; do
+            echo "  $SHARE_ROOT/$variant/gui/matrix_player"
+        done
+    fi
+    exit 0
+fi
+
+if [[ "$BUILD_TYPE" == "Debug" ]]; then
+    BUILD_DIR="build/linux${ARCH_SUFFIX}_debug"
+    TOOLS_ARG=ON
+    AB_TEST_ARG=ON
+else
+    BUILD_DIR="build/linux${ARCH_SUFFIX}"
+    TOOLS_ARG=OFF
+    AB_TEST_ARG=OFF
+fi
+
+if [[ "$CLEAN" -eq 1 && -d "$BUILD_DIR" ]]; then
+    echo "Cleaning $BUILD_DIR..."
+    rm -rf "$BUILD_DIR"
+fi
+
+ARCH_ARG=()
+[[ -n "$ARCH_LEVEL" ]] && ARCH_ARG=(-DMATRIX_ARCH_LEVEL="$ARCH_LEVEL")
+
+echo "Configuring CMake (Ninja, $BUILD_TYPE${ARCH_LEVEL:+, arch=$ARCH_LEVEL}) -> $BUILD_DIR..."
 cmake -S . -B "$BUILD_DIR" -G Ninja \
     -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
     -DAUDIO_ENGINE_BUILD_TOOLS="$TOOLS_ARG" \
     -DMATRIX_BUILD_AB_TEST="$AB_TEST_ARG" \
-    "${SLANGC_ARG[@]}" "${CMAKE_ARGS[@]}"
+    "${ARCH_ARG[@]}" "${SLANGC_ARG[@]}" "${CMAKE_ARGS[@]}"
 cmake --build "$BUILD_DIR"
 echo
 echo "Binaries in $BUILD_DIR/:"
