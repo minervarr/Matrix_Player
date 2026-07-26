@@ -845,12 +845,11 @@ void PlayerWindow::drawFrame() {
             bool hovered = (hoverSidebarItem_ == item.idx && !active);
             Rect r = toRect(item.rc);
             if (active) {
-                // Selected: accent-tint pill + left bar (the one selection family).
-                float vin = r.h * 0.14f, ph = r.h - vin * 2.0f;
-                canvas.rect(r.x + 4, r.y + vin, r.w - 8, ph,
+                // Selected: accent-tint fill + left bar, full height + square —
+                // matches the hover highlight exactly (one selection family).
+                canvas.rect(r.x + 4, r.y, r.w - 8, r.h,
                             toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
-                canvas.rect(r.x + 4, r.y + vin + UI_CORNER_RADIUS * 0.5f, 3.0f,
-                            ph - UI_CORNER_RADIUS, toColor(CLR_ACCENT), 1.5f);
+                canvas.rect(r.x + 4, r.y, 3.0f, r.h, toColor(CLR_ACCENT), UI_CORNER_RADIUS);
             } else if (hovered) {
                 canvas.rect(r.x + 4, r.y, r.w - 8, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
             }
@@ -1115,12 +1114,12 @@ void PlayerWindow::drawFrame() {
                 bool isPlayingRow = (displayAlbum_ == selectedAlbumIdx_ && displayTrack_ == i && isPlaying_);
                 float rpx = colX - 12, rpw = colW + 24;
                 if (isPlayingRow) {
-                    // Playing row: accent-tint pill + left bar (one selection family).
-                    float vin = trackRowHeight_ * 0.10f, ph = trackRowHeight_ - vin * 2.0f;
-                    canvas.rect(rpx, rowY + vin, rpw, ph,
+                    // Playing row: accent-tint pill + left bar (one selection family) —
+                    // full height + square, matching the hover highlight exactly.
+                    canvas.rect(rpx, rowY, rpw, (float)trackRowHeight_,
                                 toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
-                    canvas.rect(rpx, rowY + vin + UI_CORNER_RADIUS * 0.5f, 3.0f,
-                                ph - UI_CORNER_RADIUS, toColor(CLR_ACCENT), 1.5f);
+                    canvas.rect(rpx, rowY, 3.0f, (float)trackRowHeight_,
+                                toColor(CLR_ACCENT), UI_CORNER_RADIUS);
                 } else if (hoverTrackIdx_ == i) {
                     canvas.rect(rpx, rowY, rpw, (float)trackRowHeight_, toColor(CLR_HOVER), UI_CORNER_RADIUS);
                 }
