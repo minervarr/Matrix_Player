@@ -71,6 +71,16 @@ public:
     virtual SurfaceProvider& surfaceProvider() = 0;
     virtual AssetReader&     assetReader()     = 0;
 
+    // Opaque per-platform handle so a second top-level window (ArtWindow)
+    // can share the platform's connection instead of opening an
+    // independent one of its own. Windows: unused (nullptr) — ArtWindow
+    // builds a fully independent HWND from scratch, no dependency on Host
+    // at all. Linux: the WaylandDisplay* the main window's WaylandWindow
+    // was created on, so ArtWindow's second WaylandWindow shares the one
+    // Wayland connection instead of opening a second (wasteful/wrong — one
+    // process, one compositor connection).
+    virtual void* secondaryWindowHandle() { return nullptr; }
+
     virtual void showWindow() = 0;
 
     virtual MonitorInfo primaryMonitor() const = 0;

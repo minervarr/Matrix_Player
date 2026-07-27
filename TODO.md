@@ -51,6 +51,9 @@
 - [ ] Track number sorting within albums
 - [ ] `Keep screen on` in ArtWindow: `SetThreadExecutionState(ES_DISPLAY_REQUIRED | ES_CONTINUOUS)`
 - [ ] Keyboard shortcuts: Space=play/pause, Left/Right=seek 10s, F=fullscreen art
+- [ ] Restyle warning/alert UI toward a more alarming sci-fi/HUD treatment
+      (neon-red, hazard framing) — currently a plain amber banner (see
+      `CLR_WARNING`); user has a specific reference mood-board in mind.
 
 ## Architecture / Future
 - [ ] EQ processor: port `eq_processor.h` (biquad SIMD) for Windows use

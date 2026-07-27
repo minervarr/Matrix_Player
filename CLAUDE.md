@@ -75,9 +75,14 @@ matrix_player/
     libjpeg-turbo/              — git submodule (JPEG art decode, built via ExternalProject_Add)
   assets/fonts/                 — Latin Modern + multi-script fallback faces (Cyrillic/Greek/CJK/Hangul)
   scripts/
-    linux/build.sh               — cmake+ninja -> build/linux/
+    linux/build.sh               — cmake+ninja -> build/linux/ (see flags below)
     windows/build.ps1            — vswhere -> vcvars64 -> cmake+ninja -> build/ or build_debug/
-  tools/ab_test.cpp              — Windows-only A/B EQ listening-test tool (matrix_ab_test)
+  docs/
+    UI_DESIGN_SYSTEM.md          — the GUI's visual language (colors, type, layout rules) —
+                                  single source of truth alongside theme.hh
+    ref_eq_pipeline.md           — Reference EQ signal chain (biquad → resample → dither/quantize)
+  tools/ab_test.cpp              — Windows-only A/B EQ listening-test tool (matrix_ab_test),
+                                  opt-in via -DMATRIX_BUILD_AB_TEST=ON — not built by default
   manifest.json                 — name/version/platforms/audio backends, machine-readable
   CMakeLists.txt                 — root: third-party targets (sqlite3/soxr/libjpeg-turbo/shaders),
                                   add_subdirectory(framework/...), add_subdirectory(core), add_subdirectory(gui)
@@ -101,8 +106,18 @@ after building), wayland-client/wayland-cursor/xkbcommon dev headers, a Vulkan
 loader + headers, and the Slang shader compiler (`slangc`).
 
 ```bash
-scripts/linux/build.sh
+scripts/linux/build.sh                 # interactive: prompts for microarch, then Release/Debug
+scripts/linux/build.sh --release       # non-interactive Release -> build/linux/
+scripts/linux/build.sh --debug         # non-interactive Debug -> build/linux_debug/
+                                        #   (also builds audio_engine's smoke-test tools + matrix_ab_test)
+scripts/linux/build.sh --clean         # wipe the target build dir first (combine with a mode flag)
+scripts/linux/build.sh --share         # Release: universal + v3 + v4 + znver4 variants,
+                                        #   packaged as tarballs under dist/linux/
 ```
+
+Any non-interactive invocation (mode flag passed, or stdin not a TTY — e.g. CI)
+defaults to Release/Universal. Extra args after the flags above pass straight
+through to `cmake` (e.g. `-DMATRIX_ARCH_LEVEL=v4`, `-DMATRIX_BUILD_AB_TEST=ON`).
 
 `vk_canvas`'s `VceShaders.cmake` resolves `slangc` from `$VULKAN_SDK/bin/slangc`,
 falling back to a hardcoded **Windows** path if unset (that cmake file belongs to the
@@ -118,13 +133,23 @@ Output: `build/linux/gui/matrix_player` (plus `matrix_player.log` and `eq_profil
 bound to the target USB DAC via Zadig.
 
 ```bat
-scripts\windows\build.ps1
+scripts\windows\build.ps1            :: Release -> build\
+scripts\windows\build.ps1 -Debug     :: Debug -> build_debug\ (smoke-test tools + matrix_ab_test)
+scripts\windows\build.ps1 -Clean     :: wipe the target build dir first
+scripts\windows\build.ps1 -V3        :: or -V4, x86-64 psABI microarch level
 ```
 
 Output: `build\matrix_player.exe` (Release) or `build_debug\matrix_player.exe` (Debug).
 
 **Both platforms**: submodules first if empty —
 `git submodule update --init --recursive`.
+
+**Tests**: there is no automated test suite (no ctest/gtest target anywhere in
+the tree). The closest thing is `tools/ab_test.cpp` (`matrix_ab_test`, Windows-only,
+opt-in via `-DMATRIX_BUILD_AB_TEST=ON` or the Debug build presets above) — a manual
+A/B listening-comparison tool for EQ changes, not an automated check. Validate
+audio/DSP changes by building and listening; validate GUI changes by building
+and running `matrix_player`, then exercising the affected panel directly.
 
 ---
 
@@ -173,6 +198,15 @@ actually has.
 
 - **DoP** (DSD-over-PCM): needs a C++ port of the Android sibling player's
   `DsdPackager.java` → `UsbAudioDriver::writeDop()`.
+
+### Reference EQ signal chain
+
+Full detail in `docs/ref_eq_pipeline.md`: Reference EQ (the non-bit-perfect
+playback mode) runs biquads in 64-bit double precision, then quantizes to
+int32 exactly once — before soxr resampling if the device rate differs from
+the source, never before it — to avoid a second rounding error. Bit-perfect
+mode is unrelated to this path and aborts outright on any format mismatch
+rather than resampling.
 
 ---
 
@@ -230,6 +264,14 @@ row-list/button/header widgets live in `settings_panels.cc`; per-panel
 draw/click/hover logic lives in `player_view.cc` (`drawManageFolders`,
 `drawAudioSettings`, `drawEqSettings`, `drawFolderPicker`, and the
 `onPanel*` dispatchers).
+
+### Visual language
+
+`docs/UI_DESIGN_SYSTEM.md` is the written map of colors, type, and layout
+rules (dark/serif/single-accent, square corners everywhere except the radio
+dot, green reserved for state — never for mere hover). It cites `file:line`
+into `theme.hh`/`player_view.cc` and is meant to be updated alongside the code
+whenever the look changes, not left to drift.
 
 ---
 

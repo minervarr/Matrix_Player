@@ -385,7 +385,7 @@ bool PlayerWindow::create() {
         }
     }
 
-    artWin_.create();
+    artWin_.create(host_.get());
     recalcLayout();
 
     // Last-played album (grid indicator, Fix C): stored as "name\x1fartist"
@@ -667,6 +667,19 @@ static void drawUiIcon(Canvas& c, const LayoutRect& rc, UiIcon icon, Color col) 
         c.rect(X(27), Y(10), s * 3 / 36, s * 16 / 36, col, s * 1 / 36);
         break;
     }
+}
+
+// Same 36-unit-grid vector construction as drawUiIcon, for the bitperfect
+// warning banner's triangle-with-exclamation-mark glyph.
+static void drawWarningIcon(Canvas& c, const LayoutRect& rc, Color col) {
+    Rect r = toRect(rc);
+    float s = std::min(r.w, r.h);
+    float ox = r.x + (r.w - s) * 0.5f, oy = r.y + (r.h - s) * 0.5f;
+    auto X = [&](float u) { return ox + u / 36.0f * s; };
+    auto Y = [&](float v) { return oy + v / 36.0f * s; };
+    c.triangle(X(18), Y(4), X(4), Y(32), X(32), Y(32), col);
+    c.rect(X(16), Y(13), s * 4 / 36, s * 12 / 36, col);   // "!" bar
+    c.rect(X(16), Y(28), s * 4 / 36, s * 4 / 36, col);    // "!" dot
 }
 
 // Album art or the standard placeholder tile — grid tiles, track panel
@@ -1314,6 +1327,23 @@ void PlayerWindow::drawFrame() {
 
     // (No on-screen mode toggle — Alt+L switches Essential/Complete.)
 
+    // ── Bitperfect warning banner (non-modal, both platforms) ─────────────
+    if (!bitperfectWarning_.empty()) {
+        Rect w = toRect(rcBitperfectWarning_);
+        canvas.rect(w.x, w.y, w.w, w.h, toColor(CLR_WARNING, UI_SELECT_TINT_ALPHA));
+        canvas.rect(w.x, w.y, w.w, 1, toColor(CLR_WARNING));               // top hairline
+        canvas.rect(w.x, w.y + w.h - 1, w.w, 1, toColor(CLR_WARNING));     // bottom hairline
+
+        float iconSize = w.h - 8.0f;
+        LayoutRect iconRc = { (int)(w.x + 8), (int)(w.y + 4),
+                              (int)(w.x + 8 + iconSize), (int)(w.y + 4 + iconSize) };
+        drawWarningIcon(canvas, iconRc, toColor(CLR_WARNING));
+
+        float textX = iconRc.right + 8.0f;
+        float textY = w.y + w.h * 0.5f - textSizes_.secondary * 0.5f;
+        canvas.text(bitperfectWarning_, textX, textY, textSizes_.secondary, toColor(CLR_WARNING));
+    }
+
     renderer_->draw(frameCurves_, /*overlay_rotation_deg=*/0, frameImages_, frameImagesFg_, msdfQuads_, frameShapes_);
 }
 
@@ -1432,6 +1462,12 @@ void PlayerWindow::recalcLayout() {
     int tPad = (int)(12 * us);
     int artSide = transportH - 2 * tPad;
     rcTransportArt_  = { tPad, tTop + tPad, tPad + artSide, tTop + tPad + artSide };
+
+    // Bitperfect-mismatch warning strip: a full-width overlay directly above
+    // the transport bar. Doesn't reserve/shrink grid space — this is a rare,
+    // transient event, not worth a permanent layout dependency.
+    int warnH = (int)(28 * us);
+    rcBitperfectWarning_ = { 0, tTop - warnH, W, tTop };
 
     // Center buttons: the app's primary interactive elements (44px at the
     // reference window; scaled like everything else). Three of them:
@@ -1931,6 +1967,13 @@ void PlayerWindow::onLButtonDown(int x, int y) {
         if (searchFocused_) return;
     }
 
+    // Bitperfect warning banner: click anywhere on it dismisses.
+    if (!bitperfectWarning_.empty() && ptInRect(rcBitperfectWarning_, x, y)) {
+        bitperfectWarning_.clear();
+        invalidate();
+        return;
+    }
+
     // Transport buttons — middle is the combined play-stop toggle, same
     // rule as the VK_SPACE handler.
     int btn = transportBtnHitTest(x, y);
@@ -1993,6 +2036,16 @@ void PlayerWindow::onLButtonDown(int x, int y) {
 
 void PlayerWindow::onLButtonDblClk(int x, int y) {
     if (activePanel_ != SettingsPanel::None) return;  // no double-click behavior inside panels
+
+    // Double-click the transport thumbnail closes the fullscreen art view.
+    // Single-click already opens it (onLButtonDown -> onArtClick), so a fast
+    // double-click nets an open-then-close flash — harmless, same layering
+    // the grid-tile dblclk below already has (click opens album view, dblclk
+    // also plays the first track).
+    if (ptInRect(rcTransportArt_, x, y) && artWin_.isVisible()) {
+        artWin_.hide();
+        return;
+    }
 
     // Double-click on grid tile: play first track
     if (activeNavItem_ == 0 && !trackPanelOpen_ && ptInRect(rcGrid_, x, y)) {
@@ -2864,6 +2917,9 @@ void PlayerWindow::applyDeviceEq(int sampleRate, int channels) {
 }
 
 void PlayerWindow::onPlay() {
+    // A fresh play attempt always dismisses a stale bitperfect warning,
+    // including the stale-selection early-return path just below.
+    bitperfectWarning_.clear();
     Track t;
     {
         std::lock_guard<std::mutex> lk(albumsMu_);
@@ -2957,8 +3013,9 @@ void PlayerWindow::onPlay() {
         if (isBitperfect) {
             printf("[Bitperfect][ERROR] DAC does not support native sample rate %d Hz, aborting\n", fileSr);
             fflush(stdout);
-            host_->showErrorMessage("Bitperfect Failure",
-                "DAC does not support native sample rate.\nStrict Bitperfect mode active: playback aborted to preserve audio purity.");
+            bitperfectWarning_ = "DAC does not support native sample rate " + std::to_string(fileSr) +
+                                  " Hz — Bitperfect playback aborted.";
+            invalidate();
         } else {
             printf("[Audio][ERROR] Output failed to configure at %d Hz\n", fileSr);
             fflush(stdout);

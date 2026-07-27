@@ -283,6 +283,9 @@ private:
     LayoutRect rcBtnPlay_       = {};
     LayoutRect rcBtnNext_       = {};
     LayoutRect rcDspBadge_      = {};
+    // Non-modal bitperfect-mismatch warning strip, drawn above the transport
+    // bar when bitperfectWarning_ is non-empty. See draw()/onLButtonDown().
+    LayoutRect rcBitperfectWarning_ = {};
 
     // Sidebar items
     LayoutRect rcBrand_       = {};
@@ -521,6 +524,10 @@ private:
     std::unique_ptr<AudioOutput> output_;
     AudioBackend     audioBackend_  = AudioBackend::Usb;
     std::atomic<bool> bitperfectMode_{false};
+    // Empty = hidden. Set on a bitperfect-mismatch playback failure (see
+    // onPlay()); cleared at the top of the next onPlay() attempt or on
+    // click. Plain string, not atomic — only touched from the UI thread.
+    std::string bitperfectWarning_;
 #ifdef _WIN32
     std::wstring     wasapiDeviceId_;
     WasapiMode       wasapiMode_    = WasapiMode::Shared;

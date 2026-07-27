@@ -76,6 +76,8 @@ public:
     SurfaceProvider& surfaceProvider() override { return *surfaceProvider_; }
     AssetReader&     assetReader()     override { return assets_; }
 
+    void* secondaryWindowHandle() override { return display_.get(); }
+
     void showWindow() override {
         // Wayland windows are visible once the first frame commits — there
         // is no separate "make visible" call the way Windows' ShowWindow is.

@@ -22,6 +22,12 @@ static constexpr ColorRef CLR_INPUT_BG        = RGB(24, 24, 24);   // search / t
 static constexpr ColorRef CLR_TILE_PLACEHOLDER = RGB(28, 28, 28);
 static constexpr ColorRef CLR_TEXT_ALBUM_TITLE = RGB(255, 255, 255);
 static constexpr ColorRef CLR_ERROR           = RGB(220, 70, 70);  // reserved (error UI)
+// Amber/yellow, distinct from CLR_ERROR (reserved for hard/fatal failures,
+// unused today) and CLR_ACCENT green (reserved for state/selection). For
+// non-blocking warnings: something didn't go as configured but the app
+// keeps running. RGB(224,180,40) is ~9.8:1 on CLR_BG_MAIN, ~8.2:1 on
+// CLR_BG_TRANSPORT — comfortably above WCAG AA.
+static constexpr ColorRef CLR_WARNING         = RGB(224, 180, 40);
 
 // ── Shape ───────────────────────────────────────────────────────────────────
 // Uniform corner radius for interactive chrome (buttons, hover/selection

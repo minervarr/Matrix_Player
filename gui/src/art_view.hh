@@ -8,6 +8,11 @@
 #include "win32_platform.hh"
 #else
 #include "wayland_platform.hh"
+#include "wayland_display.hh"
+#include "wayland_window.hh"
+#include "input.hh"
+#include "keys.hh"
+#include <chrono>
 #endif
 #include "renderer.hh"
 #include "canvas.hh"
@@ -15,23 +20,27 @@
 #include "font.hh"
 #include "msdf.hh"
 
+class Host;  // forward decl only — see create(Host*), never dereferenced here
+
 // Separate fullscreen artwork window — mirrors Android's ArtworkActivity.
-// Works great on dual-monitor setups: show art on one screen, controls on the
-// other. Own Vulkan Renderer (second surface/swapchain in the same process);
-// driven from PlayerWindow::run()'s single per-thread message loop via
-// drawFrame() when visible — there is no second message pump.
+// Own Vulkan Renderer (second surface/swapchain in the same process); driven
+// from PlayerWindow::run()'s single per-thread message loop via drawFrame()
+// when visible — there is no second message pump.
 //
-// Windows: fully implemented (own HWND + Vulkan swapchain). Linux: NOT YET
-// PORTED — a second xdg_toplevel is straightforward, but Wayland has no
-// "show this window on monitor N" API a client can call the way Windows'
-// HMONITOR-targeted CreateWindowExW allows, so the dual-monitor art-on-one-
-// screen behavior needs a different design, not just a mechanical port.
-// isVisible() always returns false and every other call is a no-op on
-// Linux — a tracked gap, not a silently faked feature.
+// Windows: own HWND + Vulkan swapchain, always opens on the primary monitor
+// (no per-call monitor targeting — the old preferMonitor param was removed
+// as unused). Linux: own WaylandWindow (second xdg_toplevel) sharing the
+// main window's WaylandDisplay connection (see Host::secondaryWindowHandle),
+// fullscreen on whichever output the compositor chooses — the same "no
+// per-monitor smarts" simplicity as the Windows branch, not a lesser port.
 // TODO(style): Add keep-screen-on (SetThreadExecutionState) like ArtworkActivity.
+#ifdef _WIN32
 class ArtWindow {
+#else
+class ArtWindow : public InputSink {
+#endif
 public:
-    bool create();
+    bool create(Host* host);
     void show(const std::string& imagePath);
     // Swap the displayed image in place while visible (now-playing album
     // changed). No-op when hidden or if the path is unchanged.
@@ -51,6 +60,13 @@ public:
 
 #ifdef _WIN32
     HWND hwnd() const { return hwnd_; }
+#else
+    // InputSink overrides — double-click or Escape closes the fullscreen art
+    // surface itself, independent of (and in addition to) the transport
+    // thumbnail's own double-click-to-close (see PlayerWindow::onLButtonDblClk).
+    void onPointer(const PointerEvent&) override;
+    void onWheel(const WheelEvent&) override {}
+    void onKey(const KeyEvent&) override;
 #endif
 
 private:
@@ -58,6 +74,16 @@ private:
     static LRESULT CALLBACK wndProc(HWND, UINT, WPARAM, LPARAM);
     HWND hwnd_ = nullptr;
     std::unique_ptr<Win32SurfaceProvider> vkSurface_;
+#else
+    WaylandDisplay* display_ = nullptr;   // borrowed from Host, not owned
+    std::unique_ptr<WaylandWindow> window_;
+    std::unique_ptr<WaylandSurfaceProvider> surfaceProvider_;
+    bool visible_ = false;
+    // Double-click synthesis (Wayland/InputSink has no native dblclk event) —
+    // same ~400ms/4px heuristic as LinuxHost::onPointer(), duplicated locally.
+    std::chrono::steady_clock::time_point lastDown_;
+    float lastDownX_ = 0, lastDownY_ = 0;
+    bool lastDownValid_ = false;
 #endif
     std::string currentPath_;
     uint32_t pendingFrames_ = 0;

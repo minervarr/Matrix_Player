@@ -1,21 +1,27 @@
 #include "art_view.hh"
-#ifdef _WIN32
 #include "art_texture.hh"
 #include "ui_min_text_size.gen.h"
 #include "theme.hh"
+#include "host.hh"
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <algorithm>
 
-static const wchar_t* ART_CLASS = L"MatrixArtWindow";
+#ifndef _WIN32
+#include <cmath>
+#endif
 
 // Draw from the app palette (theme.hh), not the framework's bluer col:: default.
 static Color toColor(ColorRef c) {
     return { GetRValue(c) / 255.0f, GetGValue(c) / 255.0f, GetBValue(c) / 255.0f, 1.0f };
 }
 
-bool ArtWindow::create() {
+#ifdef _WIN32
+
+static const wchar_t* ART_CLASS = L"MatrixArtWindow";
+
+bool ArtWindow::create(Host*) {
     HINSTANCE hInst = GetModuleHandleW(nullptr);
     WNDCLASSEXW wc = {};
     wc.cbSize       = sizeof(wc);
@@ -113,6 +119,164 @@ void ArtWindow::show(const std::string& imagePath) {
     markDirty();
 }
 
+void ArtWindow::hide() {
+    ShowWindow(hwnd_, SW_HIDE);
+}
+
+bool ArtWindow::isVisible() const {
+    return hwnd_ && IsWindowVisible(hwnd_);
+}
+
+LRESULT CALLBACK ArtWindow::wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    ArtWindow* self = (ArtWindow*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    switch (msg) {
+        case WM_PAINT: {
+            // Vulkan (renderIfDirty(), pumped from PlayerWindow::run()) owns
+            // presentation — just validate the region. WM_PAINT fires whenever
+            // Windows exposes this window (uncovered, etc.) independent of our
+            // own markDirty() call sites, so it must still arm a redraw.
+            PAINTSTRUCT ps;
+            BeginPaint(hwnd, &ps);
+            EndPaint(hwnd, &ps);
+            if (self) self->markDirty();
+            return 0;
+        }
+        case WM_KEYDOWN:
+            if (wp == VK_ESCAPE && self) self->hide();
+            return 0;
+        case WM_LBUTTONDBLCLK:
+            if (self) self->hide();
+            return 0;
+        case WM_SETCURSOR:
+            // Fullscreen artwork is a viewing surface — no cursor over it.
+            SetCursor(nullptr);
+            return TRUE;
+        case WM_DESTROY:
+            if (self) { self->renderer_.reset(); self->vkSurface_.reset(); }
+            return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+#else  // !_WIN32 — real Wayland second window, sharing the main window's
+       // WaylandDisplay connection (see Host::secondaryWindowHandle()).
+
+bool ArtWindow::create(Host* host) {
+    display_ = host ? static_cast<WaylandDisplay*>(host->secondaryWindowHandle()) : nullptr;
+    if (!display_ || !display_->valid()) return false;
+
+    window_ = std::make_unique<WaylandWindow>(*display_, "Matrix Player — Album Art",
+                                               "matrix-player-art", 800, 800);
+    if (!window_->valid()) return false;
+
+    // Register for input on our own surface — this class is its own
+    // InputSink (see onPointer()/onKey() below).
+    display_->set_sink(window_->surface(), this);
+
+    surfaceProvider_ = std::make_unique<WaylandSurfaceProvider>(*display_, *window_);
+    try {
+        // 3 swapchain images, matching the Windows branch's own choice.
+        renderer_ = std::make_unique<Renderer>(*surfaceProvider_, vkAssets_,
+                                               /*desiredSwapchainImages=*/3);
+    } catch (const std::exception&) {
+        return false;
+    }
+
+    // Font loading mirrors the Windows branch (own uiFont_/msdfFont_, shared
+    // on-disk MSDF cache file) via the portable Host::exeDir() instead of
+    // GetModuleFileNameW — no wide-char conversion needed on this platform.
+    std::string exeDir = host->exeDir();
+    std::string fontPath = exeDir + "fonts/lm/lmroman10-regular.otf";
+    uiFont_.load(fontPath.c_str());
+
+    std::string cachePath = exeDir + "fonts/lmroman10-regular.msdf.cache";
+    FileByteReader loader;
+    if (msdfFont_.generate(loader, fontPath.c_str(), cachePath.c_str())) {
+        bool addedStyle = false;
+        if (!msdfFont_.hasStyle(FontStyle::Bold))
+            addedStyle |= msdfFont_.addStyle(loader, (exeDir + "fonts/lm/lmroman10-bold.otf").c_str(), FontStyle::Bold);
+        if (!msdfFont_.hasStyle(FontStyle::Italic))
+            addedStyle |= msdfFont_.addStyle(loader, (exeDir + "fonts/lm/lmroman10-italic.otf").c_str(), FontStyle::Italic);
+        if (!msdfFont_.hasStyle(FontStyle::Math))
+            addedStyle |= msdfFont_.addStyle(loader, (exeDir + "fonts/lm/lmmono10-regular.otf").c_str(), FontStyle::Math);
+        if (addedStyle) msdfFont_.saveCache(cachePath.c_str());
+
+        renderer_->initMsdf(msdfFont_);
+    }
+
+    return true;
+}
+
+void ArtWindow::show(const std::string& imagePath) {
+    currentPath_ = imagePath;
+    if (!window_) return;
+
+    // Compositor-chosen output (nullptr) — deliberately mirrors the Windows
+    // branch's "always primary, no dual-monitor smarts" simplicity (that's
+    // genuinely all Windows does today too — MonitorFromWindow(...,
+    // MONITOR_DEFAULTTOPRIMARY), its old preferMonitor param was removed as
+    // unused). set_fullscreen() blocks internally (wl_display_roundtrip)
+    // until the compositor's configure lands, so window_/renderer_ extent
+    // is already correct right after this call — no extra polling needed.
+    window_->set_fullscreen(nullptr);
+    window_->take_resized();   // drain; we call notifyResized() explicitly next
+
+    // Rebuild the swapchain at the new (post-fullscreen) extent FIRST — only
+    // then is renderer_->width()/height() below correct. This order is a
+    // deliberate divergence from the Windows branch (which sizes the texture
+    // off an independently-queried monitor rect before resizing the window);
+    // on Linux the decode-size source only becomes correct after
+    // notifyResized(), so don't reorder this to "match" Windows.
+    if (renderer_) renderer_->notifyResized();
+
+    if (artTex_ != kInvalidTexture) { renderer_->destroy_texture(artTex_); artTex_ = kInvalidTexture; }
+    if (renderer_) {
+        FileByteReader reader;
+        artTex_ = createTextureFromImageFile(*renderer_, reader, imagePath.c_str(),
+                                             (int)renderer_->width(), (int)renderer_->height(),
+                                             &artTexW_, &artTexH_);
+    }
+    visible_ = true;
+    markDirty();
+}
+
+void ArtWindow::hide() {
+    if (!window_) return;
+    window_->hide();             // unmap (NULL-buffer attach+commit) — otherwise the
+                                  // last frame stays visible at some windowed size
+    window_->unset_fullscreen();
+    window_->take_resized();     // drain; irrelevant while hidden
+    visible_ = false;
+}
+
+bool ArtWindow::isVisible() const { return visible_; }
+
+void ArtWindow::onPointer(const PointerEvent& e) {
+    if (e.action != PointerAction::Down || e.button != 0) return;
+    // Synthesize double-click (Wayland/InputSink has no native dblclk event,
+    // unlike Win32's WM_LBUTTONDBLCLK) — same ~400ms/small-radius heuristic
+    // LinuxHost::onPointer() uses for the main window, duplicated locally.
+    auto now = std::chrono::steady_clock::now();
+    bool isDouble = lastDownValid_ &&
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - lastDown_).count() < 400 &&
+        std::abs(e.x - lastDownX_) < 4 && std::abs(e.y - lastDownY_) < 4;
+    lastDown_ = now;
+    lastDownX_ = e.x; lastDownY_ = e.y;
+    lastDownValid_ = true;
+    if (isDouble) {
+        hide();
+        lastDownValid_ = false;  // don't chain a third click into another dblclk
+    }
+}
+
+void ArtWindow::onKey(const KeyEvent& e) {
+    if (e.down && e.keyCode == key::Escape) hide();
+}
+
+#endif  // _WIN32
+
+// ── Portable (both platforms): updateImage / markDirty / renderIfDirty / drawFrame ──
+
 void ArtWindow::updateImage(const std::string& imagePath) {
     // Follow the now-playing album while fullscreen: called whenever the
     // transport art path changes (track/album/single boundary). Reloads the
@@ -136,17 +300,20 @@ void ArtWindow::markDirty() {
 }
 
 void ArtWindow::renderIfDirty() {
+#ifndef _WIN32
+    // Nothing else polls this window's resize/closed state (LinuxHost::pump()
+    // only knows about the main window) — PlayerWindow::run() already calls
+    // this unconditionally every loop tick while isVisible(), so it's the
+    // natural place to drive it, keeping LinuxHost fully ignorant of ArtWindow.
+    if (window_) {
+        if (window_->take_resized() && renderer_) { renderer_->notifyResized(); markDirty(); }
+        if (window_->closed()) hide();  // defensive parity with Windows' WM_DESTROY;
+                                         // unlikely in a kiosk/fullscreen compositor
+    }
+#endif
     if (pendingFrames_ == 0) return;
     drawFrame();
     pendingFrames_--;
-}
-
-void ArtWindow::hide() {
-    ShowWindow(hwnd_, SW_HIDE);
-}
-
-bool ArtWindow::isVisible() const {
-    return hwnd_ && IsWindowVisible(hwnd_);
 }
 
 void ArtWindow::drawFrame() {
@@ -184,47 +351,3 @@ void ArtWindow::drawFrame() {
     renderer_->draw(frameCurves_, /*overlay_rotation_deg=*/0, frameImages_, {}, msdfQuads_,
                     frameShapes_);
 }
-
-LRESULT CALLBACK ArtWindow::wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    ArtWindow* self = (ArtWindow*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-    switch (msg) {
-        case WM_PAINT: {
-            // Vulkan (renderIfDirty(), pumped from PlayerWindow::run()) owns
-            // presentation — just validate the region. WM_PAINT fires whenever
-            // Windows exposes this window (uncovered, etc.) independent of our
-            // own markDirty() call sites, so it must still arm a redraw.
-            PAINTSTRUCT ps;
-            BeginPaint(hwnd, &ps);
-            EndPaint(hwnd, &ps);
-            if (self) self->markDirty();
-            return 0;
-        }
-        case WM_KEYDOWN:
-            if (wp == VK_ESCAPE && self) self->hide();
-            return 0;
-        case WM_LBUTTONDBLCLK:
-            if (self) self->hide();
-            return 0;
-        case WM_SETCURSOR:
-            // Fullscreen artwork is a viewing surface — no cursor over it.
-            SetCursor(nullptr);
-            return TRUE;
-        case WM_DESTROY:
-            if (self) { self->renderer_.reset(); self->vkSurface_.reset(); }
-            return 0;
-    }
-    return DefWindowProcW(hwnd, msg, wp, lp);
-}
-
-#else  // !_WIN32 — not yet ported, see art_view.hh's class comment.
-
-bool ArtWindow::create() { return false; }
-void ArtWindow::show(const std::string&) {}
-void ArtWindow::updateImage(const std::string&) {}
-void ArtWindow::hide() {}
-bool ArtWindow::isVisible() const { return false; }
-void ArtWindow::drawFrame() {}
-void ArtWindow::markDirty() {}
-void ArtWindow::renderIfDirty() {}
-
-#endif  // _WIN32
