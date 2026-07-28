@@ -12,6 +12,7 @@
 #include "core/library.h"
 #include "core/decoder.h"
 #include "core/db.h"
+#include "core/streamer_db.h"
 #include "art_view.hh"
 #include "audio_output.h"
 #ifdef _WIN32
@@ -220,11 +221,14 @@ private:
 
     // Full-page album view (replaces the old right-side track panel):
     // openAlbumView() flips into it and loads everything it shows;
-    // loadAlbumViewContent() resolves the sidecar files next to the music —
-    // album description in the album folder, artist bio + artist image in
-    // the artist folder above it — per the downloader's fixed layout.
+    // loadAlbumViewContent() resolves artist bio + artist image, preferring
+    // a sibling .streamer/library.db (see streamerDbs_/rootForPath()) keyed
+    // by the album's folder name, and falling back to the legacy sidecar-
+    // file convention (bio.* + an image loose in the artist's own folder,
+    // one level above the album folder) when no such database is found.
     void openAlbumView(int albumIdx);
     void loadAlbumViewContent(int albumIdx);
+    std::string rootForPath(const std::string& path) const;
 
     // Helpers
     // Multi-script text support: Latin Modern (the only font baked into
@@ -517,6 +521,12 @@ private:
     bool                     gaplessSignal_  = false;
     std::atomic<bool>        stopGapless_{false};
     Db               db_;
+    // Sibling ".streamer" databases (external Qobuz-style downloader
+    // metadata — see core/streamer_db.h), keyed by music-root path. Kept
+    // per-root since a user may have several roots, only some of which sit
+    // next to a .streamer folder; entries for roots without one just stay
+    // closed (isOpen() == false).
+    std::unordered_map<std::string, StreamerDb> streamerDbs_;
     ArtWindow        artWin_;
     UsbAudioDriver   usbDriver_;
     bool             usbOpen_  = false;

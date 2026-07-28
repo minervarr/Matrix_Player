@@ -1719,19 +1719,54 @@ void PlayerWindow::loadAlbumViewContent(int albumIdx) {
 
     albumDescText_ = loadSidecarText(albumDir, { "desc", "info", "about" });
 
-    // Artist folder is one level up (two for Singles/<Title> layouts).
-    fsys::path artistDir = albumDir.parent_path();
-    if (artistDir.filename().u8string() == "Singles")
-        artistDir = artistDir.parent_path();
-    if (artistDir.empty()) return;
-
-    artistBioText_ = loadSidecarText(artistDir, { "bio" });
-    std::string artistImg = resolveArtPath(artistDir.u8string());
-    if (!artistImg.empty()) {
-        FileByteReader reader;
-        artistImgTex_ = createTextureFromImageFile(*renderer_, reader,
-                                                   artistImg.c_str(), 256, 256);
+    // Prefer a sibling .streamer/library.db (Album::name is that DB's
+    // albums.id primary key) — this is the current downloader layout, where
+    // the album folder's parent is just "FR", not a per-artist folder.
+    bool gotFromStreamer = false;
+    std::string root = rootForPath(albumDir.u8string());
+    if (!root.empty()) {
+        auto it = streamerDbs_.find(root);
+        if (it != streamerDbs_.end() && it->second.isOpen()) {
+            if (auto info = it->second.artistInfoForAlbum(a.name)) {
+                if (!info->bioText.empty()) {
+                    // Bio text sidecars from this downloader are HTML fragments
+                    // (e.g. "<p>...</p>"), same as the legacy bio.html convention.
+                    bool looksHtml = info->bioText.find('<') != std::string::npos;
+                    artistBioText_ = looksHtml ? stripHtmlToPlain(info->bioText) : info->bioText;
+                }
+                if (!info->imagePath.empty()) {
+                    FileByteReader reader;
+                    artistImgTex_ = createTextureFromImageFile(*renderer_, reader,
+                                                               info->imagePath.c_str(), 256, 256);
+                }
+                gotFromStreamer = !info->bioText.empty() || artistImgTex_ != kInvalidTexture;
+            }
+        }
     }
+
+    // Fallback: legacy sidecar convention — artist folder is one level up
+    // (two for Singles/<Title> layouts) — for libraries with no .streamer db.
+    if (!gotFromStreamer) {
+        fsys::path artistDir = albumDir.parent_path();
+        if (artistDir.filename().u8string() == "Singles")
+            artistDir = artistDir.parent_path();
+        if (!artistDir.empty()) {
+            artistBioText_ = loadSidecarText(artistDir, { "bio" });
+            std::string artistImg = resolveArtPath(artistDir.u8string());
+            if (!artistImg.empty()) {
+                FileByteReader reader;
+                artistImgTex_ = createTextureFromImageFile(*renderer_, reader,
+                                                           artistImg.c_str(), 256, 256);
+            }
+        }
+    }
+}
+
+std::string PlayerWindow::rootForPath(const std::string& path) const {
+    std::string best;
+    for (auto& [root, _] : streamerDbs_)
+        if (path.rfind(root, 0) == 0 && root.size() > best.size()) best = root;
+    return best;
 }
 
 void PlayerWindow::loadTransportArtTexture(const std::string& artPath) {
@@ -2809,6 +2844,9 @@ void PlayerWindow::commitAddFolder(const std::string& root) {
     watcher_.watchRoot(root, [this](const std::string&) {
         host_->postAppEvent(AppEvent::ScanDone, 1);
     });
+    StreamerDb sdb;
+    sdb.open(root);  // no-op if this root has no sibling .streamer db
+    streamerDbs_[root] = std::move(sdb);
     startBackgroundScan();
 }
 
@@ -3422,10 +3460,14 @@ void PlayerWindow::applyTrackMetadata(int album, int track) {
 
 void PlayerWindow::setupWatchers() {
     Host* host = host_.get();
+    streamerDbs_.clear();
     for (auto& root : db_.loadMusicRoots()) {
         watcher_.watchRoot(root, [host](const std::string&) {
             host->postAppEvent(AppEvent::ScanDone, 1);
         });
+        StreamerDb sdb;
+        sdb.open(root);  // no-op if this root has no sibling .streamer db
+        streamerDbs_[root] = std::move(sdb);
     }
 }
 

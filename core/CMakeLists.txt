@@ -8,6 +8,7 @@
 add_library(matrix_core STATIC
     src/library.cpp
     src/db.cpp
+    src/streamer_db.cpp
     src/eq_manager.cpp
     src/eq_profiles.cpp
     src/decoder.cpp

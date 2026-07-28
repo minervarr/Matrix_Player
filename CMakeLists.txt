@@ -56,48 +56,23 @@ endif()
 # directly) regardless of this flag.
 option(MATRIX_BUILD_AB_TEST "Build the standalone audio A/B comparison tool (tools/ab_test.cpp)" OFF)
 
-# ---------- audio_engine (framework/, firstparty submodule) ----------
-# Defines ae_core (INTERFACE), ae_usb (STATIC, cross-platform), and on Linux
-# ae_alsa/ae_jack automatically when ALSA headers / jack2 pkg-config are found.
-add_subdirectory(framework/audio_engine)
-
-# ---------- vk_canvas (Vulkan 2D canvas engine, framework/, firstparty submodule) ----------
-add_subdirectory(framework/vk_canvas/core vk_canvas_build)
-
-
-# Linux platform backend: builds vk_canvas_wayland (raw Wayland + xkbcommon).
-# The Windows equivalent (win32_platform.cc) has no such subdirectory —
-# framework/vk_canvas/platform/windows is vk_canvas's own standalone demo
-# project; this app instead compiles win32_platform.cc directly as one of its
-# own sources (see gui/CMakeLists.txt), matching that library's own convention
-# for consumers.
-if(NOT WIN32)
-    add_subdirectory(framework/vk_canvas/platform/linux vk_canvas_linux_build)
-endif()
-
-# ---------- sqlite3 (vendored amalgamation, third_party/) ----------
-add_library(sqlite3 STATIC third_party/sqlite3.c)
-target_include_directories(sqlite3 PUBLIC third_party)
-if(MSVC)
-    target_compile_options(sqlite3 PRIVATE /W0)
-else()
-    target_compile_options(sqlite3 PRIVATE -w)
-endif()
-
-# ---------- soxr resampler ----------
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/third_party/soxr/cmake/Modules")
-set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(WITH_OPENMP OFF CACHE BOOL "" FORCE)
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-set(WITH_LSR_BINDINGS OFF CACHE BOOL "" FORCE)
-add_subdirectory(third_party/soxr)
-
 # ---------- libjpeg-turbo (higher-fidelity JPEG decode for album art) ----------
 # libjpeg-turbo's own CMakeLists.txt refuses add_subdirectory() (it FATAL_ERRORs
 # unless it's the top-level project) — build it out-of-tree via ExternalProject
 # and expose it as an imported target instead.
+#
+# Defined here, before every add_subdirectory() below, because
+# framework/vk_canvas/first_party/img_decode_kit's own CMakeLists.txt gates its
+# turbojpeg JPEG path on `if(TARGET turbojpeg-static)` at the moment IT is
+# add_subdirectory()'d (transitively, via vk_canvas/core) — CMake evaluates
+# that check immediately, not after the whole tree is configured. Defining
+# turbojpeg-static any later left the check seeing no such target yet, so
+# img_decode_kit silently fell back to its stb_image decode path (which
+# downsamples width/height independently to the request box instead of
+# preserving the source aspect ratio) even though turbojpeg-static was linked
+# into the final binary — every JPEG, including perfectly square cover art,
+# came out stretched to whatever non-square box it was decoded for (e.g. the
+# fullscreen album art window's monitor resolution).
 include(ExternalProject)
 set(TURBOJPEG_INSTALL_DIR ${CMAKE_BINARY_DIR}/libjpeg-turbo-install)
 # libjpeg-turbo's own CMakeLists.txt renames the turbojpeg-static target's
@@ -137,6 +112,44 @@ set_target_properties(turbojpeg-static PROPERTIES
     IMPORTED_LOCATION ${TURBOJPEG_BYPRODUCT}
     INTERFACE_INCLUDE_DIRECTORIES ${TURBOJPEG_INSTALL_DIR}/include)
 add_dependencies(turbojpeg-static libjpeg_turbo_ext)
+
+# ---------- audio_engine (framework/, firstparty submodule) ----------
+# Defines ae_core (INTERFACE), ae_usb (STATIC, cross-platform), and on Linux
+# ae_alsa/ae_jack automatically when ALSA headers / jack2 pkg-config are found.
+add_subdirectory(framework/audio_engine)
+
+# ---------- vk_canvas (Vulkan 2D canvas engine, framework/, firstparty submodule) ----------
+add_subdirectory(framework/vk_canvas/core vk_canvas_build)
+
+
+# Linux platform backend: builds vk_canvas_wayland (raw Wayland + xkbcommon).
+# The Windows equivalent (win32_platform.cc) has no such subdirectory —
+# framework/vk_canvas/platform/windows is vk_canvas's own standalone demo
+# project; this app instead compiles win32_platform.cc directly as one of its
+# own sources (see gui/CMakeLists.txt), matching that library's own convention
+# for consumers.
+if(NOT WIN32)
+    add_subdirectory(framework/vk_canvas/platform/linux vk_canvas_linux_build)
+endif()
+
+# ---------- sqlite3 (vendored amalgamation, third_party/) ----------
+add_library(sqlite3 STATIC third_party/sqlite3.c)
+target_include_directories(sqlite3 PUBLIC third_party)
+if(MSVC)
+    target_compile_options(sqlite3 PRIVATE /W0)
+else()
+    target_compile_options(sqlite3 PRIVATE -w)
+endif()
+
+# ---------- soxr resampler ----------
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/third_party/soxr/cmake/Modules")
+set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(WITH_OPENMP OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(WITH_LSR_BINDINGS OFF CACHE BOOL "" FORCE)
+add_subdirectory(third_party/soxr)
 
 # ---------- min_text_size (build-time UI text-size floor generator) ----------
 # Computes the minimum device-pixel size each baked font can render at before

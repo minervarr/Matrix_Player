@@ -274,8 +274,14 @@ std::vector<Album> scanLibrary(const std::string& rootPath) {
     if (!fs::exists(root)) return albums;
 
     std::map<std::string, std::vector<Track>> byFolder;
-    for (auto& entry : fs::recursive_directory_iterator(root,
-            fs::directory_options::skip_permission_denied)) {
+    auto dit = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied);
+    for (auto end = fs::recursive_directory_iterator(); dit != end; ++dit) {
+        auto& entry = *dit;
+        if (entry.is_directory() && !entry.path().filename().u8string().empty() &&
+            entry.path().filename().u8string()[0] == '.') {
+            dit.disable_recursion_pending();  // skip hidden dirs (e.g. a sibling .streamer/)
+            continue;
+        }
         if (!entry.is_regular_file()) continue;
         auto ext = entry.path().extension().u8string();
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -304,8 +310,14 @@ IncrementalScanResult scanLibraryIncremental(
 
     std::map<std::string, std::vector<Track>> byFolder;
 
-    for (auto& entry : fs::recursive_directory_iterator(root,
-            fs::directory_options::skip_permission_denied)) {
+    auto dit = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied);
+    for (auto end = fs::recursive_directory_iterator(); dit != end; ++dit) {
+        auto& entry = *dit;
+        if (entry.is_directory() && !entry.path().filename().u8string().empty() &&
+            entry.path().filename().u8string()[0] == '.') {
+            dit.disable_recursion_pending();  // skip hidden dirs (e.g. a sibling .streamer/)
+            continue;
+        }
         if (!entry.is_regular_file()) continue;
         auto ext = entry.path().extension().u8string();
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -344,8 +356,14 @@ std::vector<Album> scanLibraryParallel(const std::string& rootPath) {
 
     // Collect all audio file paths first
     std::vector<std::pair<std::string, std::string>> files; // (path, ext)
-    for (auto& entry : fs::recursive_directory_iterator(root,
-            fs::directory_options::skip_permission_denied)) {
+    auto dit = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied);
+    for (auto end = fs::recursive_directory_iterator(); dit != end; ++dit) {
+        auto& entry = *dit;
+        if (entry.is_directory() && !entry.path().filename().u8string().empty() &&
+            entry.path().filename().u8string()[0] == '.') {
+            dit.disable_recursion_pending();  // skip hidden dirs (e.g. a sibling .streamer/)
+            continue;
+        }
         if (!entry.is_regular_file()) continue;
         auto ext = entry.path().extension().u8string();
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
