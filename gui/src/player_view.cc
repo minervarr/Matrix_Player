@@ -1171,6 +1171,25 @@ void PlayerWindow::drawFrame() {
             // Duration column width measured once (widest realistic stamp),
             // so titles reserve real space instead of a guessed constant.
             float durColW = canvas.textWidthStyled("88:88", textSizes_.secondary, FontStyle::Math);
+
+            // Quality-color "aura": if every track shares the same tier, the
+            // whole list gets one border below; otherwise each row gets its
+            // own (drawn per-row in the loop). Recomputed live each time the
+            // album view opens — cheap (O(track count), already in RAM),
+            // exactly like the Android reference does (it doesn't cache
+            // this check either — only the per-album inputs are cached).
+            bool qualityMixed = false;
+            QualityColor unifiedQuality{};
+            bool unifiedSet = false;
+            for (auto& t : album.tracks) {
+                QualityColor tc = qualityColorFor(t.sampleRate, false);
+                if (!unifiedSet) { unifiedQuality = tc; unifiedSet = true; }
+                else if (tc.hasColor != unifiedQuality.hasColor || tc.color != unifiedQuality.color) {
+                    qualityMixed = true;
+                    break;
+                }
+            }
+
             for (int i = 0; i < (int)album.tracks.size(); i++) {
                 float rowY = y + i * trackRowHeight_;
                 if (rowY + trackRowHeight_ < tp.y) continue;
@@ -1187,6 +1206,17 @@ void PlayerWindow::drawFrame() {
                                 toColor(CLR_ACCENT), UI_CORNER_RADIUS);
                 } else if (hoverTrackIdx_ == i) {
                     canvas.rect(rpx, rowY, rpw, (float)trackRowHeight_, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+                }
+
+                if (qualityMixed) {
+                    QualityColor tc = qualityColorFor(album.tracks[i].sampleRate, false);
+                    if (tc.hasColor) {
+                        float bw = 1.5f * uiScale_;
+                        canvas.rect(rpx, rowY, rpw, bw, toColor(tc.color));
+                        canvas.rect(rpx, rowY + trackRowHeight_ - bw, rpw, bw, toColor(tc.color));
+                        canvas.rect(rpx, rowY, bw, (float)trackRowHeight_, toColor(tc.color));
+                        canvas.rect(rpx + rpw - bw, rowY, bw, (float)trackRowHeight_, toColor(tc.color));
+                    }
                 }
 
                 // Track number / duration are numeric readouts: Mono (repurposed
@@ -1221,6 +1251,15 @@ void PlayerWindow::drawFrame() {
                 }
             }
             float tracksBottom = y + (float)album.tracks.size() * trackRowHeight_;
+
+            if (!qualityMixed && unifiedQuality.hasColor) {
+                float lb = 2.0f * uiScale_;
+                float lx = (float)trackListLeft_, rx = (float)trackListRight_;
+                canvas.rect(lx - lb, y - lb, (rx - lx) + lb * 2, lb, toColor(unifiedQuality.color));
+                canvas.rect(lx - lb, tracksBottom, (rx - lx) + lb * 2, lb, toColor(unifiedQuality.color));
+                canvas.rect(lx - lb, y - lb, lb, (tracksBottom - y) + lb * 2, toColor(unifiedQuality.color));
+                canvas.rect(rx, y - lb, lb, (tracksBottom - y) + lb * 2, toColor(unifiedQuality.color));
+            }
 
             // ── Sidecar text sections (album description, artist bio) ──
             float sectY = std::max(tracksBottom, artY + artSize) + 36.0f;
