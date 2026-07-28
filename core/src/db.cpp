@@ -30,7 +30,10 @@ CREATE TABLE IF NOT EXISTS albums (
     display_name TEXT DEFAULT '',
     quality      TEXT DEFAULT '',
     mode         TEXT DEFAULT '',
-    country      TEXT DEFAULT ''
+    country      TEXT DEFAULT '',
+    release_type    INTEGER DEFAULT 0,
+    avg_sample_rate INTEGER DEFAULT 0,
+    has_dsd         INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_tracks_title  ON tracks(title);
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
@@ -58,6 +61,9 @@ static const char* MIGRATIONS[] = {
     "ALTER TABLE albums ADD COLUMN quality TEXT DEFAULT '';",
     "ALTER TABLE albums ADD COLUMN mode TEXT DEFAULT '';",
     "ALTER TABLE albums ADD COLUMN country TEXT DEFAULT '';",
+    "ALTER TABLE albums ADD COLUMN release_type INTEGER DEFAULT 0;",
+    "ALTER TABLE albums ADD COLUMN avg_sample_rate INTEGER DEFAULT 0;",
+    "ALTER TABLE albums ADD COLUMN has_dsd INTEGER DEFAULT 0;",
 };
 
 static void runMigrations(sqlite3* db) {
@@ -158,7 +164,8 @@ void Db::saveAlbums(const std::vector<Album>& albums) {
     sqlite3_exec(impl_->db, "BEGIN;", nullptr, nullptr, nullptr);
     sqlite3_exec(impl_->db, "DELETE FROM albums;", nullptr, nullptr, nullptr);
     const char* sql = "INSERT INTO albums (name, artist, art_path, "
-                      "display_name, quality, mode, country) VALUES (?,?,?,?,?,?,?);";
+                      "display_name, quality, mode, country, "
+                      "release_type, avg_sample_rate, has_dsd) VALUES (?,?,?,?,?,?,?,?,?,?);";
     sqlite3_stmt* stmt = nullptr;
     sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr);
     for (auto& a : albums) {
@@ -169,6 +176,9 @@ void Db::saveAlbums(const std::vector<Album>& albums) {
         sqlite3_bind_text(stmt, 5, a.quality.c_str(),     -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 6, a.mode.c_str(),        -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 7, a.country.c_str(),     -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int (stmt, 8, (int)a.releaseType);
+        sqlite3_bind_int (stmt, 9, a.avgSampleRate);
+        sqlite3_bind_int (stmt, 10, a.hasDsd ? 1 : 0);
         sqlite3_step(stmt);
         sqlite3_reset(stmt);
     }
@@ -254,7 +264,8 @@ std::vector<Album> Db::loadAlbums() {
     std::vector<Album> out;
     if (!impl_->db) return out;
     const char* sql = "SELECT name, artist, art_path, "
-                      "display_name, quality, mode, country FROM albums;";
+                      "display_name, quality, mode, country, "
+                      "release_type, avg_sample_rate, has_dsd FROM albums;";
     sqlite3_stmt* stmt = nullptr;
     sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr);
     while (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -270,6 +281,9 @@ std::vector<Album> Db::loadAlbums() {
         a.quality     = col(4);
         a.mode        = col(5);
         a.country     = col(6);
+        a.releaseType   = (Album::ReleaseType)sqlite3_column_int(stmt, 7);
+        a.avgSampleRate = sqlite3_column_int(stmt, 8);
+        a.hasDsd        = sqlite3_column_int(stmt, 9) != 0;
         // Rows written before the display_name migration: fall back to the
         // raw folder name so the grid never renders empty titles.
         if (a.displayName.empty()) a.displayName = a.name;
