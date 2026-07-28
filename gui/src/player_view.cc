@@ -874,7 +874,7 @@ void PlayerWindow::drawFrame() {
         };
         for (auto& item : items) {
             bool active = (!settingsOpen_ && albumTypeFilter_ == item.filter);
-            bool hovered = (hoverSidebarItem_ == (int)item.filter && !active && !settingsOpen_);
+            bool hovered = (hoverSidebarItem_ == (int)item.filter && !active);
             Rect r = toRect(item.rc);
             if (active) {
                 // Selected: accent-tint fill + left bar, full height + square —
@@ -893,7 +893,7 @@ void PlayerWindow::drawFrame() {
         // into the content-type list above (the user's explicit ask: a
         // music player should read as albums-and-music first, configuration
         // second).
-        canvas.rect((float)rcNavGear_.left, (float)rcNavGear_.top, sb.w, 1, toColor(CLR_SEPARATOR));
+        canvas.rect((float)rcNavGear_.left, rcNavGear_.top - 4.0f * uiScale_, sb.w, 1, toColor(CLR_SEPARATOR));
         {
             bool hovered = (hoverSidebarItem_ == kSidebarGearHit && !settingsOpen_);
             Rect r = toRect(rcNavGear_);
@@ -904,8 +904,9 @@ void PlayerWindow::drawFrame() {
             } else if (hovered) {
                 canvas.rect(r.x + 4, r.y, r.w - 8, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
             }
-            LayoutRect gearIconRc = { rcNavGear_.left + 16, (int)(r.y + r.h * 0.5f - 9),
-                                      rcNavGear_.left + 34, (int)(r.y + r.h * 0.5f + 9) };
+            float iconHalf = 9.0f * uiScale_;
+            LayoutRect gearIconRc = { (int)(rcNavGear_.left + 16.0f * uiScale_), (int)(r.y + r.h * 0.5f - iconHalf),
+                                      (int)(rcNavGear_.left + 16.0f * uiScale_ + iconHalf * 2), (int)(r.y + r.h * 0.5f + iconHalf) };
             drawUiIcon(canvas, gearIconRc, UiIcon::Settings,
                       toColor(settingsOpen_ ? CLR_ACCENT : CLR_TEXT_SECONDARY));
         }
@@ -923,11 +924,20 @@ void PlayerWindow::drawFrame() {
         canvas.rect(g.x, g.y, g.w, g.h, toColor(CLR_BG_MAIN));
 
         if (albums_.empty()) {
-            canvas.text("No albums yet. Go to Settings to add a music folder.",
+            canvas.text("No albums yet. Use the gear icon below to add a music folder.",
                        g.x + g.w * 0.5f - 160, g.y + 100, textSizes_.nav, toColor(CLR_TEXT_DIM));
         } else if (gridIndices_.empty()) {
-            canvas.text("No matches for \"" + searchQuery_ + "\"",
-                       g.x + g.w * 0.5f - 120, g.y + 100, textSizes_.nav, toColor(CLR_TEXT_DIM));
+            std::string msg;
+            if (!searchQuery_.empty()) {
+                msg = "No matches for \"" + searchQuery_ + "\"";
+            } else {
+                const char* filterLabel =
+                    albumTypeFilter_ == AlbumTypeFilter::Ep     ? "EPs" :
+                    albumTypeFilter_ == AlbumTypeFilter::Single ? "Singles" :
+                    albumTypeFilter_ == AlbumTypeFilter::Remix  ? "Remixes" : "Albums";
+                msg = std::string("No ") + filterLabel + " yet";
+            }
+            canvas.text(msg, g.x + g.w * 0.5f - 120, g.y + 100, textSizes_.nav, toColor(CLR_TEXT_DIM));
         } else {
             canvas.setClip(g.x, g.y, g.w, g.h);
             int tileSpaceW = rcGrid_.right - rcGrid_.left - gridPadX_ * 2;
@@ -2095,8 +2105,11 @@ void PlayerWindow::onLButtonDown(int x, int y) {
         } else if (nav >= 0 &&
                    (settingsOpen_ || albumTypeFilter_ != (AlbumTypeFilter)nav)) {
             settingsOpen_ = false;
+            trackPanelOpen_ = false;
             albumTypeFilter_ = (AlbumTypeFilter)nav;
             rebuildGridIndices();
+            gridScrollY_ = 0;
+            recalcLayout();
             invalidate();
         }
         return;

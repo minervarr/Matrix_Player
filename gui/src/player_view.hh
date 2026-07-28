@@ -446,6 +446,13 @@ private:
     // deliberately separate state: leaving Settings returns to whichever
     // type filter was active, never hardcoded back to Albums.
     enum class AlbumTypeFilter { Album, Ep, Single, Remix };
+    // rebuildGridIndices() compares this against Album::ReleaseType via a
+    // plain (int) cast — these static_asserts make a future reorder of
+    // either enum a build error instead of a silently wrong filter.
+    static_assert((int)AlbumTypeFilter::Album  == (int)Album::ReleaseType::Album,  "AlbumTypeFilter/Album::ReleaseType value mismatch");
+    static_assert((int)AlbumTypeFilter::Ep     == (int)Album::ReleaseType::Ep,     "AlbumTypeFilter/Album::ReleaseType value mismatch");
+    static_assert((int)AlbumTypeFilter::Single == (int)Album::ReleaseType::Single, "AlbumTypeFilter/Album::ReleaseType value mismatch");
+    static_assert((int)AlbumTypeFilter::Remix  == (int)Album::ReleaseType::Remix,  "AlbumTypeFilter/Album::ReleaseType value mismatch");
     AlbumTypeFilter albumTypeFilter_ = AlbumTypeFilter::Album;
     bool            settingsOpen_    = false;
     static constexpr int kSidebarGearHit = 4;  // sidebarHitTest() sentinel for the gear

@@ -67,6 +67,10 @@ Album::ReleaseType classifyReleaseType(const std::string& albumName,
 
 void computeAlbumQualityStats(const std::vector<Track>& tracks,
                               int& avgSampleRate, bool& hasDsd) {
+    // Plain arithmetic mean, ported as-is from the Android reference's SQL
+    // AVG(). A mixed-rate album (e.g. 44.1kHz + 96kHz tracks) can average
+    // into a different tier than any single track actually has — this is a
+    // known, deliberate property of the ported logic, not a rounding bug.
     long long sum = 0;
     int count = 0;
     for (auto& t : tracks) {
