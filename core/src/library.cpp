@@ -188,6 +188,8 @@ static std::vector<Album> buildAlbums(
             else if (metaAlbum != t.album) { metaAlbum.clear(); break; }
         }
         if (!metaAlbum.empty()) album.displayName = metaAlbum;
+        album.releaseType = classifyReleaseType(album.displayName, album.tracks);
+        computeAlbumQualityStats(album.tracks, album.avgSampleRate, album.hasDsd);
         album.sortTracks();
         albums.push_back(std::move(album));
     }
