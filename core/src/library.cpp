@@ -16,6 +16,66 @@
 
 namespace fs = std::filesystem;
 
+// ── Release-type classification (Album/EP/Single/Remix) ─────────────────────
+// Ported verbatim from the sibling Android player's AlbumDao.java
+// (isRemixTrack/isRemixAlbum/classifyRelease) — see the design spec at
+// docs/superpowers/specs/2026-07-27-release-type-and-quality-color-design.md.
+namespace {
+
+bool isRemixTrackTitle(const std::string& title) {
+    if (title.empty()) return false;
+    std::string lower = title;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                    [](unsigned char c) { return std::tolower(c); });
+    size_t b = lower.find_first_not_of(" \t");
+    size_t e = lower.find_last_not_of(" \t");
+    std::string trimmed = (b == std::string::npos) ? "" : lower.substr(b, e - b + 1);
+    if (trimmed == "remix" || trimmed == "mix" ||
+        trimmed == "the remix" || trimmed == "the mix") return false;
+    if (lower.find("remix") != std::string::npos) return true;
+    if (lower.find("rmx") != std::string::npos) return true;
+    static const std::regex kWordMix(R"(\b\w+\s+mix\b)", std::regex::icase);
+    static const std::regex kParenMix(R"(\(.*mix.*\))", std::regex::icase);
+    static const std::regex kBracketMix(R"(\[.*mix.*\])", std::regex::icase);
+    if (std::regex_search(title, kWordMix))    return true;
+    if (std::regex_search(title, kParenMix))   return true;
+    if (std::regex_search(title, kBracketMix)) return true;
+    return false;
+}
+
+bool isRemixAlbum(const std::string& albumName, const std::vector<Track>& tracks) {
+    static const std::regex kRemixName(R"(\b(remix|remixes|remixed|rmx)\b)", std::regex::icase);
+    if (!albumName.empty() && std::regex_search(albumName, kRemixName)) return true;
+    int trackCount = (int)tracks.size();
+    if (trackCount == 0) return false;
+    int remixCount = 0;
+    for (auto& t : tracks)
+        if (isRemixTrackTitle(t.title)) remixCount++;
+    return remixCount == trackCount || (remixCount >= 2 && remixCount * 2 > trackCount);
+}
+
+} // namespace
+
+Album::ReleaseType classifyReleaseType(const std::string& albumName,
+                                       const std::vector<Track>& tracks) {
+    if (isRemixAlbum(albumName, tracks)) return Album::ReleaseType::Remix;
+    int trackCount = (int)tracks.size();
+    if (trackCount == 1) return Album::ReleaseType::Single;
+    if (trackCount <= 4) return Album::ReleaseType::Ep;
+    return Album::ReleaseType::Album;
+}
+
+void computeAlbumQualityStats(const std::vector<Track>& tracks,
+                              int& avgSampleRate, bool& hasDsd) {
+    long long sum = 0;
+    int count = 0;
+    for (auto& t : tracks) {
+        if (t.sampleRate > 0) { sum += t.sampleRate; count++; }
+    }
+    avgSampleRate = count > 0 ? (int)(sum / count) : 0;
+    hasDsd = false;  // no DSD/DSF decode yet — see the declaration's comment
+}
+
 static const char* COVER_NAMES[] = { "cover", "folder", "front", "albumart", "album" };
 static const char* COVER_EXTS[]  = { ".jpg", ".jpeg", ".png" };
 

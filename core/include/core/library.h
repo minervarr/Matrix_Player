@@ -34,8 +34,31 @@ struct Album {
     std::string country;      // optional country dir ("" if absent)
     std::vector<Track> tracks;
 
+    // Release-type classification (Album/EP/Single/Remix) and quality-tier
+    // inputs, computed once in buildAlbums() and cached in Db's own albums
+    // table (never touches the external streamer db) — see
+    // classifyReleaseType()/computeAlbumQualityStats() below.
+    enum class ReleaseType { Album = 0, Ep = 1, Single = 2, Remix = 3 };
+    ReleaseType releaseType   = ReleaseType::Album;
+    int         avgSampleRate = 0;
+    bool        hasDsd        = false;
+
     void sortTracks();
 };
+
+// Classifies a release from its track list, mirroring the sibling Android
+// player's AlbumDao.classifyRelease() exactly: track-count thresholds
+// (1=Single, 2-4=EP, >4=Album), overridden by remix detection (album name
+// or a strict majority of track titles matching remix patterns).
+Album::ReleaseType classifyReleaseType(const std::string& albumName,
+                                       const std::vector<Track>& tracks);
+
+// Mean sample rate across tracks with sampleRate > 0 (0 if none), and
+// whether any track is DSD. hasDsd is always false today — this app has no
+// DSD/DSF file decoding yet (see root CLAUDE.md's "Not yet wired: DoP") —
+// the field exists for forward compatibility with the quality-color palette.
+void computeAlbumQualityStats(const std::vector<Track>& tracks,
+                              int& avgSampleRate, bool& hasDsd);
 
 std::vector<Album> scanLibrary(const std::string& rootPath);
 
