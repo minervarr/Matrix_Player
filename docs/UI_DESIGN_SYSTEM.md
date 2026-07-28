@@ -62,6 +62,20 @@ converted to the engine's float `Color` via `toColor(ref, alpha=1)`.
 | `CLR_TILE_PLACEHOLDER` | 28 | Album-art placeholder fill |
 | `CLR_ERROR` | 220,70,70 | Reserved for error UI (not yet drawn) |
 
+**Quality-color tier (a second, scoped palette).** Album art borders and
+track-list "auras" (§8.2/§8.4) are colored by objective audio quality, not
+UI state — this is the one deliberate exception to "one palette":
+
+| Token | RGB | Tier |
+|---|---|---|
+| `CLR_QUALITY_DSD` | 255,255,255 | DSD |
+| `CLR_QUALITY_DXD` | 255,165,0 | >=352.8kHz (DXD) |
+| `CLR_QUALITY_HIRES` | 0,255,255 | >=64kHz (hi-res PCM) |
+| `CLR_QUALITY_STANDARD` | 255,255,0 | >=44.1kHz (CD quality) |
+
+Below 44.1kHz, no border is drawn. `qualityColorFor(sampleRate, isDsd)`
+(`gui/src/theme.hh`) is the single place this mapping lives.
+
 **Contrast note:** `CLR_TEXT_DIM` was deliberately raised 80→140 so real
 information (badges/hints) clears WCAG AA (~5.6:1 on the base background) — see
 the comment in `theme.hh`.
