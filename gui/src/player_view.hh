@@ -289,8 +289,11 @@ private:
 
     // Sidebar items
     LayoutRect rcBrand_       = {};
-    LayoutRect rcNavAlbums_   = {};
-    LayoutRect rcNavSettings_ = {};
+    LayoutRect rcNavAlbum_    = {};
+    LayoutRect rcNavEp_       = {};
+    LayoutRect rcNavSingle_   = {};
+    LayoutRect rcNavRemix_    = {};
+    LayoutRect rcNavGear_     = {};
 
     // Settings page items
     LayoutRect rcSettingsAddFolder_    = {};
@@ -437,7 +440,15 @@ private:
     // Selection / navigation
     int  selectedAlbumIdx_  = -1;
     bool trackPanelOpen_    = false;
-    int  activeNavItem_     = 0;  // 0=Albums, 1=Settings
+    // Sidebar is two independent things: which album TYPE is being browsed
+    // (Albums/EPs/Singles/Remixes — filters the grid), and whether the
+    // Settings gear is open (replaces the whole content area). They're
+    // deliberately separate state: leaving Settings returns to whichever
+    // type filter was active, never hardcoded back to Albums.
+    enum class AlbumTypeFilter { Album, Ep, Single, Remix };
+    AlbumTypeFilter albumTypeFilter_ = AlbumTypeFilter::Album;
+    bool            settingsOpen_    = false;
+    static constexpr int kSidebarGearHit = 4;  // sidebarHitTest() sentinel for the gear
 
     // Last-played album (persisted via Db::saveSetting/loadSetting, matched
     // by name+artist rather than index since the list reorders across
