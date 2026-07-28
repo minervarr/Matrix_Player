@@ -967,6 +967,18 @@ void PlayerWindow::drawFrame() {
                         canvas.rect(x - 3, y - 3, a + 6, a + 6, toColor(CLR_ACCENT, 0.8f), 8.0f);
                     }
 
+                    // Quality-color frame — objective audio-quality metadata,
+                    // hugging the art's own bounds (not the outer state rings
+                    // above, which sit further out and never overlap this).
+                    QualityColor qc = qualityColorFor(alb.avgSampleRate, alb.hasDsd);
+                    if (qc.hasColor) {
+                        float bw = 2.0f * uiScale_;
+                        canvas.rect(x - bw, y - bw, a + bw * 2, bw, toColor(qc.color));
+                        canvas.rect(x - bw, y + a, a + bw * 2, bw, toColor(qc.color));
+                        canvas.rect(x - bw, y - bw, bw, a + bw * 2, toColor(qc.color));
+                        canvas.rect(x + a, y - bw, bw, a + bw * 2, toColor(qc.color));
+                    }
+
                     drawArtOrPlaceholder(canvas, getGridArtTexture(idx), x, y, a, a);
 
                     // Last-played / now-playing marker: a thin accent bar
