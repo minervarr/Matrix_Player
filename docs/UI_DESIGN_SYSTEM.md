@@ -62,6 +62,20 @@ converted to the engine's float `Color` via `toColor(ref, alpha=1)`.
 | `CLR_TILE_PLACEHOLDER` | 28 | Album-art placeholder fill |
 | `CLR_ERROR` | 220,70,70 | Reserved for error UI (not yet drawn) |
 
+**Quality-color tier (a second, scoped palette).** Album art borders and
+track-list "auras" (§8.2/§8.4) are colored by objective audio quality, not
+UI state — this is the one deliberate exception to "one palette":
+
+| Token | RGB | Tier |
+|---|---|---|
+| `CLR_QUALITY_DSD` | 255,255,255 | DSD |
+| `CLR_QUALITY_DXD` | 255,165,0 | >=352.8kHz (DXD) |
+| `CLR_QUALITY_HIRES` | 0,255,255 | >=64kHz (hi-res PCM) |
+| `CLR_QUALITY_STANDARD` | 255,255,0 | >=44.1kHz (CD quality) |
+
+Below 44.1kHz, no border is drawn. `qualityColorFor(sampleRate, isDsd)`
+(`gui/src/theme.hh`) is the single place this mapping lives.
+
 **Contrast note:** `CLR_TEXT_DIM` was deliberately raised 80→140 so real
 information (badges/hints) clears WCAG AA (~5.6:1 on the base background) — see
 the comment in `theme.hh`.
@@ -156,8 +170,10 @@ density.
 - **One radius token:** `UI_CORNER_RADIUS = 0` — the whole app is square
   (buttons, hover/selection highlights, search fields, grid hover frame). This
   single token enforces it; nudge it up if a softer look is ever wanted.
-- **Exceptions (own radii):** the circular radio dot (`dot.w*0.5`) and the
-  decorative multi-layer now-playing tile glow (10/12px, §8.2).
+- **Exceptions (own radii):** the circular radio dot (`dot.w*0.5`), the
+  decorative multi-layer now-playing tile glow (10/12px, §8.2), and the
+  Settings gear icon's circular hub + rounded teeth (§7) — icon geometry,
+  not chrome, so it sits outside the `UI_CORNER_RADIUS` rule like the glow.
 - **Icons** use their own 36-unit design grid (§7).
 - **Highlights** fill the full row height (match the action-button height); in
   lists and radio groups they hug the row's text rather than spanning full
@@ -190,10 +206,12 @@ glyphs — crisp at any size, zero VRAM. Defined in `drawUiIcon`
 | Stop | one rounded square (radius `2/36`) |
 | Prev | left bar + left-pointing triangle |
 | Next | right-pointing triangle + right bar |
+| Settings | 5-tooth gear: circular hub + 5 teeth rotated 72° apart via `Canvas::setRotation`/`clearRotation` |
 
 Color is passed per button — normally `CLR_TEXT_PRIMARY`; the idle **Play** is
-`CLR_ACCENT` (a call to action). Two identical button banks use them: the
-transport bar and Essential mode. There are no other icons.
+`CLR_ACCENT` (a call to action). The transport bar and Essential mode share
+the Play/Stop/Prev/Next bank; the Settings gear is its own single-use icon in
+the sidebar (§8.1).
 
 ---
 
@@ -215,8 +233,15 @@ The universal state rules (apply everywhere):
 
 ### 8.1 Sidebar / nav
 Brand "MATRIX PLAYER" (Bold, accent, truncated). Shared **search field** (§8.6).
-Nav items *Albums* / *Settings*: hover = grey pill; active = accent-tint pill +
-left bar + accent label.
+Four content-type filters — *Albums* / *EPs* / *Singles* / *Remixes*, each
+filtering the grid by `Album::releaseType` — hover = grey pill; active =
+accent-tint pill + left bar + accent label (same family as before, just four
+rows instead of one). Below a hairline separator, a single **Settings gear**
+icon is spatially isolated at the bottom of the sidebar: the app reads as
+albums-and-music first, configuration second. It shares the same
+hover/active visual language; opening it replaces the whole content area
+(§8.6) and closing it returns to whichever filter was active, never
+resetting to Albums.
 
 ### 8.2 Album grid
 Square art tiles (placeholder = flat `CLR_TILE_PLACEHOLDER`) + Bold white title
@@ -224,7 +249,11 @@ Square art tiles (placeholder = flat `CLR_TILE_PLACEHOLDER`) + Bold white title
 frame. **Selected** = accent ring (0.80). **Now-playing** = three-layer accent
 glow (0.20/0.45/1.0 at radii 12/10/8). A thin accent bottom bar marks
 **last-played only** (now-playing is already unmistakable from the glow — no
-double-marking). Empty states: "No albums yet…" / "No matches for …".
+double-marking). A **quality-color frame** (see the color-tokens section
+above) hugs the art's own bounds when the album's tracks resolve to a color
+tier — sits inside the state rings above, never competing with them.
+Empty states: "No albums yet…" / a per-filter "No EPs yet"-style message when
+a type filter has no matches / "No matches for …" when a search does.
 
 ### 8.3 Transport bar
 Left: art thumb + Bold title + italic artist. Center: Prev / Play-Stop / Next
@@ -236,7 +265,10 @@ badge (BITPERFECT accent / REF EQ dim) that expands to the signal path on hover.
 Full-page (replaces grid). Large scrolling art + wrapped title/artist + quality
 badge + separator, then track rows: track # (Mono) · title · duration (Mono).
 Row hover = grey pill; **playing row** = accent-tint pill + left bar + accent
-Bold text (the shared selection family).
+Bold text (the shared selection family). A **quality-color aura**: if every
+track shares one color tier, a single square-cornered border wraps the whole
+track list; if tracks differ, each row instead gets its own tier-colored
+border. Mutually exclusive — never both, never neither when a tier exists.
 
 ### 8.5 Essential / mini mode
 A separate compact layout: centered large art + Bold title + three big centered

@@ -49,3 +49,31 @@ static constexpr float SP_XL = 40.0f;
 
 // Selection tint alpha for the accent-on-state pill (lists, nav, playing row).
 static constexpr float UI_SELECT_TINT_ALPHA = 0.16f;
+
+// ── Audio-quality color tiers ────────────────────────────────────────────────
+// A second, deliberately scoped palette for OBJECTIVE audio-quality metadata
+// (sample rate / DSD), shown as a border/"aura" on album art and track lists
+// — never for UI state (state stays CLR_ACCENT-only, see design principle
+// #4 in docs/UI_DESIGN_SYSTEM.md). Thresholds/colors ported verbatim from
+// the sibling Android player's CategoryAdapter/GroupedFragment quality-tier
+// logic (see docs/superpowers/specs/2026-07-27-release-type-and-quality-color-design.md).
+static constexpr ColorRef CLR_QUALITY_DSD      = RGB(255, 255, 255);
+static constexpr ColorRef CLR_QUALITY_DXD      = RGB(255, 165, 0);   // #FFA500, >=352.8kHz
+static constexpr ColorRef CLR_QUALITY_HIRES    = RGB(0, 255, 255);   // #00FFFF, >=64kHz
+static constexpr ColorRef CLR_QUALITY_STANDARD = RGB(255, 255, 0);   // >=44.1kHz (CD quality)
+
+struct QualityColor {
+    bool     hasColor = false;
+    ColorRef color    = 0;
+};
+
+// sampleRate in Hz (e.g. 44100, not 44.1). isDsd wins over sampleRate tiers.
+// Below 44.1kHz there's no tier — this deliberately mirrors the Android
+// reference's TRANSPARENT ("no border") case, not an error.
+inline QualityColor qualityColorFor(int sampleRate, bool isDsd) {
+    if (isDsd)                return { true, CLR_QUALITY_DSD };
+    if (sampleRate >= 352800) return { true, CLR_QUALITY_DXD };
+    if (sampleRate >= 64000)  return { true, CLR_QUALITY_HIRES };
+    if (sampleRate >= 44100)  return { true, CLR_QUALITY_STANDARD };
+    return { false, 0 };
+}

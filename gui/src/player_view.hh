@@ -293,8 +293,11 @@ private:
 
     // Sidebar items
     LayoutRect rcBrand_       = {};
-    LayoutRect rcNavAlbums_   = {};
-    LayoutRect rcNavSettings_ = {};
+    LayoutRect rcNavAlbum_    = {};
+    LayoutRect rcNavEp_       = {};
+    LayoutRect rcNavSingle_   = {};
+    LayoutRect rcNavRemix_    = {};
+    LayoutRect rcNavGear_     = {};
 
     // Settings page items
     LayoutRect rcSettingsAddFolder_    = {};
@@ -441,7 +444,22 @@ private:
     // Selection / navigation
     int  selectedAlbumIdx_  = -1;
     bool trackPanelOpen_    = false;
-    int  activeNavItem_     = 0;  // 0=Albums, 1=Settings
+    // Sidebar is two independent things: which album TYPE is being browsed
+    // (Albums/EPs/Singles/Remixes — filters the grid), and whether the
+    // Settings gear is open (replaces the whole content area). They're
+    // deliberately separate state: leaving Settings returns to whichever
+    // type filter was active, never hardcoded back to Albums.
+    enum class AlbumTypeFilter { Album, Ep, Single, Remix };
+    // rebuildGridIndices() compares this against Album::ReleaseType via a
+    // plain (int) cast — these static_asserts make a future reorder of
+    // either enum a build error instead of a silently wrong filter.
+    static_assert((int)AlbumTypeFilter::Album  == (int)Album::ReleaseType::Album,  "AlbumTypeFilter/Album::ReleaseType value mismatch");
+    static_assert((int)AlbumTypeFilter::Ep     == (int)Album::ReleaseType::Ep,     "AlbumTypeFilter/Album::ReleaseType value mismatch");
+    static_assert((int)AlbumTypeFilter::Single == (int)Album::ReleaseType::Single, "AlbumTypeFilter/Album::ReleaseType value mismatch");
+    static_assert((int)AlbumTypeFilter::Remix  == (int)Album::ReleaseType::Remix,  "AlbumTypeFilter/Album::ReleaseType value mismatch");
+    AlbumTypeFilter albumTypeFilter_ = AlbumTypeFilter::Album;
+    bool            settingsOpen_    = false;
+    static constexpr int kSidebarGearHit = 4;  // sidebarHitTest() sentinel for the gear
 
     // Last-played album (persisted via Db::saveSetting/loadSetting, matched
     // by name+artist rather than index since the list reorders across

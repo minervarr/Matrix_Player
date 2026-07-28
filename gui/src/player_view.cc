@@ -643,7 +643,7 @@ void PlayerWindow::run() {
 // but stay crisp at any button size and cost zero VRAM/upload. They draw
 // after the hover rects in frame order, so they composite on top exactly
 // like text does.
-enum class UiIcon { Play, Stop, Prev, Next };
+enum class UiIcon { Play, Stop, Prev, Next, Settings };
 
 static void drawUiIcon(Canvas& c, const LayoutRect& rc, UiIcon icon, Color col) {
     Rect r = toRect(rc);
@@ -666,6 +666,23 @@ static void drawUiIcon(Canvas& c, const LayoutRect& rc, UiIcon icon, Color col) 
         c.triangle(X(9), Y(8), X(22), Y(18), X(9), Y(28), col);
         c.rect(X(27), Y(10), s * 3 / 36, s * 16 / 36, col, s * 1 / 36);
         break;
+    case UiIcon::Settings: {
+        // 5-tooth gear: circular hub + 5 teeth at 72° increments, using the
+        // same rotation transform vk_canvas already exposes — no new
+        // primitive needed.
+        float cx = X(18), cy = Y(18);
+        float hubR = s * 10.0f / 36.0f;
+        c.rect(cx - hubR, cy - hubR, hubR * 2, hubR * 2, col, hubR);
+        float toothW = s * 7.0f / 36.0f, toothH = s * 9.0f / 36.0f;
+        for (int i = 0; i < 5; i++) {
+            float angle = i * (2.0f * 3.14159265f / 5.0f);
+            c.setRotation(angle, cx, cy);
+            c.rect(cx - toothW * 0.5f, cy - hubR - toothH * 0.55f,
+                   toothW, toothH, col, toothW * 0.3f);
+            c.clearRotation();
+        }
+        break;
+    }
     }
 }
 
@@ -848,14 +865,16 @@ void PlayerWindow::drawFrame() {
         drawSearchField(canvas, rcSearch_, searchQuery_, searchFocused_, "Search",
                         textSizes_.secondary);
 
-        struct NavItem { const char* label; LayoutRect rc; int idx; };
+        struct NavItem { const char* label; LayoutRect rc; AlbumTypeFilter filter; };
         NavItem items[] = {
-            { "Albums",   rcNavAlbums_,   0 },
-            { "Settings", rcNavSettings_, 1 },
+            { "Albums",  rcNavAlbum_,  AlbumTypeFilter::Album  },
+            { "EPs",     rcNavEp_,     AlbumTypeFilter::Ep     },
+            { "Singles", rcNavSingle_, AlbumTypeFilter::Single },
+            { "Remixes", rcNavRemix_,  AlbumTypeFilter::Remix  },
         };
         for (auto& item : items) {
-            bool active = (activeNavItem_ == item.idx);
-            bool hovered = (hoverSidebarItem_ == item.idx && !active);
+            bool active = (!settingsOpen_ && albumTypeFilter_ == item.filter);
+            bool hovered = (hoverSidebarItem_ == (int)item.filter && !active);
             Rect r = toRect(item.rc);
             if (active) {
                 // Selected: accent-tint fill + left bar, full height + square —
@@ -870,6 +889,28 @@ void PlayerWindow::drawFrame() {
                        textSizes_.nav, toColor(active ? CLR_ACCENT : CLR_TEXT_SECONDARY));
         }
 
+        // Settings gear — spatially separated below a hairline, never mixed
+        // into the content-type list above (the user's explicit ask: a
+        // music player should read as albums-and-music first, configuration
+        // second).
+        canvas.rect((float)rcNavGear_.left, rcNavGear_.top - 4.0f * uiScale_, sb.w, 1, toColor(CLR_SEPARATOR));
+        {
+            bool hovered = (hoverSidebarItem_ == kSidebarGearHit && !settingsOpen_);
+            Rect r = toRect(rcNavGear_);
+            if (settingsOpen_) {
+                canvas.rect(r.x + 4, r.y, r.w - 8, r.h,
+                            toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
+                canvas.rect(r.x + 4, r.y, 3.0f, r.h, toColor(CLR_ACCENT), UI_CORNER_RADIUS);
+            } else if (hovered) {
+                canvas.rect(r.x + 4, r.y, r.w - 8, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+            }
+            float iconHalf = 9.0f * uiScale_;
+            LayoutRect gearIconRc = { (int)(rcNavGear_.left + 16.0f * uiScale_), (int)(r.y + r.h * 0.5f - iconHalf),
+                                      (int)(rcNavGear_.left + 16.0f * uiScale_ + iconHalf * 2), (int)(r.y + r.h * 0.5f + iconHalf) };
+            drawUiIcon(canvas, gearIconRc, UiIcon::Settings,
+                      toColor(settingsOpen_ ? CLR_ACCENT : CLR_TEXT_SECONDARY));
+        }
+
         // (The now-playing mini card that used to fill the space below the
         // nav items was removed: it duplicated the transport bar's art,
         // title, and artist — the transport bar is the single now-playing
@@ -878,16 +919,25 @@ void PlayerWindow::drawFrame() {
 
     // ── Main content: album grid, settings page, or (below) the full-page
     // album view that replaces the grid while an album is focused ─────────
-    if (activeNavItem_ == 0 && !trackPanelOpen_) {
+    if (!settingsOpen_ && !trackPanelOpen_) {
         Rect g = toRect(rcGrid_);
         canvas.rect(g.x, g.y, g.w, g.h, toColor(CLR_BG_MAIN));
 
         if (albums_.empty()) {
-            canvas.text("No albums yet. Go to Settings to add a music folder.",
+            canvas.text("No albums yet. Use the gear icon below to add a music folder.",
                        g.x + g.w * 0.5f - 160, g.y + 100, textSizes_.nav, toColor(CLR_TEXT_DIM));
         } else if (gridIndices_.empty()) {
-            canvas.text("No matches for \"" + searchQuery_ + "\"",
-                       g.x + g.w * 0.5f - 120, g.y + 100, textSizes_.nav, toColor(CLR_TEXT_DIM));
+            std::string msg;
+            if (!searchQuery_.empty()) {
+                msg = "No matches for \"" + searchQuery_ + "\"";
+            } else {
+                const char* filterLabel =
+                    albumTypeFilter_ == AlbumTypeFilter::Ep     ? "EPs" :
+                    albumTypeFilter_ == AlbumTypeFilter::Single ? "Singles" :
+                    albumTypeFilter_ == AlbumTypeFilter::Remix  ? "Remixes" : "Albums";
+                msg = std::string("No ") + filterLabel + " yet";
+            }
+            canvas.text(msg, g.x + g.w * 0.5f - 120, g.y + 100, textSizes_.nav, toColor(CLR_TEXT_DIM));
         } else {
             canvas.setClip(g.x, g.y, g.w, g.h);
             int tileSpaceW = rcGrid_.right - rcGrid_.left - gridPadX_ * 2;
@@ -925,6 +975,18 @@ void PlayerWindow::drawFrame() {
                         canvas.rect(x - 3, y - 3, a + 6,  a + 6,  toColor(CLR_ACCENT),        8.0f);
                     } else if (selectedAlbumIdx_ == idx) {
                         canvas.rect(x - 3, y - 3, a + 6, a + 6, toColor(CLR_ACCENT, 0.8f), 8.0f);
+                    }
+
+                    // Quality-color frame — objective audio-quality metadata,
+                    // hugging the art's own bounds (not the outer state rings
+                    // above, which sit further out and never overlap this).
+                    QualityColor qc = qualityColorFor(alb.avgSampleRate, alb.hasDsd);
+                    if (qc.hasColor) {
+                        float bw = 2.0f * uiScale_;
+                        canvas.rect(x - bw, y - bw, a + bw * 2, bw, toColor(qc.color));
+                        canvas.rect(x - bw, y + a, a + bw * 2, bw, toColor(qc.color));
+                        canvas.rect(x - bw, y - bw, bw, a + bw * 2, toColor(qc.color));
+                        canvas.rect(x + a, y - bw, bw, a + bw * 2, toColor(qc.color));
                     }
 
                     drawArtOrPlaceholder(canvas, getGridArtTexture(idx), x, y, a, a);
@@ -980,11 +1042,11 @@ void PlayerWindow::drawFrame() {
             }
             canvas.clearClip();
         }
-    } else if (activeNavItem_ != 0 && activePanel_ != SettingsPanel::None) {
+    } else if (settingsOpen_ && activePanel_ != SettingsPanel::None) {
         // A settings panel (Phase 7) takes over the whole content area,
         // replacing the settings-page row list below until closed.
         drawActivePanel(canvas, rcGrid_);
-    } else if (activeNavItem_ != 0) {
+    } else if (settingsOpen_) {
         Rect g = toRect(rcGrid_);
         canvas.rect(g.x, g.y, g.w, g.h, toColor(CLR_BG_MAIN));
 
@@ -1041,7 +1103,7 @@ void PlayerWindow::drawFrame() {
     // the whole content area belongs to this one album — big art on the
     // left, track list on the right, album description and artist bio (from
     // the sidecar files next to the music) below. The page scrolls as one.
-    if (activeNavItem_ == 0 && trackPanelOpen_) {
+    if (!settingsOpen_ && trackPanelOpen_) {
         Rect tp = toRect(rcTrackPanel_);
         canvas.rect(tp.x, tp.y, tp.w, tp.h, toColor(CLR_BG_TRACKPANEL));
 
@@ -1119,6 +1181,25 @@ void PlayerWindow::drawFrame() {
             // Duration column width measured once (widest realistic stamp),
             // so titles reserve real space instead of a guessed constant.
             float durColW = canvas.textWidthStyled("88:88", textSizes_.secondary, FontStyle::Math);
+
+            // Quality-color "aura": if every track shares the same tier, the
+            // whole list gets one border below; otherwise each row gets its
+            // own (drawn per-row in the loop). Recomputed live each time the
+            // album view opens — cheap (O(track count), already in RAM),
+            // exactly like the Android reference does (it doesn't cache
+            // this check either — only the per-album inputs are cached).
+            bool qualityMixed = false;
+            QualityColor unifiedQuality{};
+            bool unifiedSet = false;
+            for (auto& t : album.tracks) {
+                QualityColor tc = qualityColorFor(t.sampleRate, false);
+                if (!unifiedSet) { unifiedQuality = tc; unifiedSet = true; }
+                else if (tc.hasColor != unifiedQuality.hasColor || tc.color != unifiedQuality.color) {
+                    qualityMixed = true;
+                    break;
+                }
+            }
+
             for (int i = 0; i < (int)album.tracks.size(); i++) {
                 float rowY = y + i * trackRowHeight_;
                 if (rowY + trackRowHeight_ < tp.y) continue;
@@ -1135,6 +1216,17 @@ void PlayerWindow::drawFrame() {
                                 toColor(CLR_ACCENT), UI_CORNER_RADIUS);
                 } else if (hoverTrackIdx_ == i) {
                     canvas.rect(rpx, rowY, rpw, (float)trackRowHeight_, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+                }
+
+                if (qualityMixed) {
+                    QualityColor tc = qualityColorFor(album.tracks[i].sampleRate, false);
+                    if (tc.hasColor) {
+                        float bw = 1.5f * uiScale_;
+                        canvas.rect(rpx, rowY, rpw, bw, toColor(tc.color));
+                        canvas.rect(rpx, rowY + trackRowHeight_ - bw, rpw, bw, toColor(tc.color));
+                        canvas.rect(rpx, rowY, bw, (float)trackRowHeight_, toColor(tc.color));
+                        canvas.rect(rpx + rpw - bw, rowY, bw, (float)trackRowHeight_, toColor(tc.color));
+                    }
                 }
 
                 // Track number / duration are numeric readouts: Mono (repurposed
@@ -1169,6 +1261,15 @@ void PlayerWindow::drawFrame() {
                 }
             }
             float tracksBottom = y + (float)album.tracks.size() * trackRowHeight_;
+
+            if (!qualityMixed && unifiedQuality.hasColor) {
+                float lb = 2.0f * uiScale_;
+                float lx = (float)trackListLeft_, rx = (float)trackListRight_;
+                canvas.rect(lx - lb, y - lb, (rx - lx) + lb * 2, lb, toColor(unifiedQuality.color));
+                canvas.rect(lx - lb, tracksBottom, (rx - lx) + lb * 2, lb, toColor(unifiedQuality.color));
+                canvas.rect(lx - lb, y - lb, lb, (tracksBottom - y) + lb * 2, toColor(unifiedQuality.color));
+                canvas.rect(rx, y - lb, lb, (tracksBottom - y) + lb * 2, toColor(unifiedQuality.color));
+            }
 
             // ── Sidecar text sections (album description, artist bio) ──
             float sectY = std::max(tracksBottom, artY + artSize) + 36.0f;
@@ -1454,8 +1555,13 @@ void PlayerWindow::recalcLayout() {
     // adrift of the search box across resolutions).
     rcBrand_       = { 0, 0, sidebarW, (int)(50 * us) };
     rcSearch_      = { 12, (int)(58 * us), sidebarW - 12, (int)(90 * us) };
-    rcNavAlbums_   = { 0, (int)(102 * us), sidebarW, (int)(142 * us) };
-    rcNavSettings_ = { 0, (int)(142 * us), sidebarW, (int)(182 * us) };
+    float navRowH = 40.0f * us, navTop = 102.0f * us;
+    rcNavAlbum_  = { 0, (int)(navTop),               sidebarW, (int)(navTop + navRowH) };
+    rcNavEp_     = { 0, (int)(navTop + navRowH),     sidebarW, (int)(navTop + navRowH * 2) };
+    rcNavSingle_ = { 0, (int)(navTop + navRowH * 2), sidebarW, (int)(navTop + navRowH * 3) };
+    rcNavRemix_  = { 0, (int)(navTop + navRowH * 3), sidebarW, (int)(navTop + navRowH * 4) };
+    rcNavGear_   = { 0, (int)(navTop + navRowH * 4 + 8.0f * us),
+                        sidebarW, (int)(navTop + navRowH * 5 + 8.0f * us) };
 
     // Transport sub-regions — proportional to the (scaled) bar height.
     int tTop = rcTransport_.top;
@@ -1819,8 +1925,9 @@ void PlayerWindow::rebuildGridIndices() {
     gridIndices_.clear();
     gridIndices_.reserve(albums_.size());
     for (int i = 0; i < (int)albums_.size(); i++) {
+        const Album& a = albums_[i];
+        if ((int)a.releaseType != (int)albumTypeFilter_) continue;
         if (!searchQuery_.empty()) {
-            const Album& a = albums_[i];
             bool hit = containsNoCase(a.displayName, searchQuery_) ||
                        containsNoCase(a.artist, searchQuery_);
             for (size_t t = 0; !hit && t < a.tracks.size(); t++)
@@ -1873,7 +1980,7 @@ static int hitTestListRows(const std::vector<widgets::ListRow>& rows, int x, int
 }
 
 int PlayerWindow::trackPanelHitTest(int x, int y) const {
-    if (!trackPanelOpen_ || activeNavItem_ != 0) return -1;
+    if (!trackPanelOpen_ || settingsOpen_) return -1;
     if (x < trackListLeft_ || x >= trackListRight_) return -1;
     if (y < rcTrackPanel_.top || y >= rcTrackPanel_.bottom) return -1;
     // trackListTop_ is the scroll-0 window Y of row 0 (written by the album
@@ -1887,8 +1994,11 @@ int PlayerWindow::trackPanelHitTest(int x, int y) const {
 }
 
 int PlayerWindow::sidebarHitTest(int x, int y) const {
-    if (ptInRect(rcNavAlbums_, x, y)) return 0;
-    if (ptInRect(rcNavSettings_, x, y)) return 1;
+    if (ptInRect(rcNavAlbum_, x, y))  return (int)AlbumTypeFilter::Album;
+    if (ptInRect(rcNavEp_, x, y))     return (int)AlbumTypeFilter::Ep;
+    if (ptInRect(rcNavSingle_, x, y)) return (int)AlbumTypeFilter::Single;
+    if (ptInRect(rcNavRemix_, x, y))  return (int)AlbumTypeFilter::Remix;
+    if (ptInRect(rcNavGear_, x, y))   return kSidebarGearHit;
     return -1;
 }
 
@@ -1951,10 +2061,10 @@ void PlayerWindow::onMouseMove(int x, int y) {
     } else if (ptInRect(rcTransport_, x, y)) {
         hoverTransportBtn_ = transportBtnHitTest(x, y);
         hoverDspBadge_ = ptInRect(rcDspBadge_, x, y) != 0;
-    } else if (trackPanelOpen_ && activeNavItem_ == 0 && ptInRect(rcTrackPanel_, x, y)) {
+    } else if (trackPanelOpen_ && !settingsOpen_ && ptInRect(rcTrackPanel_, x, y)) {
         hoverTrackIdx_ = trackPanelHitTest(x, y);
     } else if (ptInRect(rcGrid_, x, y)) {
-        if (activeNavItem_ == 0)
+        if (!settingsOpen_)
             hoverAlbumIdx_ = gridHitTest(x, y);
         else
             hoverSettingsItem_ = settingsHitTest(x, y);
@@ -2025,8 +2135,16 @@ void PlayerWindow::onLButtonDown(int x, int y) {
     // Sidebar
     if (ptInRect(rcSidebar_, x, y)) {
         int nav = sidebarHitTest(x, y);
-        if (nav >= 0 && nav != activeNavItem_) {
-            activeNavItem_ = nav;
+        if (nav == kSidebarGearHit) {
+            if (!settingsOpen_) { settingsOpen_ = true; invalidate(); }
+        } else if (nav >= 0 &&
+                   (settingsOpen_ || albumTypeFilter_ != (AlbumTypeFilter)nav)) {
+            settingsOpen_ = false;
+            trackPanelOpen_ = false;
+            albumTypeFilter_ = (AlbumTypeFilter)nav;
+            rebuildGridIndices();
+            gridScrollY_ = 0;
+            recalcLayout();
             invalidate();
         }
         return;
@@ -2035,7 +2153,7 @@ void PlayerWindow::onLButtonDown(int x, int y) {
     // (No album view back button — Escape closes it.)
 
     // Album view track click
-    if (trackPanelOpen_ && activeNavItem_ == 0 && ptInRect(rcTrackPanel_, x, y)) {
+    if (trackPanelOpen_ && !settingsOpen_ && ptInRect(rcTrackPanel_, x, y)) {
         int track = trackPanelHitTest(x, y);
         printf("[Click] Album view track click (%d,%d): hit=%d, tracks=%d\n",
                x, y, track,
@@ -2051,14 +2169,14 @@ void PlayerWindow::onLButtonDown(int x, int y) {
     }
 
     // Grid (albums view)
-    if (activeNavItem_ == 0 && !trackPanelOpen_ && ptInRect(rcGrid_, x, y)) {
+    if (!settingsOpen_ && !trackPanelOpen_ && ptInRect(rcGrid_, x, y)) {
         int idx = gridHitTest(x, y);
         if (idx >= 0) openAlbumView(idx);
         return;
     }
 
     // Settings page
-    if (activeNavItem_ == 1 && ptInRect(rcGrid_, x, y)) {
+    if (settingsOpen_ && ptInRect(rcGrid_, x, y)) {
         int sett = settingsHitTest(x, y);
         if (sett == 0) onAddFolder();
         if (sett == 1) onManageFolders();
@@ -2083,7 +2201,7 @@ void PlayerWindow::onLButtonDblClk(int x, int y) {
     }
 
     // Double-click on grid tile: play first track
-    if (activeNavItem_ == 0 && !trackPanelOpen_ && ptInRect(rcGrid_, x, y)) {
+    if (!settingsOpen_ && !trackPanelOpen_ && ptInRect(rcGrid_, x, y)) {
         int idx = gridHitTest(x, y);
         if (idx >= 0) {
             openAlbumView(idx);
@@ -2112,7 +2230,7 @@ void PlayerWindow::onLButtonDblClk(int x, int y) {
 // Wayland's pointer coords are already surface-relative).
 void PlayerWindow::onMouseWheel(int x, int y, int delta) {
     if (activePanel_ != SettingsPanel::None) { onPanelWheel(x, y, delta); return; }
-    if (trackPanelOpen_ && activeNavItem_ == 0 && ptInRect(rcTrackPanel_, x, y)) {
+    if (trackPanelOpen_ && !settingsOpen_ && ptInRect(rcTrackPanel_, x, y)) {
         // The album view scrolls as one page; its content height is
         // measured by the draw block (albumViewContentH_).
         trackScrollY_ -= delta;
