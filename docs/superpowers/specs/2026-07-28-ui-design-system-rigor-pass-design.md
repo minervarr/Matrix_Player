@@ -188,8 +188,14 @@ this section.**
 | transport height | 80 | 131 |
 | sidebar width | 170 | 278 |
 | track row height | 40 | 65 |
-| `kPanelRowH` | 44 | 72 |
-| transport button / gap | 44 / 12 | 72 / 20 |
+| transport button / gap / pad | 44 / 12 / 12 | 72 / 20 / 20 |
+| grid tile text offset | 10 | 16 |
+| grid row gap trailing term | 18 | 29 |
+| gear icon half / inset / rule gap | 9 / 16 / 4 | 15 / 26 / 7 |
+| album view: art gap / num col / title col | 40 / 30 / 46 | 65 / 49 / 75 |
+| album view: artist image | 120 | 196 |
+| panel list inset / row height | 14 / 34 | 23 / 56 |
+| panel buttons (Remove / Apply / Select) | 170 / 120 / 200 | 278 / 196 / 327 |
 | nav row height / top | 40 / 102 | 65 / 167 |
 | brand band / search band | 50 / 58-90 | 82 / 95-147 |
 | settings rows (top/halfW/h/gap) | 90 / 220 / 52 / 14 | 147 / 360 / 85 / 23 |
@@ -200,10 +206,16 @@ this section.**
 ### Kept as-is (currently bare, gain `space()`)
 
 `gridPadX_` 24, `gridPadY_` 16, `kTargetTilePitch` 250, `kMinGridArtSize` 80,
-`kGridArtMargin` 30, brand inset 16, nav label inset 20, selection pill +4/-8,
-grid focus halo -6/+12, now-playing glow insets -9/-6/-3 at radii 12/10/8, tile
-text offset 10, transport right margin 16, time gap 24, album-view sidecar
-spacing 36/28/16, and the `rcBtnPrev_.left - 76` transport info gap.
+`kGridArtMargin` 30, **`kPanelRowH` 44**, brand inset 16, search field inset 12,
+nav label inset 20, selection pill +4/-8, grid focus halo -6/+12, now-playing
+glow insets -9/-6/-3 at radii 12/10/8, transport right margin 16, time gap 24,
+album-view sidecar spacing 36/28/16, and the `rcBtnPrev_.left - 76` transport
+info gap.
+
+`kPanelRowH` is the trap in this list: it *looks* like a scaled value and sits
+among scaled neighbours, but every use passes it bare (`(float)kPanelRowH` into
+`widgets::drawScrollList`, `rowCount * kPanelRowH` into the scrollbar). It
+renders at 44px today and must keep the number 44.
 
 ### Strokes
 
@@ -390,6 +402,14 @@ here as the obvious next step if this kind of change recurs.
 ---
 
 ## 10. Sequencing
+
+**The two scales coexist during the sweep.** `uiScale_` cannot flip from 1.634
+to 1.0 in the same commit that re-authors only *some* call sites — every
+not-yet-migrated `x uiScale_` literal would shrink by 1.634x until the sweep
+finished. So `UiMetrics metrics_` is added alongside the existing `uiScale_`,
+call sites migrate file by file (each using whichever factor matches its
+authored value, so every intermediate commit renders correctly), and the legacy
+factor is deleted only once nothing references it.
 
 Ordered so each step is independently buildable, runnable and revertible:
 
