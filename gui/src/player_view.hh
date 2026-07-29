@@ -331,6 +331,7 @@ private:
     std::vector<UsbAudioDeviceInfo> asUsbDevices_;
     int  asUsbSel_      = -1;
     int  asHoverDeviceRow_ = -1;
+    int  asDeviceScrollY_ = 0;
     LayoutRect asDeviceListArea_ = {};
     std::vector<widgets::ListRow> asDeviceListRows_;  // cached during draw, read by hit-test
 #ifdef _WIN32

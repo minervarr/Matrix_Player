@@ -144,9 +144,10 @@ public:
     }
 
     void pump(bool haveWork) override {
-        if (window_->closed()) { quit_ = true; return; }
+        if (window_->closed()) { owner_->shutdown(); quit_ = true; return; }
 
         if (!display_->dispatch(haveWork ? 0 : 250)) {
+            owner_->shutdown();
             quit_ = true;
             return;
         }

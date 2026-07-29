@@ -13,6 +13,9 @@
 #include <atomic>
 #include <chrono>
 #include <vector>
+#ifndef _WIN32
+#include <unistd.h>   // readlink, for the build stamp's /proc/self/exe lookup
+#endif
 
 // Minimal iso-streaming self-test. Streams a pure generated 440 Hz sine
 // straight through the engine data path (writeFloat32 -> ring -> submitTransfer)
@@ -58,7 +61,29 @@ static int runIsoSelfTest() {
     return 0;
 }
 
+// Which build is this, and where did it come from? The tree can hold several
+// build dirs at once (build/linux, build/linux_native, build/linux_debug, the
+// build/linux_share variants) and it is otherwise invisible from inside the
+// app which one is running — a stale binary looks exactly like a fix that
+// didn't work. One line in matrix_player.log settles it.
+static void logBuildStamp() {
+    char exePath[1024] = {};
+#ifdef _WIN32
+    // GetModuleFileNameW lives behind the platform split; windows_host.cc owns
+    // the Win32 headers, so keep this side to the portable fallback.
+    snprintf(exePath, sizeof(exePath), "%s", "(exe path: see windows_host)");
+#else
+    ssize_t n = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
+    if (n > 0) exePath[n] = '\0';
+    else       snprintf(exePath, sizeof(exePath), "%s", "(unknown)");
+#endif
+    printf("[Matrix] build " __DATE__ " " __TIME__ " -- %s\n", exePath);
+    fflush(stdout);
+}
+
 int matrix_player_main() {
+    logBuildStamp();
+
     if (getenv("MATRIX_ISO_TEST")) {
         return runIsoSelfTest();
     }

@@ -2430,7 +2430,12 @@ void PlayerWindow::onPanelClick(int x, int y) {
     case SettingsPanel::AudioSettings: {
         if (ptInRect(asCloseRc_, x, y)) { closeActivePanel(); return; }  // cancel, no apply
         for (int i = 0; i < (int)asBackendRowRects_.size(); i++)
-            if (ptInRect(asBackendRowRects_[i], x, y)) { asBackendSelIdx_ = i; invalidate(); return; }
+            if (ptInRect(asBackendRowRects_[i], x, y)) {
+                asBackendSelIdx_ = i;
+                asDeviceScrollY_ = 0;
+                invalidate();
+                return;
+            }
 
         AudioBackend sel = asBackendOptions_.empty() ? AudioBackend::Usb : asBackendOptions_[asBackendSelIdx_];
         int devRow = hitTestListRows(asDeviceListRows_, x, y);
@@ -2541,7 +2546,30 @@ void PlayerWindow::onPanelWheel(int x, int y, int delta) {
         invalidate();
         return;
     }
-    case SettingsPanel::AudioSettings:
+    case SettingsPanel::AudioSettings: {
+        (void)x; (void)y;
+        AudioBackend sel = asBackendOptions_.empty() ? AudioBackend::Usb : asBackendOptions_[asBackendSelIdx_];
+        int rowCount = 0;
+        switch (sel) {
+        case AudioBackend::Usb: rowCount = (int)asUsbDevices_.size(); break;
+#ifdef _WIN32
+        case AudioBackend::Wasapi: rowCount = (int)asWasapiDevices_.size() + 1; break;
+#else
+#ifdef MATRIX_HAVE_ALSA
+        case AudioBackend::Alsa: rowCount = (int)asAlsaDevices_.size() + 1; break;
+#endif
+#ifdef MATRIX_HAVE_JACK
+        case AudioBackend::Jack: rowCount = (int)asJackPorts_.size() + 1; break;
+#endif
+#endif
+        default: break;
+        }
+        int listH = asDeviceListArea_.bottom - asDeviceListArea_.top;
+        int contentH = rowCount * kPanelRowH;
+        asDeviceScrollY_ = std::clamp(asDeviceScrollY_ - delta, 0, std::max(0, contentH - listH));
+        invalidate();
+        return;
+    }
     case SettingsPanel::None:
         (void)x; (void)y;
         return;
@@ -2572,6 +2600,7 @@ void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
     mfListRows_ = widgets::drawScrollList(canvas, toRect(listArea), mfRoots_,
                                           mfSelectedRow_, (float)mfScrollY_, (float)kPanelRowH,
                                           mfHoverRow_, widgets::kTextFree, matrixListStyle());
+    panels::drawScrollbar(canvas, listArea, (int)mfRoots_.size() * kPanelRowH, mfScrollY_, uiScale_);
     if (mfRoots_.empty()) {
         Rect a = toRect(listArea);
         canvas.textStyled("No music folders added yet.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,
@@ -2654,6 +2683,7 @@ void PlayerWindow::onAudioSettings() {
 
     asHoverBackendRow_ = -1;
     asHoverDeviceRow_  = -1;
+    asDeviceScrollY_ = 0;
     asHoverClose_ = asHoverApply_ = false;
 #ifdef _WIN32
     asHoverModeRow_ = -1;
@@ -2685,17 +2715,38 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     y += 12.0f * uiScale_;
 
     AudioBackend sel = asBackendOptions_.empty() ? AudioBackend::Usb : asBackendOptions_[asBackendSelIdx_];
-    float listH = 6.0f * kPanelRowH;
+
+    // The device list hugs its content and grows into whatever space is left
+    // above the bottom-docked Apply button, instead of a fixed 6-row window.
+    // With 10+ ALSA devices that fixed height hid everything past row 6 behind
+    // a scroll with no affordance — drawScrollList clips silently and draws no
+    // scrollbar, so a DAC in row 7 simply looked absent.
+    float btnH = 36.0f * uiScale_;
+    float listTop = y + textSizes_.nav * 1.6f;   // every branch draws its label first
+    float listBottomLimit = (float)content.bottom - pad - btnH - pad;
+#ifdef _WIN32
+    if (sel == AudioBackend::Wasapi)             // the Mode radios sit below the list
+        listBottomLimit -= 12.0f * uiScale_ + textSizes_.nav * 1.6f + 2.0f * rowH + 12.0f * uiScale_;
+#endif
+    // 3-row floor keeps the empty-state messages below readable.
+    auto listHeightFor = [&](int rowCount) {
+        float minH  = 3.0f * kPanelRowH;
+        float avail = std::max(listBottomLimit - listTop, minH);
+        return std::clamp((float)rowCount * kPanelRowH, minH, avail);
+    };
 
     if (sel == AudioBackend::Usb) {
         canvas.textStyled("USB DAC:", c.x + pad, y, textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Roman);
         y += textSizes_.nav * 1.6f;
-        asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
         std::vector<std::string> labels;
         for (auto& d : asUsbDevices_) labels.push_back(d.name);
+        float listH = listHeightFor((int)labels.size());
+        asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
         asDeviceListRows_ = widgets::drawScrollList(canvas, toRect(asDeviceListArea_), labels,
-                                                    asUsbSel_, 0.0f, (float)kPanelRowH,
+                                                    asUsbSel_, (float)asDeviceScrollY_, (float)kPanelRowH,
                                                     asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
+        panels::drawScrollbar(canvas, asDeviceListArea_, (int)labels.size() * kPanelRowH,
+                              asDeviceScrollY_, uiScale_);
         if (labels.empty()) {
             Rect a = toRect(asDeviceListArea_);
             canvas.textStyled("No USB audio devices found.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,
@@ -2707,13 +2758,16 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     else if (sel == AudioBackend::Wasapi) {
         canvas.textStyled("Device:", c.x + pad, y, textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Roman);
         y += textSizes_.nav * 1.6f;
-        asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
         std::vector<std::string> labels;
         labels.push_back("(Default device)");
         for (auto& d : asWasapiDevices_) labels.push_back(wideToUtf8(d.name));
+        float listH = listHeightFor((int)labels.size());
+        asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
         asDeviceListRows_ = widgets::drawScrollList(canvas, toRect(asDeviceListArea_), labels,
-                                                    asWasapiSel_, 0.0f, (float)kPanelRowH,
+                                                    asWasapiSel_, (float)asDeviceScrollY_, (float)kPanelRowH,
                                                     asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
+        panels::drawScrollbar(canvas, asDeviceListArea_, (int)labels.size() * kPanelRowH,
+                              asDeviceScrollY_, uiScale_);
         y += listH + 12.0f * uiScale_;
 
         canvas.textStyled("Mode:", c.x + pad, y, textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Roman);
@@ -2736,13 +2790,16 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     else if (sel == AudioBackend::Alsa) {
         canvas.textStyled("Device:", c.x + pad, y, textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Roman);
         y += textSizes_.nav * 1.6f;
-        asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
         std::vector<std::string> labels;
         labels.push_back("(System default)");
         for (auto& d : asAlsaDevices_) labels.push_back(d.name);
+        float listH = listHeightFor((int)labels.size());
+        asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
         asDeviceListRows_ = widgets::drawScrollList(canvas, toRect(asDeviceListArea_), labels,
-                                                    asAlsaSel_, 0.0f, (float)kPanelRowH,
+                                                    asAlsaSel_, (float)asDeviceScrollY_, (float)kPanelRowH,
                                                     asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
+        panels::drawScrollbar(canvas, asDeviceListArea_, (int)labels.size() * kPanelRowH,
+                              asDeviceScrollY_, uiScale_);
         y += listH + 12.0f * uiScale_;
     }
 #endif
@@ -2750,13 +2807,16 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     else if (sel == AudioBackend::Jack) {
         canvas.textStyled("Starting port:", c.x + pad, y, textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Roman);
         y += textSizes_.nav * 1.6f;
-        asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
         std::vector<std::string> labels;
         labels.push_back("(Auto-connect to first available ports)");
         for (auto& p : asJackPorts_) labels.push_back(p.portName);
+        float listH = listHeightFor((int)labels.size());
+        asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
         asDeviceListRows_ = widgets::drawScrollList(canvas, toRect(asDeviceListArea_), labels,
-                                                    asJackSel_, 0.0f, (float)kPanelRowH,
+                                                    asJackSel_, (float)asDeviceScrollY_, (float)kPanelRowH,
                                                     asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
+        panels::drawScrollbar(canvas, asDeviceListArea_, (int)labels.size() * kPanelRowH,
+                              asDeviceScrollY_, uiScale_);
         if (asJackPorts_.empty()) {
             Rect a = toRect(asDeviceListArea_);
             canvas.textStyled("No running JACK server found (or no physical playback ports).",
@@ -2768,7 +2828,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
 #endif
 #endif
 
-    float btnW = 120.0f * uiScale_, btnH = 36.0f * uiScale_;
+    float btnW = 120.0f * uiScale_;   // btnH declared above — the list is sized against it
     int by = (int)(content.bottom - (btnH + pad));
     asBtnApply_ = { (int)(content.right - pad - btnW), by, content.right - (int)pad, (int)(by + btnH) };
     panels::drawButton(canvas, asBtnApply_, "Apply", asHoverApply_, textSizes_.nav, true);
@@ -2910,6 +2970,7 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     eqListRows_ = widgets::drawScrollList(canvas, toRect(listArea), labels,
                                           eqSelectedRow_, (float)eqScrollY_, (float)kPanelRowH,
                                           eqHoverRow_, widgets::kTextFree, matrixListStyle());
+    panels::drawScrollbar(canvas, listArea, (int)labels.size() * kPanelRowH, eqScrollY_, uiScale_);
     if (labels.empty()) {
         Rect a = toRect(listArea);
         canvas.textStyled("No profiles match.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,
@@ -2997,6 +3058,7 @@ void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
     fpListRows_ = widgets::drawScrollList(canvas, toRect(listArea), labels,
                                           -1, (float)fpScrollY_, (float)kPanelRowH,
                                           fpHoverRow_, widgets::kTextFree, matrixListStyle());
+    panels::drawScrollbar(canvas, listArea, (int)labels.size() * kPanelRowH, fpScrollY_, uiScale_);
     if (labels.empty()) {
         Rect a = toRect(listArea);
         canvas.textStyled("No subfolders here.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,

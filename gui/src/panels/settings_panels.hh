@@ -36,4 +36,16 @@ void drawButton(Canvas& canvas, const LayoutRect& rc, const std::string& label,
 LayoutRect drawHeader(Canvas& canvas, const LayoutRect& area, const std::string& title,
                       float uiScale, float headerTextSize, LayoutRect& closeRc);
 
+// Overflow indicator for a widgets::drawScrollList viewport: a thin track +
+// proportional thumb docked inside the list's right edge. Draws nothing when
+// the content fits (contentH <= listArea height), so callers can call it
+// unconditionally. Purely an affordance — it is not hit-tested or draggable;
+// scrolling stays on the wheel (PlayerWindow::onPanelWheel).
+//
+// drawScrollList clips overflowing rows away silently, with no visual hint
+// they exist — a USB DAC sitting in row 7 of a 6-row viewport was invisible
+// and unreachable-looking. Every panel that scrolls should draw this.
+void drawScrollbar(Canvas& canvas, const LayoutRect& listArea,
+                   int contentH, int scrollY, float uiScale);
+
 } // namespace panels

@@ -7,10 +7,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <algorithm>
-
-#ifndef _WIN32
-#include <cmath>
-#endif
+#include <cmath>   // both platforms: drawFrame()'s whole-pixel floor()
 
 // Draw from the app palette (theme.hh), not the framework's bluer col:: default.
 static Color toColor(ColorRef c) {
@@ -98,14 +95,9 @@ void ArtWindow::show(const std::string& imagePath) {
     int w = mi.rcMonitor.right  - mi.rcMonitor.left;
     int h = mi.rcMonitor.bottom - mi.rcMonitor.top;
 
-    if (artTex_ != kInvalidTexture) { renderer_->destroy_texture(artTex_); artTex_ = kInvalidTexture; }
-    // Fullscreen view: target the monitor's own resolution so quality is
-    // unaffected by the resolution-matching done for the small thumbnails.
-    if (renderer_) {
-        FileByteReader reader;
-        artTex_ = createTextureFromImageFile(*renderer_, reader, imagePath.c_str(), w, h,
-                                             &artTexW_, &artTexH_);
-    }
+    // Sized against the monitor's own resolution, before the window moves
+    // there — renderer_->width() is still the hidden 800x800 at this point.
+    loadArtTexture(w, h);
 
     SetWindowPos(hwnd_, HWND_TOP,
         mi.rcMonitor.left, mi.rcMonitor.top, w, h, SWP_SHOWWINDOW);
@@ -173,6 +165,13 @@ bool ArtWindow::create(Host* host) {
     // InputSink (see onPointer()/onKey() below).
     display_->set_sink(window_->surface(), this);
 
+    // Fullscreen artwork is a viewing surface — no cursor over it. Matches
+    // the Windows branch's WM_SETCURSOR/SetCursor(nullptr) above. The policy
+    // is per-surface and never changes, so registering it once here is enough:
+    // the pointer gets the normal arrow back the moment it re-enters the main
+    // window's surface (including when this one unmaps on hide()).
+    display_->set_cursor_hidden(window_->surface(), true);
+
     surfaceProvider_ = std::make_unique<WaylandSurfaceProvider>(*display_, *window_);
     try {
         // 3 swapchain images, matching the Windows branch's own choice.
@@ -229,13 +228,8 @@ void ArtWindow::show(const std::string& imagePath) {
     // notifyResized(), so don't reorder this to "match" Windows.
     if (renderer_) renderer_->notifyResized();
 
-    if (artTex_ != kInvalidTexture) { renderer_->destroy_texture(artTex_); artTex_ = kInvalidTexture; }
-    if (renderer_) {
-        FileByteReader reader;
-        artTex_ = createTextureFromImageFile(*renderer_, reader, imagePath.c_str(),
-                                             (int)renderer_->width(), (int)renderer_->height(),
-                                             &artTexW_, &artTexH_);
-    }
+    if (renderer_)
+        loadArtTexture((int)renderer_->width(), (int)renderer_->height());
     visible_ = true;
     markDirty();
 }
@@ -277,19 +271,34 @@ void ArtWindow::onKey(const KeyEvent& e) {
 
 // ── Portable (both platforms): updateImage / markDirty / renderIfDirty / drawFrame ──
 
+void ArtWindow::loadArtTexture(int boxW, int boxH) {
+    if (artTex_ != kInvalidTexture) { renderer_->destroy_texture(artTex_); artTex_ = kInvalidTexture; }
+    artTexW_ = artTexH_ = 0;
+    if (!renderer_ || currentPath_.empty() || boxW <= 0 || boxH <= 0) return;
+
+    // ImageFit::kContain + mips=false is the whole quality story for this view.
+    // kContain returns the art resampled (Magic Kernel Sharp — see
+    // img_decode.hh) to exactly the pixels it will occupy inside boxW x boxH,
+    // so drawFrame() can blit it 1:1 and no GPU filter ever scales it. The
+    // alternative — upload it at some other size and let VK_FILTER_LINEAR sort
+    // it out — is a 2x2 bilinear tap per pixel, plus mip blending if a chain
+    // exists, and that is exactly what made this view read softer than a
+    // dedicated image viewer showing the same file. mips=false follows: at 1:1
+    // level 0 is the only level the sampler can want.
+    FileByteReader reader;
+    artTex_ = createTextureFromImageFile(*renderer_, reader, currentPath_.c_str(),
+                                         boxW, boxH, &artTexW_, &artTexH_,
+                                         /*mips=*/false, ImageFit::kContain);
+}
+
 void ArtWindow::updateImage(const std::string& imagePath) {
     // Follow the now-playing album while fullscreen: called whenever the
     // transport art path changes (track/album/single boundary). Reloads the
     // texture in place — no repositioning, no swapchain churn.
     if (!isVisible() || imagePath == currentPath_) return;
     currentPath_ = imagePath;
-    if (artTex_ != kInvalidTexture) { renderer_->destroy_texture(artTex_); artTex_ = kInvalidTexture; }
-    if (renderer_ && !imagePath.empty()) {
-        FileByteReader reader;
-        artTex_ = createTextureFromImageFile(*renderer_, reader, imagePath.c_str(),
-                                             (int)renderer_->width(), (int)renderer_->height(),
-                                             &artTexW_, &artTexH_);
-    }
+    if (renderer_)
+        loadArtTexture((int)renderer_->width(), (int)renderer_->height());
     markDirty();
 }
 
@@ -306,7 +315,14 @@ void ArtWindow::renderIfDirty() {
     // this unconditionally every loop tick while isVisible(), so it's the
     // natural place to drive it, keeping LinuxHost fully ignorant of ArtWindow.
     if (window_) {
-        if (window_->take_resized() && renderer_) { renderer_->notifyResized(); markDirty(); }
+        if (window_->take_resized() && renderer_) {
+            renderer_->notifyResized();
+            // The texture is sized for one exact view size (see
+            // loadArtTexture); once that changes it is no longer a 1:1 blit,
+            // so rebuild it rather than letting the GPU scale the old one.
+            loadArtTexture((int)renderer_->width(), (int)renderer_->height());
+            markDirty();
+        }
         if (window_->closed()) hide();  // defensive parity with Windows' WM_DESTROY;
                                          // unlikely in a kiosk/fullscreen compositor
     }
@@ -332,12 +348,19 @@ void ArtWindow::drawFrame() {
         // No canvas.clear() here: it's an opaque vector rect that composites
         // AFTER images (see Phase 1's lesson) and would hide the art drawn
         // below — the render pass's own black clear covers the letterbox.
-        // Scale to fit the monitor, preserving aspect ratio, centered —
-        // matches the old GDI+ behavior. GPU bilinear sampling handles the
-        // actual resample via the destination rect.
+        // loadArtTexture() already resampled the art to fit this view, so
+        // scale is 1 and this is a straight 1:1 blit. The min() stays as the
+        // safety net for the one frame where a resize has landed but the
+        // rebuilt texture has not (and for a load failure mid-resize).
+        //
+        // Whole-pixel destination: at 1:1 a half-pixel offset would put every
+        // sample exactly between two texels, and bilinear would hand back the
+        // average — undoing the entire point of resampling on the CPU. Both
+        // axes floor for the same reason, so the pixel grids stay locked.
         float scale = std::min(canvas.w() / (float)artTexW_, canvas.h() / (float)artTexH_);
-        float dstW = artTexW_ * scale, dstH = artTexH_ * scale;
-        canvas.image(artTex_, (canvas.w() - dstW) * 0.5f, (canvas.h() - dstH) * 0.5f, dstW, dstH);
+        float dstW = std::floor(artTexW_ * scale), dstH = std::floor(artTexH_ * scale);
+        canvas.image(artTex_, std::floor((canvas.w() - dstW) * 0.5f),
+                     std::floor((canvas.h() - dstH) * 0.5f), dstW, dstH);
     } else {
         canvas.clear(toColor(CLR_BG_MAIN));
         // Floored at the geometric minimum (ui_min_text_size.gen.h) like every

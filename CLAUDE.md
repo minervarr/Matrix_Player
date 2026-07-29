@@ -191,7 +191,13 @@ actually has.
 
 - Hiby FC4 — VID `0x32BB`, PID `0x0004`, UAC2, High-Speed USB
 - Windows: MI_00 (interface 0) must have **libusbK** bound via Zadig
-- Linux: no driver binding needed (libusb talks to the kernel's usbfs directly)
+- Linux: no driver *binding* needed (libusb talks to the kernel's usbfs
+  directly, and `UsbAudioDriver::open()` auto-detaches `snd-usb-audio` itself —
+  don't blacklist the module), but the device node **does** need permissions:
+  `/dev/bus/usb/*` is root:root 0664, so a normal user can't open it
+  read-write and the USB backend fails with `LIBUSB_ERROR_ACCESS`. Install
+  `scripts/linux/70-matrix-player-usb.rules` (one-time, needs root once — see
+  the header comment in that file); adding another DAC is one line there.
 - Supports: 44.1k–768kHz PCM, 16/24/32-bit, DSD native (alt=4)
 
 ### Not yet wired

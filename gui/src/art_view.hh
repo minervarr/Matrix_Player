@@ -70,6 +70,12 @@ public:
 #endif
 
 private:
+    // (Re)builds artTex_ from currentPath_, resampled to exactly the pixels it
+    // will occupy inside a boxW x boxH view — see the definition. Callers pass
+    // the box explicitly because Windows sizes the texture before the window
+    // moves to the monitor, when renderer_->width() is still the stale 800x800.
+    void loadArtTexture(int boxW, int boxH);
+
 #ifdef _WIN32
     static LRESULT CALLBACK wndProc(HWND, UINT, WPARAM, LPARAM);
     HWND hwnd_ = nullptr;

@@ -61,4 +61,25 @@ LayoutRect drawHeader(Canvas& canvas, const LayoutRect& area, const std::string&
     return { area.left, (int)(area.top + headerH), area.right, area.bottom };
 }
 
+void drawScrollbar(Canvas& canvas, const LayoutRect& listArea,
+                   int contentH, int scrollY, float uiScale) {
+    Rect a = toRect(listArea);
+    if (a.h <= 0.0f || contentH <= (int)a.h) return;   // everything already visible
+
+    float barW = 6.0f * uiScale;
+    float x    = a.x + a.w - barW - SP_XS * uiScale;
+
+    canvas.rect(x, a.y, barW, a.h, toColor(CLR_SEPARATOR));
+
+    // Thumb length is the visible fraction of the content, floored so it stays
+    // grabbable-looking on very long lists.
+    float thumbH = std::max(a.h * (a.h / (float)contentH), 24.0f * uiScale);
+    float maxScroll = (float)contentH - a.h;
+    float t = std::clamp((float)scrollY / maxScroll, 0.0f, 1.0f);
+
+    // Chrome, not state — CLR_ACCENT stays reserved for selection/state
+    // (docs/UI_DESIGN_SYSTEM.md principle #4).
+    canvas.rect(x, a.y + t * (a.h - thumbH), barW, thumbH, toColor(CLR_TEXT_SECONDARY));
+}
+
 } // namespace panels

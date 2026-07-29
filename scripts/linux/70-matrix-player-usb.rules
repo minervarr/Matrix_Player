@@ -1,0 +1,45 @@
+# Matrix Player — direct USB access to the DAC.
+#
+# WHY THIS IS NEEDED
+# Matrix Player's primary output talks to the DAC over libusb, bypassing ALSA
+# entirely. libusb opens /dev/bus/usb/<bus>/<dev> read-write, but the kernel
+# creates those nodes root:root 0664 — a normal user gets read only, so the
+# open fails with EACCES and the USB backend can't start. Nothing about the
+# app can fix that from userspace; the permission has to be granted here.
+#
+# You do NOT need to blacklist snd-usb-audio or otherwise pry the device away
+# from ALSA. The driver calls libusb_set_auto_detach_kernel_driver() and
+# detaches the audio-control/streaming interfaces itself at open time, so the
+# kernel driver steps aside on its own and reattaches when the app exits.
+#
+# INSTALL (one time, needs root once — after this, never sudo to play)
+#   sudo install -m 0644 scripts/linux/70-matrix-player-usb.rules \
+#        /etc/udev/rules.d/70-matrix-player-usb.rules
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger --subsystem-match=usb --action=add
+# Or just replug the DAC after reloading. Verify with:
+#   getfacl /dev/bus/usb/$(lsusb | sed -n 's/Bus \([0-9]*\) Device \([0-9]*\).*32bb:0004.*/\1\/\2/p')
+# and look for a "user:<you>:rw-" line.
+#
+# TAG+="uaccess" hands the decision to systemd-logind: it puts an ACL on the
+# device node for whoever is currently logged in at the local seat, and revokes
+# it at logout. That is the reason this file needs no GROUP= and no group
+# membership, and why it keeps working across user switches. Must be numbered
+# below 73 so the tag is set before 73-seat-late.rules acts on it.
+#
+# ADDING ANOTHER DAC
+# One line per device. The app itself takes any VID/PID (Audio Settings, stored
+# as usb_vid/usb_pid), so this file is the only place a new DAC has to be
+# named. Find the ID with `lsusb`; the hex must be lowercase here.
+
+# HiBy FC4 — UAC2, High-Speed
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="32bb", ATTR{idProduct}=="0004", TAG+="uaccess"
+
+# Example — copy this line, fill in your own IDs, uncomment:
+#SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="xxxx", ATTR{idProduct}=="yyyy", TAG+="uaccess"
+
+# FALLBACK for systems without systemd-logind (no uaccess support): grant the
+# device to a group instead and add yourself to it (`usermod -aG audio $USER`,
+# then log out and back in). Prefer uaccess above where it is available — it
+# needs no group and follows the active session.
+#SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="32bb", ATTR{idProduct}=="0004", MODE="0660", GROUP="audio"
