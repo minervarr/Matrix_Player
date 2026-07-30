@@ -180,11 +180,13 @@ ExternalProject_Add(min_text_size_ext
     BUILD_BYPRODUCTS ${MIN_TEXT_SIZE_INSTALL_DIR}/${MIN_TEXT_SIZE_BIN_NAME})
 
 set(UI_MIN_TEXT_SIZE_HEADER ${CMAKE_BINARY_DIR}/generated/ui_min_text_size.gen.h)
+# Must list exactly the faces gui/src/ui_fonts.hh loads: the emitted floor is
+# the WORST case across them, and a face left out here could render below it.
 set(UI_FONT_FILES
-    ${CMAKE_SOURCE_DIR}/assets/fonts/lm/lmroman10-regular.otf
-    ${CMAKE_SOURCE_DIR}/assets/fonts/lm/lmroman10-bold.otf
-    ${CMAKE_SOURCE_DIR}/assets/fonts/lm/lmroman10-italic.otf
-    ${CMAKE_SOURCE_DIR}/assets/fonts/lm/lmmono10-regular.otf)
+    ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-Regular.otf
+    ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-Bold.otf
+    ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-Italic.otf
+    ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCMMono10-Regular.otf)
 add_custom_command(
     OUTPUT ${UI_MIN_TEXT_SIZE_HEADER}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated

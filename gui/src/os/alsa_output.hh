@@ -33,9 +33,19 @@ public:
     int  getConfiguredRate()     const override { return fmt_.sampleRate; }
     int  getConfiguredChannels() const override { return fmt_.channels; }
 
+    // Same six AudioOutput no-ops JackOutput had to implement (audio_output.h:32-50).
+    // The device buffer is this backend's only cushion, so these report on it
+    // directly rather than on an application ring.
+    void   flush() override;
+    int    pendingPlaybackMs() const override;
+    bool   hasFaulted() const override;
+    size_t ringAvailable() const override;
+
 private:
     std::string deviceId_;
     AlsaSink sink_;
     ae::AudioFormat fmt_{};
     std::vector<uint8_t> wireBuf_;
+    // Reused by writeFloat32 so the decode thread never allocates mid-track.
+    std::vector<int32_t> floatConvBuf_;
 };

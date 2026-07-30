@@ -1,5 +1,7 @@
 #include "player_view.hh"
 #include "log_util.h"
+#include "ui_fonts.hh"
+#include "ui_icons.hh"
 #include "art_texture.hh"
 #include "img_decode.hh"
 #include "text_util.hh"
@@ -264,6 +266,9 @@ static bool splitNameModifier(const std::string& s, std::string& base, std::stri
 // in os/windows_host.cc (WindowsHost) / os/linux_host.cc (LinuxHost) — see
 // host.hh. Hotkey IDs are in hotkey_ids.hh (shared by both hosts).
 
+// Defined further down, next to the icon bake it exists to protect.
+static void pruneStaleCaches(const std::string& dir, const std::string& keepPath);
+
 bool PlayerWindow::create() {
     host_ = make_host();
 
@@ -348,12 +353,23 @@ bool PlayerWindow::create() {
             return exeDir + rel;
         };
 
-        std::string fontPath = toUtf8Path("fonts/lm/lmroman10-regular.otf");
+        std::string fontPath = toUtf8Path(ui_fonts::regular());
         uiFont_.load(fontPath.c_str());
         fontsDir_ = toUtf8Path("fonts/");
 
-        // Generate MSDF atlas from the same OTF (cached to disk for fast reload).
-        std::string cachePath = toUtf8Path("fonts/lmroman10-regular.msdf.cache");
+        // Drop atlas caches left by an older icon set / font (see ui_fonts.hh):
+        // they are ~45 MB each and would otherwise accumulate forever.
+        pruneStaleCaches(toUtf8Path(ui_fonts::cacheDir()),
+                         toUtf8Path(ui_fonts::cacheName().c_str()));
+
+        // Generate the MTSDF atlas from the same OTF (cached to disk for fast
+        // reload). generate() always bakes MTSDF — the alpha channel carries a
+        // true single-channel SDF alongside the multi-channel RGB field; only a
+        // legacy v2 load() atlas is plain MSDF. The names below stay "msdf"
+        // because MsdfFont genuinely handles both variants (isMtsdf() reports
+        // which one is live). The cache name carries the icon-set fingerprint
+        // so redrawn icons can't be served from a stale bake — see ui_fonts.hh.
+        std::string cachePath = toUtf8Path(ui_fonts::cacheName().c_str());
         msdfCachePath_ = cachePath;
 
         FileByteReader loader;
@@ -365,17 +381,23 @@ bool PlayerWindow::create() {
             // fresh addStyle() rebake only happens once per cache generation.
             bool addedStyle = false;
             if (!msdfFont_.hasStyle(FontStyle::Bold))
-                addedStyle |= msdfFont_.addStyle(loader, toUtf8Path("fonts/lm/lmroman10-bold.otf").c_str(), FontStyle::Bold);
+                addedStyle |= msdfFont_.addStyle(loader, toUtf8Path(ui_fonts::bold()).c_str(), FontStyle::Bold);
             if (!msdfFont_.hasStyle(FontStyle::Italic))
-                addedStyle |= msdfFont_.addStyle(loader, toUtf8Path("fonts/lm/lmroman10-italic.otf").c_str(), FontStyle::Italic);
+                addedStyle |= msdfFont_.addStyle(loader, toUtf8Path(ui_fonts::italic()).c_str(), FontStyle::Italic);
             if (!msdfFont_.hasStyle(FontStyle::Math))
-                addedStyle |= msdfFont_.addStyle(loader, toUtf8Path("fonts/lm/lmmono10-regular.otf").c_str(), FontStyle::Math);
+                addedStyle |= msdfFont_.addStyle(loader, toUtf8Path(ui_fonts::mono()).c_str(), FontStyle::Math);
+
+            // UI icon glyphs, BEFORE the fallback scripts: the atlas has a hard
+            // 4096px height ceiling, and this set is small and fixed while the
+            // CJK fallback set grows with the user's library.
+            bool addedIcons = bakeIconGlyphs();
 
             // Cyrillic/Greek (unconditional) + whatever CJK/Hangul/Kana the
             // now-loaded library actually contains — see bakeFallbackGlyphs().
             bool addedFallback = bakeFallbackGlyphs();
 
-            if (addedStyle || addedFallback) msdfFont_.saveCache(cachePath.c_str());
+            if (addedStyle || addedIcons || addedFallback)
+                msdfFont_.saveCache(cachePath.c_str());
 
             renderer_->initMsdf(msdfFont_);
             // The CPU atlas copy (~8 MB) just went to the GPU and is saved
@@ -507,6 +529,54 @@ bool PlayerWindow::create() {
     return true;
 }
 
+// Delete atlas caches written for a superseded icon set or font. Each is
+// ~45 MB, and the fingerprinted filename (ui_fonts.hh) means a new one appears
+// on every icon change — without this they would pile up silently.
+static void pruneStaleCaches(const std::string& dir, const std::string& keepPath) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const std::string keep = fs::path(keepPath).filename().string();
+    for (const auto& e : fs::directory_iterator(dir, ec)) {
+        if (ec) return;
+        if (!e.is_regular_file(ec)) continue;
+        const std::string n = e.path().filename().string();
+        if (n == keep) continue;
+        const std::string suf = ui_fonts::cacheSuffix();
+        if (n.size() < suf.size() || n.compare(n.size() - suf.size(), suf.size(), suf) != 0)
+            continue;
+        if (fs::remove(e.path(), ec))
+            printf("[Fonts] pruned stale atlas cache %s\n", n.c_str());
+    }
+}
+
+bool PlayerWindow::bakeIconGlyphs() {
+    if (!msdfFont_.valid()) return false;
+
+    // A warm cache already carries them — skip the bake and the re-upload.
+    bool anyMissing = false;
+    for (unsigned cp : kIconCodepoints)
+        if (!msdfFont_.hasCodepoint(cp)) { anyMissing = true; break; }
+    if (!anyMissing) return false;
+
+    // Same atlas-residency contract as bakeFallbackGlyphs() below: baking
+    // APPENDS to the CPU atlas pixels, so they must be re-hydrated first.
+    if (!msdfFont_.atlasResident() &&
+        !msdfFont_.ensureAtlasLoaded(msdfCachePath_.empty() ? nullptr
+                                                            : msdfCachePath_.c_str()))
+        return false;
+
+    FileByteReader loader;
+    std::vector<uint32_t> cps(std::begin(kIconCodepoints), std::end(kIconCodepoints));
+    std::string iconPath = host_->exeDir() + ui_fonts::icons();
+    if (msdfFont_.bakeCodepoints(loader, iconPath.c_str(), cps) > 0) return true;
+
+    // Not fatal: drawUiIcon() falls back to the primitive construction, so a
+    // missing/unreadable icon font degrades the look instead of the app.
+    printf("[Icons] icon font not baked (%s) — falling back to primitive icons\n",
+           iconPath.c_str());
+    return false;
+}
+
 bool PlayerWindow::bakeFallbackGlyphs() {
     if (!msdfFont_.valid()) return false;
     // Baking APPENDS rows to the CPU atlas pixels, which are released from
@@ -636,16 +706,16 @@ void PlayerWindow::run() {
     }
 }
 
-// UI icons drawn as native vector shapes (triangle/rect/segment) straight
-// into the curve pass — replaces the old SVG-rasterize-to-texture path
-// (nanosvg + 7 texture uploads at startup). Same geometry as the old SVG
-// viewBox coordinates (36-unit grid, 24 for Close), so they look identical
-// but stay crisp at any button size and cost zero VRAM/upload. They draw
-// after the hover rects in frame order, so they composite on top exactly
-// like text does.
-enum class UiIcon { Play, Stop, Prev, Next, Settings };
-
-static void drawUiIcon(Canvas& c, const LayoutRect& rc, UiIcon icon, Color col) {
+// UI icons are glyphs in the shared MTSDF atlas (see ui_icons.hh) — real
+// Inkscape-authored curves, tinted at draw time, riding the text pass that
+// already runs every frame.
+//
+// Everything below this line is the FALLBACK for when those glyphs aren't
+// available (icon font missing, or an atlas too full to take them): the
+// original native vector construction on a 36-unit grid, matching the SVG
+// viewBox coordinates the artwork is still authored in. Keeping it means a
+// missing font degrades to the old look rather than to blank buttons.
+static void drawUiIconPrimitive(Canvas& c, const LayoutRect& rc, UiIcon icon, Color col) {
     Rect r = toRect(rc);
     float s = std::min(r.w, r.h);
     float ox = r.x + (r.w - s) * 0.5f, oy = r.y + (r.h - s) * 0.5f;
@@ -683,12 +753,22 @@ static void drawUiIcon(Canvas& c, const LayoutRect& rc, UiIcon icon, Color col) 
         }
         break;
     }
+    case UiIcon::Warning:
+        // drawUiIcon() routes this to drawWarningIconPrimitive() before ever
+        // reaching here; listed so the switch stays exhaustive (-Wswitch).
+        break;
     }
 }
 
-// Same 36-unit-grid vector construction as drawUiIcon, for the bitperfect
-// warning banner's triangle-with-exclamation-mark glyph.
-static void drawWarningIcon(Canvas& c, const LayoutRect& rc, Color col) {
+// Same 36-unit-grid fallback construction, for the bitperfect warning
+// banner's triangle-with-exclamation-mark.
+//
+// KNOWN LIMITATION of this fallback: the "!" bar and dot are filled in the
+// SAME colour as the triangle and land in the same pass, so they composite
+// invisibly — this path can only ever draw a solid triangle. The glyph path
+// above cuts the "!" out as real holes, which is what the icon was always
+// meant to be. Not worth fixing here: it is the degraded path.
+static void drawWarningIconPrimitive(Canvas& c, const LayoutRect& rc, Color col) {
     Rect r = toRect(rc);
     float s = std::min(r.w, r.h);
     float ox = r.x + (r.w - s) * 0.5f, oy = r.y + (r.h - s) * 0.5f;
@@ -697,6 +777,18 @@ static void drawWarningIcon(Canvas& c, const LayoutRect& rc, Color col) {
     c.triangle(X(18), Y(4), X(4), Y(32), X(32), Y(32), col);
     c.rect(X(16), Y(13), s * 4 / 36, s * 12 / 36, col);   // "!" bar
     c.rect(X(16), Y(28), s * 4 / 36, s * 4 / 36, col);    // "!" dot
+}
+
+// The entry points the drawing code actually calls: atlas glyph first, the
+// primitive construction only if that glyph isn't baked.
+static void drawUiIcon(Canvas& c, const LayoutRect& rc, UiIcon icon, Color col) {
+    if (drawUiIconGlyph(c, rc, icon, col)) return;
+    if (icon == UiIcon::Warning) drawWarningIconPrimitive(c, rc, col);
+    else                         drawUiIconPrimitive(c, rc, icon, col);
+}
+
+static void drawWarningIcon(Canvas& c, const LayoutRect& rc, Color col) {
+    drawUiIcon(c, rc, UiIcon::Warning, col);
 }
 
 // Album art or the standard placeholder tile — grid tiles, track panel
@@ -1085,8 +1177,8 @@ void PlayerWindow::drawFrame() {
 
         // Centering is done by measuring the styled text ourselves —
         // Canvas::textCentered() measures with the curve font while the UI
-        // renders MSDF, and its baseline convention differs, so labels came
-        // out visibly off-center both ways.
+        // renders from the MTSDF atlas, and its baseline convention differs,
+        // so labels came out visibly off-center both ways.
         auto centeredIn = [&](const std::string& s, const Rect& r, float sz,
                               ColorRef clr, FontStyle st) {
             float w = canvas.textWidthStyled(s, sz, st);
@@ -1405,9 +1497,24 @@ void PlayerWindow::drawFrame() {
         // (source format » DSP stage » output backend). '»' (U+00BB) is in
         // the baked Latin-1 range; '→' (U+2192) is not, so don't swap it in.
         {
-            bool bp = bitperfectMode_.load();
-            const char* dsp = bp ? "BITPERFECT" : "REF EQ";
-            ColorRef dspClr = bp ? CLR_ACCENT : CLR_TEXT_DIM;
+            // Reflects what the chain ACHIEVED (bpState_, set in onPlay), not
+            // what the toggle requested — claiming BITPERFECT while silently
+            // truncating would be exactly the dishonesty this badge exists to
+            // prevent. Before playback starts bpState_ is Off, so fall back to
+            // the toggle for the idle label.
+            const char* dsp;
+            ColorRef    dspClr;
+            switch (bpState_) {
+            case BpState::Exact:     dsp = "BITPERFECT";     dspClr = CLR_ACCENT;   break;
+            // Asterisk, not a lie in either direction: exact up to the server.
+            case BpState::ViaServer: dsp = "BITPERFECT*";    dspClr = CLR_ACCENT;   break;
+            case BpState::Degraded:  dsp = "NOT BITPERFECT"; dspClr = CLR_WARNING;  break;
+            case BpState::Off:
+            default:
+                dsp    = bitperfectMode_.load() && !isPlaying_ ? "BITPERFECT" : "REF EQ";
+                dspClr = bitperfectMode_.load() && !isPlaying_ ? CLR_ACCENT : CLR_TEXT_DIM;
+                break;
+            }
             float rightEdge = t.x + t.w - metrics_.space(16.0f);
             float cy = t.y + t.h * 0.5f;
             float tagW = canvas.textWidthStyled(dsp, metrics_.text.caption, FontStyle::Math);
@@ -1435,6 +1542,13 @@ void PlayerWindow::drawFrame() {
                 segs.push_back({dsp, dspClr});
                 segs.push_back({" \xC2\xBB ", CLR_TEXT_DIM});
                 segs.push_back({audioBackendLabel(), CLR_TEXT_DIM});
+                // The reason, in words. "Full transparency" means the user
+                // should never have to infer WHY the badge says what it says.
+                if (!bpDetail_.empty()) {
+                    segs.push_back({"  \xE2\x80\x94  ", CLR_TEXT_DIM});
+                    segs.push_back({bpDetail_, bpState_ == BpState::Degraded
+                                                   ? CLR_WARNING : CLR_TEXT_DIM});
+                }
 
                 float total = 0;
                 for (auto& s : segs) total += canvas.textWidthStyled(s.text, metrics_.text.caption, FontStyle::Math);
@@ -3206,6 +3320,9 @@ void PlayerWindow::onPlay() {
     // A fresh play attempt always dismisses a stale bitperfect warning,
     // including the stale-selection early-return path just below.
     bitperfectWarning_.clear();
+    // Likewise the achieved-state badge: it must never describe a past track.
+    bpState_ = BpState::Off;
+    bpDetail_.clear();
     Track t;
     {
         std::lock_guard<std::mutex> lk(albumsMu_);
@@ -3301,6 +3418,8 @@ void PlayerWindow::onPlay() {
             fflush(stdout);
             bitperfectWarning_ = "DAC does not support native sample rate " + std::to_string(fileSr) +
                                   " Hz — Bitperfect playback aborted.";
+            bpState_  = BpState::Degraded;
+            bpDetail_ = "Device cannot run " + std::to_string(fileSr) + " Hz natively";
             invalidate();
         } else {
             printf("[Audio][ERROR] Output failed to configure at %d Hz\n", fileSr);
@@ -3329,6 +3448,41 @@ void PlayerWindow::onPlay() {
 #endif
     printf("[Audio] device max bit depth: %d\n", deviceMaxBits);
     fflush(stdout);
+
+    // ── Report what the chain ACTUALLY achieves, never what was merely asked ──
+    // Everything needed is known only here: the negotiated rate and the device's
+    // real bit depth. Each branch also states its reason, so the hover readout
+    // can explain itself rather than leaving the user to infer it.
+    {
+        const int fileBits = active_->bitsPerSample();
+        char why[192];
+        if (!isBitperfect) {
+            bpState_ = BpState::Off;
+            if (fileSr != outSr)
+                snprintf(why, sizeof(why), "Reference EQ — resampling %d \xE2\x86\x92 %d Hz", fileSr, outSr);
+            else
+                snprintf(why, sizeof(why), "Reference EQ — %d Hz, no resampling", outSr);
+        } else if (deviceMaxBits < fileBits) {
+            // The one real loss bit-perfect mode can still hit: a source deeper
+            // than the device. configure() relaxes the depth rather than failing.
+            bpState_ = BpState::Degraded;
+            snprintf(why, sizeof(why), "NOT bit-perfect — %d-bit source truncated to %d-bit device",
+                     fileBits, deviceMaxBits);
+        } else if (audioBackend_ == AudioBackend::Jack) {
+            // Our samples reach jackd intact (float32 carries 24 bits exactly),
+            // but the server owns the final conversion to the device and may be
+            // mixing other clients. Not something this process can verify.
+            bpState_ = BpState::ViaServer;
+            snprintf(why, sizeof(why), "Bit-exact to JACK (%d-bit @ %d Hz); the server owns final conversion",
+                     fileBits, outSr);
+        } else {
+            bpState_ = BpState::Exact;
+            snprintf(why, sizeof(why), "Bit-perfect — %d-bit @ %d Hz, sample-for-sample", fileBits, outSr);
+        }
+        bpDetail_ = why;
+        printf("[Audio] signal path: %s\n", bpDetail_.c_str());
+        fflush(stdout);
+    }
 
     int capturedOutSr  = outSr;
     int capturedFileSr = fileSr;
@@ -3380,15 +3534,26 @@ void PlayerWindow::onPlay() {
     const int  srcCh         = active_->channels();
 
     // Pre-allocate buffers outside the lambda — never allocate on the audio thread.
-    // eqBuf holds EQ'd doubles; second half used as soxr output (in-place reuse).
     // kDecodeChunk is the decoder's typical output frame count per callback.
     const int kDecodeChunk = 4096;
-    const size_t eqHalf  = (size_t)(kDecodeChunk + 256) * srcCh;
-    auto eqBuf  = std::make_shared<std::vector<double>>(eqHalf * 2);
+    const size_t kMaxInFrames = (size_t)(kDecodeChunk + 256);
+    auto eqBuf = std::make_shared<std::vector<double>>(kMaxInFrames * srcCh);
 
-    size_t outBufSz = needsResample
-        ? (size_t)ceil((double)(kDecodeChunk + 256) * capturedOutSr / capturedFileSr + 256) * srcCh
-        : (size_t)(kDecodeChunk + 256) * srcCh;
+    // soxr's output gets its OWN buffer sized by the actual rate ratio.
+    //
+    // It used to be the second half of eqBuf — the same size as the input half —
+    // so soxr was handed an output capacity of kMaxInFrames regardless of ratio.
+    // Upsampling needs MORE room than the input, and soxr only consumes as much
+    // input as it can emit, so it stopped early and the loop ignored idone: the
+    // rest of the chunk was dropped on the floor. At 44.1k -> 96k that discarded
+    // over half of every chunk, permanently. Rates that matched the server took
+    // the !needsResample fast path and were unaffected, which is why only some
+    // tracks in a mixed album broke.
+    const double rsRatio = (double)capturedOutSr / (double)capturedFileSr;
+    const size_t rsFrames = (size_t)std::ceil(kMaxInFrames * rsRatio) + 64;  // +64 slack
+    auto rsBuf = std::make_shared<std::vector<double>>(needsResample ? rsFrames * srcCh : 0);
+
+    size_t outBufSz = needsResample ? rsFrames * srcCh : kMaxInFrames * srcCh;
     auto outBuf = std::make_shared<std::vector<int32_t>>(outBufSz);
 
     std::shared_ptr<void> resamplerPtr;
@@ -3407,40 +3572,49 @@ void PlayerWindow::onPlay() {
         fflush(stdout);
     }
 
-    callbackI32 = [this, outPtr, eqBuf, outBuf, resamplerPtr,
-                   capturedFileSr, capturedOutSr, capturedBits, srcCh, needsResample, eqHalf]
+    callbackI32 = [this, outPtr, eqBuf, rsBuf, outBuf, resamplerPtr,
+                   capturedBits, srcCh, needsResample, kMaxInFrames, rsFrames]
                   (const int32_t* d, int n) {
-        if (d == nullptr || n == 0) return;
-        int frames = srcCh > 0 ? n / srcCh : n;
+        if (d == nullptr || n == 0 || srcCh <= 0) return;
 
         if (!needsResample) {
             // Fast path: rates match — EQ in double, single snap to int32.
             eqManager_.processInPlaceInt32(const_cast<int32_t*>(d), n);
             outPtr->writeInt32Blocking(d, n);
-            playedFrames_.fetch_add(frames, std::memory_order_relaxed);
+            playedFrames_.fetch_add(n / srcCh, std::memory_order_relaxed);
             return;
         }
 
         // Resample path: single quantization point.
-        // 1. EQ int32 → double (no snap)
-        eqManager_.processToDouble(d, eqBuf->data(), n);
+        // Sliced so a chunk larger than kMaxInFrames can never overrun eqBuf,
+        // and looped on idone so no input frame is ever left unconsumed.
+        const size_t inFrames = (size_t)n / srcCh;
+        for (size_t pos = 0; pos < inFrames; ) {
+            const size_t slice = std::min(inFrames - pos, kMaxInFrames);
 
-        // 2. Resample double → double using second half of eqBuf as output
-        size_t idone = 0, odone = 0;
-        soxr_process(static_cast<soxr_t>(resamplerPtr.get()),
-                     eqBuf->data(),        n / srcCh, &idone,
-                     eqBuf->data() + eqHalf, eqHalf / srcCh, &odone);
-        int resampN = (int)(odone * srcCh);
+            // 1. EQ int32 → double (no snap)
+            eqManager_.processToDouble(d + pos * srcCh, eqBuf->data(), (int)(slice * srcCh));
 
-        // Grow outBuf if needed (soxr may produce more than estimated on first call)
-        if (resampN > (int)outBuf->size())
-            outBuf->resize(resampN);
+            // 2. Resample double → double, draining until this slice is fully fed.
+            size_t fed = 0;
+            while (fed < slice) {
+                size_t idone = 0, odone = 0;
+                soxr_process(static_cast<soxr_t>(resamplerPtr.get()),
+                             eqBuf->data() + fed * srcCh, slice - fed, &idone,
+                             rsBuf->data(), rsFrames, &odone);
+                if (idone == 0 && odone == 0) break;   // no progress: don't spin
+                fed += idone;
 
-        // 3. TPDF dither + quantize once to device's max bit depth
-        ditherAndQuantize(eqBuf->data() + eqHalf, outBuf->data(), resampN, capturedBits);
-
-        outPtr->writeInt32Blocking(outBuf->data(), resampN);
-        playedFrames_.fetch_add(resampN / srcCh, std::memory_order_relaxed);
+                if (odone > 0) {
+                    const int resampN = (int)(odone * srcCh);
+                    // 3. TPDF dither + quantize once to the device's max bit depth
+                    ditherAndQuantize(rsBuf->data(), outBuf->data(), resampN, capturedBits);
+                    outPtr->writeInt32Blocking(outBuf->data(), resampN);
+                    playedFrames_.fetch_add(odone, std::memory_order_relaxed);
+                }
+            }
+            pos += slice;
+        }
     };
 
   } // end Reference EQ setup
@@ -3488,6 +3662,10 @@ void PlayerWindow::onStop() {
     }
     if (gaplessThread_.joinable()) gaplessThread_.join();
     stopGapless_.store(false);
+
+    // Nothing is playing, so the badge falls back to showing the mode toggle.
+    bpState_ = BpState::Off;
+    bpDetail_.clear();
 
     // Stop the sink BEFORE joining the decode threads — see onPlay() for why:
     // the decode thread is typically blocked inside output_->writeXBlocking(),

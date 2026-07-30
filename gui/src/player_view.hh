@@ -202,8 +202,14 @@ private:
     // repeatedly — already-covered codepoints are skipped (see
     // MsdfFont::bakeCodepoints).
     // Returns true if anything new was baked (caller must then re-save the
-    // MSDF cache and re-run renderer_->initMsdf() to push the grown atlas).
+    // MTSDF cache and re-run renderer_->initMsdf() to push the grown atlas).
     bool bakeFallbackGlyphs();
+    // Bakes the UI icon glyphs (assets/fonts/icons/matrix-icons.otf) into that
+    // same atlas. Deliberately runs BEFORE bakeFallbackGlyphs(): the atlas has
+    // a hard 4096px height ceiling, and the icon set is small and fixed while
+    // the CJK fallback set grows with the user's library — so icons claim their
+    // rows first. Same "true if anything new was baked" contract as above.
+    bool bakeIconGlyphs();
     int  gridHitTest(int x, int y) const;
     int  trackPanelHitTest(int x, int y) const;
     int  sidebarHitTest(int x, int y) const;
@@ -213,9 +219,11 @@ private:
     // Real window/monitor/message-pump handle — see host.hh.
     std::unique_ptr<Host> host_;
 
-    // Transport/UI icons are drawn as native vector shapes (Canvas
-    // triangle/rect/segment) directly in drawFrame() — no SVG rasterization,
-    // no textures, crisp at any size. See drawUiIcon() in player_view.cc.
+    // Transport/UI icons are glyphs in the shared MTSDF atlas, baked from
+    // assets/fonts/icons/matrix-icons.otf — real curves, tinted at draw time,
+    // no extra GPU pass and no texture uploads. See ui_icons.hh, and
+    // drawUiIcon() in player_view.cc for the primitive fallback used when the
+    // icon font is missing.
 
     // UI mode state
     UiMode  uiMode_ = UiMode::Complete;
@@ -511,6 +519,20 @@ private:
     // onPlay()); cleared at the top of the next onPlay() attempt or on
     // click. Plain string, not atomic — only touched from the UI thread.
     std::string bitperfectWarning_;
+
+    // What the signal path ACTUALLY achieved for the playing track, as opposed
+    // to what the mode toggle asked for. The DSP badge used to read
+    // bitperfectMode_ directly, so it said BITPERFECT whenever the toggle was
+    // on — even when the depth had been truncated or a server owned the final
+    // conversion. Bit-perfect that cannot be trusted is worse than none.
+    enum class BpState {
+        Off,        // Reference EQ — EQ/resampling by design
+        Exact,      // sample-for-sample to a device we own
+        ViaServer,  // exact through our chain, but a sound server converts after us
+        Degraded    // something was genuinely lost (depth truncated)
+    };
+    BpState     bpState_ = BpState::Off;
+    std::string bpDetail_;      // one line, shown in the hover readout
 #ifdef _WIN32
     std::wstring     wasapiDeviceId_;
     WasapiMode       wasapiMode_    = WasapiMode::Shared;
@@ -576,9 +598,15 @@ private:
     // pairs (e.g. "00").
     Font uiFont_;
 
-    // MSDF font: pre-baked distance-field atlas for crisp text at any size
+    // MTSDF font: pre-baked distance-field atlas for crisp text at any size
     // without per-frame Bézier decomposition. Generated once at startup from
-    // the OTF font and cached to disk for subsequent runs.
+    // the OTF font and cached to disk for subsequent runs. Also carries the UI
+    // icon glyphs (see ui_icons.hh) — same atlas, same pass.
+    //
+    // "Mtsdf" vs "Msdf": what generate() bakes is always MTSDF (RGB multi-
+    // channel field + a true single-channel SDF in alpha). The type keeps the
+    // MsdfFont name because it genuinely handles both — a legacy v2 load()
+    // atlas really is plain MSDF — and isMtsdf() reports which is live.
     MsdfFont             msdfFont_;
     std::vector<float>   msdfQuads_;
     // Set once in create(); reused by onScanDone() to re-save the cache

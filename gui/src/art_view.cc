@@ -1,4 +1,5 @@
 #include "art_view.hh"
+#include "ui_fonts.hh"
 #include "art_texture.hh"
 #include "ui_metrics.hh"
 #include "theme.hh"
@@ -59,22 +60,22 @@ bool ArtWindow::create(Host*) {
         return path;
     };
 
-    std::string fontPath = toUtf8Path(L"fonts\\lm\\lmroman10-regular.otf");
+    std::string fontPath = toUtf8Path(ui_fonts::regular());
     uiFont_.load(fontPath.c_str());
 
-    // Generate MSDF atlas (cached to disk, shared with PlayerWindow's own
+    // Generate the MTSDF atlas (cached to disk, shared with PlayerWindow's own
     // MsdfFont instance — same cache file, so whichever window initializes
     // second gets a cache hit instead of re-rasterizing).
-    std::string cachePath = toUtf8Path(L"fonts\\lmroman10-regular.msdf.cache");
+    std::string cachePath = toUtf8Path(ui_fonts::cacheName().c_str());
     FileByteReader loader;
     if (msdfFont_.generate(loader, fontPath.c_str(), cachePath.c_str())) {
         bool addedStyle = false;
         if (!msdfFont_.hasStyle(FontStyle::Bold))
-            addedStyle |= msdfFont_.addStyle(loader, toUtf8Path(L"fonts\\lm\\lmroman10-bold.otf").c_str(), FontStyle::Bold);
+            addedStyle |= msdfFont_.addStyle(loader, toUtf8Path(ui_fonts::bold()).c_str(), FontStyle::Bold);
         if (!msdfFont_.hasStyle(FontStyle::Italic))
-            addedStyle |= msdfFont_.addStyle(loader, toUtf8Path(L"fonts\\lm\\lmroman10-italic.otf").c_str(), FontStyle::Italic);
+            addedStyle |= msdfFont_.addStyle(loader, toUtf8Path(ui_fonts::italic()).c_str(), FontStyle::Italic);
         if (!msdfFont_.hasStyle(FontStyle::Math))
-            addedStyle |= msdfFont_.addStyle(loader, toUtf8Path(L"fonts\\lm\\lmmono10-regular.otf").c_str(), FontStyle::Math);
+            addedStyle |= msdfFont_.addStyle(loader, toUtf8Path(ui_fonts::mono()).c_str(), FontStyle::Math);
         if (addedStyle) msdfFont_.saveCache(cachePath.c_str());
 
         renderer_->initMsdf(msdfFont_);
@@ -185,19 +186,19 @@ bool ArtWindow::create(Host* host) {
     // on-disk MSDF cache file) via the portable Host::exeDir() instead of
     // GetModuleFileNameW — no wide-char conversion needed on this platform.
     std::string exeDir = host->exeDir();
-    std::string fontPath = exeDir + "fonts/lm/lmroman10-regular.otf";
+    std::string fontPath = exeDir + ui_fonts::regular();
     uiFont_.load(fontPath.c_str());
 
-    std::string cachePath = exeDir + "fonts/lmroman10-regular.msdf.cache";
+    std::string cachePath = exeDir + ui_fonts::cacheName();
     FileByteReader loader;
     if (msdfFont_.generate(loader, fontPath.c_str(), cachePath.c_str())) {
         bool addedStyle = false;
         if (!msdfFont_.hasStyle(FontStyle::Bold))
-            addedStyle |= msdfFont_.addStyle(loader, (exeDir + "fonts/lm/lmroman10-bold.otf").c_str(), FontStyle::Bold);
+            addedStyle |= msdfFont_.addStyle(loader, (exeDir + ui_fonts::bold()).c_str(), FontStyle::Bold);
         if (!msdfFont_.hasStyle(FontStyle::Italic))
-            addedStyle |= msdfFont_.addStyle(loader, (exeDir + "fonts/lm/lmroman10-italic.otf").c_str(), FontStyle::Italic);
+            addedStyle |= msdfFont_.addStyle(loader, (exeDir + ui_fonts::italic()).c_str(), FontStyle::Italic);
         if (!msdfFont_.hasStyle(FontStyle::Math))
-            addedStyle |= msdfFont_.addStyle(loader, (exeDir + "fonts/lm/lmmono10-regular.otf").c_str(), FontStyle::Math);
+            addedStyle |= msdfFont_.addStyle(loader, (exeDir + ui_fonts::mono()).c_str(), FontStyle::Math);
         if (addedStyle) msdfFont_.saveCache(cachePath.c_str());
 
         renderer_->initMsdf(msdfFont_);

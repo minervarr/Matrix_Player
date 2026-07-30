@@ -9,6 +9,8 @@ set(MATRIX_PLAYER_PORTABLE_SOURCES
     src/player_view.cc
     src/art_view.cc
     src/ui_metrics.cc
+    src/ui_icons.cc
+    src/ui_icons_draw.cc
     src/panels/settings_panels.cc)
 
 if(WIN32)
@@ -160,5 +162,40 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     add_dependencies(ui_metrics_test generate_ui_min_text_size)
     if(NOT WIN32)
         target_compile_options(ui_metrics_test PRIVATE -Wall)
+    endif()
+
+    # ui_icons_test links the REAL src/ui_icons.cc rather than restating its
+    # arithmetic, which is why the icon placement math is split away from the
+    # Canvas-dependent half (src/ui_icons_draw.cc). Needs no include dirs
+    # beyond src/: ui_icons.hh forward-declares Canvas/Color instead of
+    # including canvas.hh, precisely so this stays a pure-logic test.
+    add_executable(ui_icons_test src/ui_icons_test.cc src/ui_icons.cc)
+    target_include_directories(ui_icons_test PRIVATE src)
+    if(NOT WIN32)
+        target_compile_options(ui_icons_test PRIVATE -Wall)
+    endif()
+
+    # icon_preview — standalone window showing ONLY the icons, at a ladder of
+    # sizes plus the sizes the app really draws them at. An MTSDF bake is only
+    # sharp within a range around its baked density, and judging that needs the
+    # icons side by side at real sizes — not buried in the running player.
+    # Linux-only: it drives WaylandDisplay/WaylandWindow directly rather than
+    # going through Host (which is bound to PlayerWindow).
+    if(NOT WIN32)
+        add_executable(icon_preview
+            ${CMAKE_SOURCE_DIR}/tools/icon_preview/main.cc
+            src/ui_icons.cc
+            src/ui_icons_draw.cc
+            src/ui_metrics.cc)
+        target_include_directories(icon_preview PRIVATE
+            src
+            ${CMAKE_BINARY_DIR}/generated
+            ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/linux)
+        target_compile_options(icon_preview PRIVATE -Wall)
+        add_dependencies(icon_preview
+            compile_shared_shaders compile_vk_canvas_shaders generate_ui_min_text_size)
+        target_link_libraries(icon_preview PRIVATE
+            vk_canvas_core
+            vk_canvas_wayland)
     endif()
 endif()

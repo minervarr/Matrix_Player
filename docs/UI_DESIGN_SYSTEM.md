@@ -21,7 +21,7 @@ the look, update both the code and this doc.
    no native buttons, lists, scrollbars, or dialogs — settings are full-page
    overlays, not modal windows.
 2. **Dark, serif-typographic, single-accent.** A near-black stack of surfaces,
-   Latin Modern (a serif) for all text, and exactly one accent — a vivid green
+   New Computer Modern (a serif) for all text, and exactly one accent — a vivid green
    (`CLR_ACCENT` `rgb(0,200,83)`).
 3. **Square throughout.** Artwork, structural surfaces, and interactive chrome
    (buttons, hover/selection highlights, search fields) all use square corners
@@ -156,11 +156,11 @@ ratio invariant holds at every height — the property the old system violated.
 **Font styles** (`FontStyle`: Roman / Bold / Math / Italic):
 - **Bold** — titles and headers (brand, album titles, page headers, playing row).
 - **Italic** — artist lines, placeholders, empty-state sentences.
-- **Math** — repurposed to Latin Modern **Mono** for numeric readouts (track #,
+- **Math** — repurposed to New Computer Modern **Mono** for numeric readouts (track #,
   duration, time, quality badge) so digits don't jitter as they change.
 - **Roman** — everything else.
 
-**Faces.** Base is Latin Modern (`fonts/lm/*`, serif). Script fallbacks match the
+**Faces.** Base is New Computer Modern (`fonts/newcomputermodern/NewCM10-*`, serif); paths live in `gui/src/ui_fonts.hh`. Script fallbacks match the
 serif lineage: New Computer Modern for Cyrillic/Greek (baked eagerly), and
 Fandol Song / Harano Aji Mincho / UnBatang for CJK/Japanese/Korean (baked lazily
 from scanned metadata). The art window mirrors the same mapping.
@@ -258,18 +258,54 @@ underline (which turns `CLR_ACCENT` on focus).
 
 ## 7. Iconography
 
-Icons are **vector primitives** (triangles + rounded rects), not images or
-glyphs — crisp at any size, zero VRAM. Defined in `drawUiIcon`
-(`player_view.cc:648`) on a 36-unit box scaled into the button:
+Icons are **glyphs in the shared MTSDF atlas** — the same atlas, shader and
+draw pass as the UI text. Not images: they carry no colour, cost no extra GPU
+pass, and are tinted at draw time exactly like text. Same approach Apple uses
+for SF Symbols.
 
-| Icon | Construction |
+Artwork is authored in Inkscape as SVG (`tools/icon_font/icons/*.svg`) and
+packaged into `assets/fonts/icons/matrix-icons.otf` by
+`tools/icon_font/build_icon_font.py`. `PlayerWindow::bakeIconGlyphs()` bakes it
+into the atlas at Private Use Area codepoints; `drawUiIconGlyph`
+(`ui_icons_draw.cc`) draws it.
+
+| Icon | Shape |
 |---|---|
 | Play | one right-pointing triangle |
 | Stop | one rounded square (radius `2/36`) |
 | Prev | left bar + left-pointing triangle |
 | Next | right-pointing triangle + right bar |
-| Settings | 5-tooth gear: circular hub + 5 teeth rotated 72° apart via `Canvas::setRotation`/`clearRotation` |
-| Warning | triangle + `!` bar + dot (`drawWarningIcon`, `player_view.cc:691`) — used only by the warning strip (§8.8) |
+| Settings | 5-tooth gear: circular hub unioned with 5 teeth 72° apart |
+| Warning | triangle with the `!` **cut out as holes** — used only by the warning strip (§8.8) |
+
+Each icon is authored inside a square **design box** measured in ems, whose
+bottom edge sits on the baseline. Two consequences worth knowing:
+
+- The *box*, not each icon's ink, maps onto the target rect — so icons keep
+  their relative sizes, exactly as the old shared 36-unit grid gave them.
+- The box size is the **resolution knob**, and it is set *per icon*: atlas cell
+  size derives from the outline's own bounds, so an N-em glyph is baked at
+  N × 96px. Transport icons use 2 em (192px, drawn 71–284px); the sidebar gear
+  and warning use 1 em (96px, drawn 30–148px). Total ~3.3 MB of atlas.
+
+Denser is **not** automatically better. A bake far above the drawn size means
+heavy minification, and the shader's single bilinear tap smears it — a flat
+4-em box left the gear at 12.8× and the warning at 10.4× minification, and both
+looked blurry. `ui_icons_test` bounds every box on both sides for this reason.
+
+`tools/icon_preview` (Debug, Linux) draws only the icons, at a size ladder plus
+the sizes the app really uses, for judging exactly this.
+
+Because this build sets `MSDFGEN_USE_SKIA=OFF`, msdfgen has no overlap
+resolver: **every icon must be one non-self-intersecting outline** (`Path →
+Stroke to Path`, then `Path → Union` in Inkscape). Nested contours become
+holes automatically. See `tools/icon_font/README.md`.
+
+If the icon font is missing, `drawUiIcon` (`player_view.cc`) falls back to the
+original primitive construction (triangles + rounded rects) so buttons degrade
+to the old look rather than going blank. That fallback cannot draw the
+warning's `!` — it fills bar and dot in the icon's own colour, so they
+composite invisibly.
 
 Color is passed per button — normally `CLR_TEXT_PRIMARY`; the idle **Play** is
 `CLR_ACCENT` (a call to action). The transport bar and Essential mode share

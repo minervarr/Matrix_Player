@@ -95,12 +95,29 @@ int AlsaOutput::writeInt32(const int32_t* data, int numSamples) {
 }
 
 int AlsaOutput::writeFloat32(const float* data, int numSamples) {
-    std::vector<int32_t> tmp(numSamples);
+    // Grow-only scratch: allocating a fresh vector per call put a malloc on the
+    // decode thread, which is exactly where a stall turns into a dropout.
+    if ((int)floatConvBuf_.size() < numSamples) floatConvBuf_.resize((size_t)numSamples);
     for (int i = 0; i < numSamples; ++i) {
         float f = std::clamp(data[i], -1.0f, 1.0f);
-        tmp[i] = (int32_t)((double)f * 2147483647.0);
+        floatConvBuf_[i] = (int32_t)((double)f * 2147483647.0);
     }
-    return writeInt32(tmp.data(), numSamples);
+    return writeInt32(floatConvBuf_.data(), numSamples);
+}
+
+void AlsaOutput::flush() { sink_.flush(); }
+
+bool AlsaOutput::hasFaulted() const { return sink_.hasFaulted(); }
+
+int AlsaOutput::pendingPlaybackMs() const {
+    if (fmt_.sampleRate <= 0) return 0;
+    return (int)((int64_t)sink_.pendingFrames() * 1000 / fmt_.sampleRate);
+}
+
+// Bytes still queued in the device, in the caller's sample units. There is no
+// application-side ring here, so this is the hardware's own backlog.
+size_t AlsaOutput::ringAvailable() const {
+    return (size_t)sink_.pendingFrames() * (size_t)fmt_.channels * sizeof(int32_t);
 }
 
 void AlsaOutput::stop()  { sink_.stop(); }
