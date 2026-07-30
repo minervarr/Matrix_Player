@@ -4,9 +4,10 @@ This document is the written map of Matrix Player's visual language. The GUI is
 **fully custom-rendered** — no OS controls anywhere — through the first-party
 `vk_canvas` Vulkan engine: SDF rounded rectangles, analytic triangles (for
 icons), and MSDF text. Almost everything is drawn in one place,
-`PlayerWindow::drawFrame()` (`gui/src/player_view.cc:745`), with the fullscreen
+`PlayerWindow::drawFrame()` (`gui/src/player_view.cc:793`), with the fullscreen
 album-art window in `gui/src/art_view.cc` and the shared settings-panel widgets
-in `gui/src/panels/settings_panels.cc` (+ the reusable
+in `gui/src/panels/settings_panels.cc`, the scale/type model in
+`gui/src/ui_metrics.hh` (+ the reusable
 `framework/vk_canvas/core/widgets.*`).
 
 `file:line` references throughout point at the source of truth. When you change
@@ -34,9 +35,10 @@ the look, update both the code and this doc.
    meaningful.
 5. **Static and instant by design.** There is no animation. The UI redraws on
    dirty and flips between discrete states immediately (see §9).
-6. **Resolution-robust, not pixel-pinned.** Text sizes are a percentage of
-   window height with a hard legibility floor; all other geometry scales by one
-   proportion factor, `uiScale_` (see §3, §4).
+6. **Resolution-robust, not pixel-pinned.** One factor drives everything:
+   text roles derive from a font-geometry floor times a fixed ratio, and all
+   other geometry goes through `space()`/`stroke()` off the same factor
+   (see §3, §4). No bare pixel literals, no hand-written multiplications.
 
 ---
 
@@ -51,16 +53,17 @@ converted to the engine's float `Color` via `toColor(ref, alpha=1)`.
 | `CLR_BG_TRACKPANEL` | 14,14,14 | Album/track full-page view |
 | `CLR_BG_SIDEBAR` | 18,18,18 | Left nav sidebar |
 | `CLR_BG_TRANSPORT` | 22,22,22 | Bottom transport bar |
-| `CLR_TEXT_PRIMARY` | 242 | Primary text |
-| `CLR_TEXT_SECONDARY` | 128 | Artist, time, duration |
-| `CLR_TEXT_DIM` | 140 | De-emphasized: badges, hints, placeholders |
+| `CLR_TEXT_PRIMARY` | 242 | Primary text (17.7:1 on `CLR_BG_MAIN`) |
+| `CLR_TEXT_SECONDARY` | 170 | Artist, time, duration (8.5:1) |
+| `CLR_TEXT_DIM` | 128 | De-emphasized: badges, hints, placeholders (5.0:1) |
 | `CLR_TEXT_ALBUM_TITLE` | 255 | Grid album title (pure white) |
 | `CLR_ACCENT` | 0,200,83 | Brand + all state (focus/selected/active/playing) |
 | `CLR_HOVER` | 38 | Neutral hover pill / focus frame |
 | `CLR_SEPARATOR` | 36 | 1px hairline separators, unfocused input underline |
 | `CLR_INPUT_BG` | 24 | Search / text-field fill |
 | `CLR_TILE_PLACEHOLDER` | 28 | Album-art placeholder fill |
-| `CLR_ERROR` | 220,70,70 | Reserved for error UI (not yet drawn) |
+| `CLR_WARNING` | 224,180,40 | Non-blocking warnings (bitperfect mismatch strip, §8.8) |
+| `CLR_ERROR` | 220,70,70 | Reserved for hard/fatal failures (not yet drawn) |
 
 **Quality-color tier (a second, scoped palette).** Album art borders and
 track-list "auras" (§8.2/§8.4) are colored by objective audio quality, not
@@ -76,9 +79,16 @@ UI state — this is the one deliberate exception to "one palette":
 Below 44.1kHz, no border is drawn. `qualityColorFor(sampleRate, isDsd)`
 (`gui/src/theme.hh`) is the single place this mapping lives.
 
-**Contrast note:** `CLR_TEXT_DIM` was deliberately raised 80→140 so real
-information (badges/hints) clears WCAG AA (~5.6:1 on the base background) — see
-the comment in `theme.hh`.
+**The text ladder is ORDERED — 242 > 170 > 128 — and must stay that way.** It
+was previously inverted: `CLR_TEXT_DIM` had been raised 80→140 for WCAG without
+re-spacing `CLR_TEXT_SECONDARY` (128) around it, so badges, hints and
+placeholders read *louder* than artist names and durations. Both values already
+cleared AA; the defect was purely ordering. All three tiers now clear AA with
+visible steps between them.
+
+**Tightest contrast in the app:** the transport bar's DSP badge draws
+`CLR_TEXT_DIM` on `CLR_BG_TRANSPORT` (22) — **4.58:1**, above AA's 4.5:1 but
+with almost no margin. Re-check that pair before lowering `CLR_TEXT_DIM`.
 
 **Accent alpha ramp** — the accent is layered at set opacities for tint and glow.
 Keep new uses on this ramp:
@@ -100,31 +110,52 @@ demos — app code must not draw from it. (Removed dead tokens: `CLR_SEEKBAR_*`
 
 ## 3. Typography scale
 
-**Model.** Every text size = `max(pct × windowContentHeight, floorPx)` via
-`ResponsiveTextScale` (`framework/vk_canvas/core/responsive_text.hh`). The floor
+**Model.** One factor, one ratio, one floor — all in
+`gui/src/ui_metrics.hh`:
+
+```
+uiScale  = UiScale{ referenceHeight = 1080, floorScale = 1.0 }.factor(H)
+caption  = kMinReadableTextSizePx * uiScale          // 18.2857 * s
+role(n)  = caption * pow(kUiTypeRatio, n)            // kUiTypeRatio = 1.18
+```
+
+`UiScale` is the framework helper (`framework/vk_canvas/core/layout.hh`).
 `kMinReadableTextSizePx` (~18.29px) is generated at build time from the shipped
-font's thinnest-stroke geometry (`ui_min_text_size.gen.h`) — below it, hairlines
-in the serif faces disappear.
+font's thinnest-stroke geometry (`ui_min_text_size.gen.h`) — the tool already
+calibrates its 0.5px criterion to *this* renderer's MSDF antialiasing and takes
+the 10th percentile of stroke widths, so it is a twice-calibrated floor, not a
+guess. Don't loosen it; design within it.
 
-**Roles** (`gui/src/player_view.hh`; percentages are `numerator/661`):
+**Why the smallest role IS the floor.** Because every role derives from one
+clamped value, the scale clamps **uniformly** below the reference height. The
+hierarchy is preserved at every window size and simply stops growing. The
+previous system authored seven independent percentages against a 661px
+reference — every one of which sat *below* the floor at that reference — so the
+smallest role clamped alone and squashed the scale: fully flat below ~711px, and
+still compressed to ~13% between the bottom four roles at 1080p.
 
-| Role (`textSizes_.*`) | ~px @661 ref | Used for |
-|---|---|---|
-| `badge` | 11.5 | BITPERFECT / REF EQ / quality badges |
-| `secondary` | 11.5 | artist, time, duration, search text |
-| `body` | 12.5 | grid album title, track number |
-| `nav` | 13.0 | nav items, settings rows, track title, brand |
-| `transportTitle` | 14.0 | now-playing title |
-| `trackPanelTitle` | 16.0 | album-view title |
-| `header` | 17.0 | page/panel headers |
+**Roles** (`gui/src/ui_metrics.hh`; px shown at H = 1080, where uiScale = 1.0):
 
-Computed each `recalcLayout()` (`player_view.cc:1302`). **`uiScale_ =
-textSizes_.nav / 13`** is the single factor multiplying every fixed-pixel layout
-value (§4).
+| Role (`metrics_.text.*`) | px @1080 | n | Used for |
+|---|---|---|---|
+| `caption` | 18.29 | 0 | badges, hints, placeholders, section captions |
+| `secondary` | 18.29 | 0 | artist, time, duration, search text |
+| `body` | 21.58 | 1 | grid titles, track titles, nav, settings rows |
+| `title` | 25.46 | 2 | now-playing title, album-view title |
+| `header` | 30.04 | 3 | page + panel headers |
+
+`caption` and `secondary` share a size **deliberately** — they are separated by
+the ordered color ladder (§2) and by font style, not by size. This only works
+because that ladder is ordered; at the old inverted values they were
+indistinguishable.
+
+Computed once per `recalcLayout()` (`player_view.cc:1489`). Verified by
+`gui/src/ui_metrics_test.cc`, which pins the exact values and asserts the
+ratio invariant holds at every height — the property the old system violated.
 
 **Font styles** (`FontStyle`: Roman / Bold / Math / Italic):
 - **Bold** — titles and headers (brand, album titles, page headers, playing row).
-- **Italic** — artist lines, placeholders, empty-state hints.
+- **Italic** — artist lines, placeholders, empty-state sentences.
 - **Math** — repurposed to Latin Modern **Mono** for numeric readouts (track #,
   duration, time, quality badge) so digits don't jitter as they change.
 - **Roman** — everything else.
@@ -141,27 +172,58 @@ centering).
 
 ---
 
-## 4. Spacing & layout
+## 4. Spacing, size & stroke
 
-**Spacing scale** (`theme.hh`; base px, multiply by `uiScale_`):
-`SP_XS 4 · SP_SM 8 · SP_MD 12 · SP_LG 20 · SP_XL 40`. Prefer these over ad-hoc
-literals. (Adoption is in progress — the settings panels use them; some main-UI
-pads remain literals, tracked as follow-up.)
+**Two classes, two helpers.** Nothing multiplies by a scale factor by hand:
 
-**Regions** (`recalcLayout()`, `player_view.cc:1295`; `us = uiScale_`):
-- Transport bar: full width, bottom, height `80·us`, bg `CLR_BG_TRANSPORT`.
-- Sidebar: left, width `max(170, 170·us)`, bg `CLR_BG_SIDEBAR`, 1px right hairline.
+| helper | for | behavior |
+|---|---|---|
+| `metrics_.space(x)` | pads, gaps, row heights, widths, icon boxes | `x * uiScale` |
+| `metrics_.stroke(x)` | hairlines, borders, bars | `max(1, round(x * uiScale))` |
+
+`stroke()` snaps to whole device pixels because continuous scaling puts a 1px
+hairline at 1.33px on a 1440p display, landing blurred across two pixels.
+
+**Spacing scale** (`theme.hh`, authored at the 1080 reference):
+`SP_XS 6 · SP_SM 13 · SP_MD 19 · SP_LG 32 · SP_XL 65`. Prefer these over new
+literals.
+
+**Stroke weights** (authored; @1080 / @1440 / @2160):
+
+| | authored | 1080 | 1440 | 2160 |
+|---|---|---|---|---|
+| hairline separators, field underlines | 1 | 1 | 1 | 2 |
+| accent selection bar | 3 | 3 | 4 | 6 |
+| quality frame (grid) / aura (track list) | 3 | 3 | 4 | 6 |
+| quality per-row border (mixed tiers) | 2 | 2 | 3 | 4 |
+| last-played bar, settings row outline | 2 | 2 | 3 | 4 |
+
+**A single call can carry both classes.** The last-played marker
+(`canvas.rect(x, y + a + space(2), a, stroke(2), …)`) has a spacing *offset* and
+a stroke *thickness*. The test is whether the value reads as a gap or as a line.
+
+**Everything is authored at 1080**, the height this app actually renders at
+(Complete mode force-fullscreens — `os/linux_host.cc`). Values were derived from
+the pre-rigor-pass factor by **truncation**, matching the `(int)` casts the old
+code used; rounding instead shifts each by a pixel and compounded to ~8px on the
+settings rows.
+
+**Regions** (`recalcLayout()`, `player_view.cc:1489`):
+- Transport bar: full width, bottom, height `space(130)`, bg `CLR_BG_TRANSPORT`.
+- Sidebar: left, width `space(277)`, bg `CLR_BG_SIDEBAR`, 1px right hairline.
 - Grid / content: remaining area, bg `CLR_BG_MAIN`.
 - Track panel: when an album is open it **replaces** the grid (same rect), bg
   `CLR_BG_TRACKPANEL`; settings are full-page overlays in the same area.
 
-**Grid tiles:** columns from a ~250px target pitch (clamped 2–8),
-`gridArtSize_ = max(80, gridW/cols − 30)`; square art + centered title + artist.
+**Grid tiles:** columns from a `space(250)` target pitch (clamped 2–8),
+`gridArtSize_ = max(space(80), gridW/cols − space(30))`; square art + centered
+title + artist.
 
-**Row heights** (three, by context): `kPanelRowH 44` (settings list rows),
-`trackRowHeight_ 40·us` (album-view tracks), `34·us` (settings-page inline rows,
-backend radios, search fields). Documented rather than merged — each suits its
-density.
+**Row heights** (three, by context): `kPanelRowH 44` (settings list rows — note
+it is passed *bare*, never pre-scaled, so it keeps the number 44),
+`trackRowHeight_ space(65)` (album-view tracks), `space(55)` (settings-page
+inline rows, backend radios, search fields). Documented rather than merged —
+each suits its density.
 
 ---
 
@@ -198,7 +260,7 @@ underline (which turns `CLR_ACCENT` on focus).
 
 Icons are **vector primitives** (triangles + rounded rects), not images or
 glyphs — crisp at any size, zero VRAM. Defined in `drawUiIcon`
-(`player_view.cc:630`) on a 36-unit box scaled into the button:
+(`player_view.cc:648`) on a 36-unit box scaled into the button:
 
 | Icon | Construction |
 |---|---|
@@ -207,6 +269,7 @@ glyphs — crisp at any size, zero VRAM. Defined in `drawUiIcon`
 | Prev | left bar + left-pointing triangle |
 | Next | right-pointing triangle + right bar |
 | Settings | 5-tooth gear: circular hub + 5 teeth rotated 72° apart via `Canvas::setRotation`/`clearRotation` |
+| Warning | triangle + `!` bar + dot (`drawWarningIcon`, `player_view.cc:691`) — used only by the warning strip (§8.8) |
 
 Color is passed per button — normally `CLR_TEXT_PRIMARY`; the idle **Play** is
 `CLR_ACCENT` (a call to action). The transport bar and Essential mode share
@@ -252,7 +315,7 @@ glow (0.20/0.45/1.0 at radii 12/10/8). A thin accent bottom bar marks
 double-marking). A **quality-color frame** (see the color-tokens section
 above) hugs the art's own bounds when the album's tracks resolve to a color
 tier — sits inside the state rings above, never competing with them.
-Empty states: "No albums yet…" / a per-filter "No EPs yet"-style message when
+Empty states (italic `CLR_TEXT_DIM`, measured-centered): "No albums yet…" / a per-filter "No EPs yet"-style message when
 a type filter has no matches / "No matches for …" when a search does.
 
 ### 8.3 Transport bar
@@ -286,7 +349,27 @@ selection family. Search fields via §8.6's shared field.
 fill, `UI_CORNER_RADIUS`, dim placeholder, caret when focused, a bottom underline
 that turns accent on focus. One implementation for the sidebar and EQ searches.
 
-### 8.7 Fullscreen art window (`art_view.cc`)
+### 8.7 Bitperfect warning strip
+A **non-modal** full-width strip drawn directly above the transport bar when a
+bitperfect-mismatch playback attempt fails (`player_view.cc`, guarded on
+`bitperfectWarning_`). `CLR_WARNING` tint at `UI_SELECT_TINT_ALPHA`, a
+`stroke(1)` hairline top and bottom, the §7 warning icon, then the message in
+`secondary`. It does not reserve or shrink grid space — a rare transient event
+isn't worth a permanent layout dependency — and it clears on the next play
+attempt or on click. This is the only use of `CLR_WARNING`; green stays
+state-only and `CLR_ERROR` stays reserved for hard failures.
+
+### 8.8 Scrollbar affordance (`panels::drawScrollbar`)
+A thin track + proportional thumb docked inside a scrolling list's right edge
+(`settings_panels.cc:69`). `CLR_SEPARATOR` track, `CLR_TEXT_SECONDARY` thumb —
+**chrome, not state**, so it never uses the accent. Draws nothing when the
+content fits, so callers can call it unconditionally. It is purely an
+affordance: not hit-tested, not draggable; scrolling stays on the wheel.
+It exists because `widgets::drawScrollList` clips overflowing rows silently —
+a USB DAC in row 7 of a 6-row viewport was invisible and looked unreachable.
+Every panel that scrolls draws it.
+
+### 8.9 Fullscreen art window (`art_view.cc`)
 A separate window with its own swapchain. Renders only the album texture,
 aspect-fit and centered on `CLR_BG_MAIN`; empty state is centered "No artwork" in
 `CLR_TEXT_DIM` — the same app palette as the main window.
@@ -316,7 +399,15 @@ not a gap. If motion is ever added, it belongs behind the framework's
 4. **One input field.** Text fields go through `drawSearchField`; don't hand-roll
    a box with a raw `RGB()` fill.
 5. **One palette.** Draw from `theme.hh`; never from the framework's `col::`.
-6. **Spacing from the scale.** Prefer `SP_*` over new literals; keep everything
-   `× uiScale_`.
-7. **Text through the role scale.** Use a `textSizes_.*` role + the right
-   `FontStyle`; don't hardcode a pixel size (except the floored fallbacks).
+6. **Spacing from the scale.** Prefer `SP_*` over new literals.
+7. **Text through the role scale.** Use a `metrics_.text.*` role + the right
+   `FontStyle`; never hardcode a pixel size.
+8. **Spacing through `space()`, strokes through `stroke()`.** Never a bare pixel
+   literal in a draw call, and never a hand-written `* scale`. If a value reads
+   as a gap it's `space()`; if it reads as a line it's `stroke()`.
+9. **The text ladder stays ordered:** `CLR_TEXT_PRIMARY` 242 > `CLR_TEXT_SECONDARY`
+   170 > `CLR_TEXT_DIM` 128. Re-check contrast — including DIM on
+   `CLR_BG_TRANSPORT`, the app's tightest pair at 4.58:1 — before touching any
+   of the three.
+10. **`kPanelRowH` is passed bare.** It renders at its literal value and is not
+   pre-scaled; wrap it in `space()` at the call site, don't re-author the constant.
