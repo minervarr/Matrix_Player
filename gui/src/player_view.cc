@@ -1492,15 +1492,18 @@ void PlayerWindow::recalcLayout() {
 
     // Every fixed-pixel value below is authored at the 1080 reference height
     // and passed through metrics_.space() — see ui_metrics.hh. Values that used
-    // to read `X * us` were multiplied by 1.63389 (the old factor at 1080) so
-    // they render identically; values that used to be bare kept their number.
-    int transportH = (int)metrics_.space(131.0f);  // scales with the text it contains
+    // to read `X * us` were re-authored as trunc(X * 1.63389), the old factor at
+    // 1080: TRUNCATED, not rounded, because the original code cast with (int).
+    // Rounding instead shifts these by a pixel each and compounds to ~8px on the
+    // settings rows. Values consumed as floats and accumulated (navRowH, navTop,
+    // gearOffset) keep their fraction. Values that were bare kept their number.
+    int transportH = (int)metrics_.space(130.0f);  // scales with the text it contains
 
     // Sidebar width scales the same way — fixed pixel widths with
     // height-scaled text is how "MATRIX PLAYER" ended up painted over the
     // first grid column's art at 1080p: the sidebar stayed 170px while its
     // text grew ~1.6x.
-    int sidebarW = (int)metrics_.space(278.0f);
+    int sidebarW = (int)metrics_.space(277.0f);
 
     rcTransport_ = { 0, H - transportH, W, H };
     rcSidebar_   = { 0, 0, sidebarW, H - transportH };
@@ -1544,7 +1547,7 @@ void PlayerWindow::recalcLayout() {
     // Tile text block height from the ACTUAL text sizes (two title lines +
     // artist + breathing room) — see gridRowGap_'s comment in the header.
     gridRowGap_ = (int)(titleArtistAdvance(metrics_.text.body) * 2.0f
-                        + metrics_.text.secondary * 1.35f + metrics_.space(29.0f));
+                        + metrics_.text.secondary * 1.35f + metrics_.space(29.41f));
 
     // Track rows likewise scale with their text.
     trackRowHeight_ = (int)metrics_.space(65.0f);
@@ -1555,36 +1558,36 @@ void PlayerWindow::recalcLayout() {
     // Sidebar items — search box sits between the brand and the nav. All
     // Y positions scale with the text (fixed values put "Albums" visibly
     // adrift of the search box across resolutions).
-    rcBrand_       = { 0, 0, sidebarW, (int)metrics_.space(82.0f) };
+    rcBrand_       = { 0, 0, sidebarW, (int)metrics_.space(81.0f) };
     const int searchInset = (int)metrics_.space(12.0f);
-    rcSearch_      = { searchInset, (int)metrics_.space(95.0f),
+    rcSearch_      = { searchInset, (int)metrics_.space(94.0f),
                        sidebarW - searchInset, (int)metrics_.space(147.0f) };
-    float navRowH = metrics_.space(65.0f), navTop = metrics_.space(167.0f);
+    float navRowH = metrics_.space(65.3556f), navTop = metrics_.space(166.6568f);
     rcNavAlbum_  = { 0, (int)(navTop),               sidebarW, (int)(navTop + navRowH) };
     rcNavEp_     = { 0, (int)(navTop + navRowH),     sidebarW, (int)(navTop + navRowH * 2) };
     rcNavSingle_ = { 0, (int)(navTop + navRowH * 2), sidebarW, (int)(navTop + navRowH * 3) };
     rcNavRemix_  = { 0, (int)(navTop + navRowH * 3), sidebarW, (int)(navTop + navRowH * 4) };
-    const float gearOffset = metrics_.space(13.0f);
+    const float gearOffset = metrics_.space(13.0711f);
     rcNavGear_   = { 0, (int)(navTop + navRowH * 4 + gearOffset),
                         sidebarW, (int)(navTop + navRowH * 5 + gearOffset) };
 
     // Transport sub-regions — proportional to the (scaled) bar height.
     int tTop = rcTransport_.top;
-    int tPad = (int)metrics_.space(20.0f);
+    int tPad = (int)metrics_.space(19.0f);
     int artSide = transportH - 2 * tPad;
     rcTransportArt_  = { tPad, tTop + tPad, tPad + artSide, tTop + tPad + artSide };
 
     // Bitperfect-mismatch warning strip: a full-width overlay directly above
     // the transport bar. Doesn't reserve/shrink grid space — this is a rare,
     // transient event, not worth a permanent layout dependency.
-    int warnH = (int)metrics_.space(46.0f);
+    int warnH = (int)metrics_.space(45.0f);
     rcBitperfectWarning_ = { 0, tTop - warnH, W, tTop };
 
     // Center buttons: the app's primary interactive elements (44px at the
     // reference window; scaled like everything else). Three of them:
     // prev / play-stop / next (no pause, no separate stop).
-    int btnSize = (int)metrics_.space(72.0f);
-    int btnGap = (int)metrics_.space(20.0f);
+    int btnSize = (int)metrics_.space(71.0f);
+    int btnGap = (int)metrics_.space(19.0f);
     int totalBtnW = btnSize * 3 + btnGap * 2;
     int btnX = W / 2 - totalBtnW / 2;
     int btnY = tTop + (transportH - btnSize) / 2;
@@ -1609,9 +1612,9 @@ void PlayerWindow::recalcLayout() {
     // vertical rhythm.
     int settCx   = (rcGrid_.left + rcGrid_.right) / 2;
     int settTop  = (int)metrics_.space(147.0f);
-    int rowHalfW = (int)metrics_.space(360.0f);
-    int rowH     = (int)metrics_.space(85.0f);
-    int rowStep  = rowH + (int)metrics_.space(23.0f);
+    int rowHalfW = (int)metrics_.space(359.0f);
+    int rowH     = (int)metrics_.space(84.0f);
+    int rowStep  = rowH + (int)metrics_.space(22.0f);
     auto settRow = [&](int i) -> LayoutRect {
         return { settCx - rowHalfW, settTop + i * rowStep,
                  settCx + rowHalfW, settTop + i * rowStep + rowH };
