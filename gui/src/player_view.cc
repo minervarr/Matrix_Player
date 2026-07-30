@@ -822,9 +822,9 @@ void PlayerWindow::drawFrame() {
 
         Rect titleR = toRect(rcEssentialTitle_);
         std::string titleStr = currentTitle_.empty() ? "No track" : currentTitle_;
-        float titleW = canvas.textWidthStyled(titleStr, textSizes_.transportTitle, FontStyle::Bold);
+        float titleW = canvas.textWidthStyled(titleStr, metrics_.text.title, FontStyle::Bold);
         canvas.textStyled(titleStr, titleR.x + std::max(0.0f, (titleR.w - titleW) * 0.5f), titleR.y,
-                          textSizes_.transportTitle, toColor(CLR_TEXT_PRIMARY), FontStyle::Bold);
+                          metrics_.text.title, toColor(CLR_TEXT_PRIMARY), FontStyle::Bold);
 
         // Single combined Play/Stop button (per design: not a separate
         // resume-vs-restart-from-zero distinction in Essential mode).
@@ -857,13 +857,13 @@ void PlayerWindow::drawFrame() {
         // first grid column's art because the sidebar width didn't scale
         // with the text (see recalcLayout()). The truncate is a backstop.
         canvas.textStyled(truncateToWidth(canvas, "MATRIX PLAYER", sb.w - 32,
-                                          textSizes_.nav, FontStyle::Bold),
-                          16, rcBrand_.bottom * 0.5f - textSizes_.nav * 0.5f,
-                          textSizes_.nav, toColor(CLR_ACCENT), FontStyle::Bold);
+                                          metrics_.text.body, FontStyle::Bold),
+                          16, rcBrand_.bottom * 0.5f - metrics_.text.body * 0.5f,
+                          metrics_.text.body, toColor(CLR_ACCENT), FontStyle::Bold);
 
         // Search box — filters the album grid live as the user types.
         drawSearchField(canvas, rcSearch_, searchQuery_, searchFocused_, "Search",
-                        textSizes_.secondary);
+                        metrics_.text.secondary);
 
         struct NavItem { const char* label; LayoutRect rc; AlbumTypeFilter filter; };
         NavItem items[] = {
@@ -885,8 +885,8 @@ void PlayerWindow::drawFrame() {
             } else if (hovered) {
                 canvas.rect(r.x + 4, r.y, r.w - 8, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
             }
-            canvas.text(item.label, r.x + 20, r.y + r.h * 0.5f - textSizes_.nav * 0.5f,
-                       textSizes_.nav, toColor(active ? CLR_ACCENT : CLR_TEXT_SECONDARY));
+            canvas.text(item.label, r.x + 20, r.y + r.h * 0.5f - metrics_.text.body * 0.5f,
+                       metrics_.text.body, toColor(active ? CLR_ACCENT : CLR_TEXT_SECONDARY));
         }
 
         // Settings gear — spatially separated below a hairline, never mixed
@@ -925,7 +925,7 @@ void PlayerWindow::drawFrame() {
 
         if (albums_.empty()) {
             canvas.text("No albums yet. Use the gear icon below to add a music folder.",
-                       g.x + g.w * 0.5f - 160, g.y + 100, textSizes_.nav, toColor(CLR_TEXT_DIM));
+                       g.x + g.w * 0.5f - 160, g.y + 100, metrics_.text.body, toColor(CLR_TEXT_DIM));
         } else if (gridIndices_.empty()) {
             std::string msg;
             if (!searchQuery_.empty()) {
@@ -937,7 +937,7 @@ void PlayerWindow::drawFrame() {
                     albumTypeFilter_ == AlbumTypeFilter::Remix  ? "Remixes" : "Albums";
                 msg = std::string("No ") + filterLabel + " yet";
             }
-            canvas.text(msg, g.x + g.w * 0.5f - 120, g.y + 100, textSizes_.nav, toColor(CLR_TEXT_DIM));
+            canvas.text(msg, g.x + g.w * 0.5f - 120, g.y + 100, metrics_.text.body, toColor(CLR_TEXT_DIM));
         } else {
             canvas.setClip(g.x, g.y, g.w, g.h);
             int tileSpaceW = rcGrid_.right - rcGrid_.left - gridPadX_ * 2;
@@ -1019,25 +1019,25 @@ void PlayerWindow::drawFrame() {
                         canvas.textStyled(s, x + std::max(0.0f, (a - w) * 0.5f), yy,
                                           sz, toColor(clr), st);
                     };
-                    float adv = titleArtistAdvance(textSizes_.body);
+                    float adv = titleArtistAdvance(metrics_.text.body);
                     float ty = y + a + 10.0f * uiScale_;
                     std::string base, mod;
                     if (splitNameModifier(alb.displayName, base, mod)) {
-                        centered(truncateToWidth(canvas, base, textMaxW, textSizes_.body, FontStyle::Bold),
-                                 ty, textSizes_.body, CLR_TEXT_ALBUM_TITLE, FontStyle::Bold);
-                        centered(truncateToWidth(canvas, mod, textMaxW, textSizes_.secondary, FontStyle::Italic),
-                                 ty + adv, textSizes_.secondary, CLR_TEXT_DIM, FontStyle::Italic);
+                        centered(truncateToWidth(canvas, base, textMaxW, metrics_.text.body, FontStyle::Bold),
+                                 ty, metrics_.text.body, CLR_TEXT_ALBUM_TITLE, FontStyle::Bold);
+                        centered(truncateToWidth(canvas, mod, textMaxW, metrics_.text.secondary, FontStyle::Italic),
+                                 ty + adv, metrics_.text.secondary, CLR_TEXT_DIM, FontStyle::Italic);
                     } else {
                         std::string l1, l2;
-                        splitTwoLines(canvas, alb.displayName, textMaxW, textSizes_.body, FontStyle::Bold, l1, l2);
-                        centered(l1, ty, textSizes_.body, CLR_TEXT_ALBUM_TITLE, FontStyle::Bold);
+                        splitTwoLines(canvas, alb.displayName, textMaxW, metrics_.text.body, FontStyle::Bold, l1, l2);
+                        centered(l1, ty, metrics_.text.body, CLR_TEXT_ALBUM_TITLE, FontStyle::Bold);
                         if (!l2.empty())
-                            centered(l2, ty + adv, textSizes_.body, CLR_TEXT_ALBUM_TITLE, FontStyle::Bold);
+                            centered(l2, ty + adv, metrics_.text.body, CLR_TEXT_ALBUM_TITLE, FontStyle::Bold);
                     }
                     // Artist sits in a fixed slot (below 2 title lines) so it
                     // aligns across tiles whether titles wrapped or not.
-                    centered(truncateToWidth(canvas, alb.artist, textMaxW, textSizes_.secondary, FontStyle::Italic),
-                             ty + adv * 2, textSizes_.secondary, CLR_TEXT_SECONDARY, FontStyle::Italic);
+                    centered(truncateToWidth(canvas, alb.artist, textMaxW, metrics_.text.secondary, FontStyle::Italic),
+                             ty + adv * 2, metrics_.text.secondary, CLR_TEXT_SECONDARY, FontStyle::Italic);
                 }
             }
             canvas.clearClip();
@@ -1061,8 +1061,8 @@ void PlayerWindow::drawFrame() {
                               r.y + r.h * 0.5f - sz * 0.5f, sz, toColor(clr), st);
         };
         {
-            Rect hdr = { g.x, g.y + 24, g.w, textSizes_.header };
-            centeredIn("Settings", hdr, textSizes_.header, CLR_TEXT_PRIMARY, FontStyle::Bold);
+            Rect hdr = { g.x, g.y + 24, g.w, metrics_.text.header };
+            centeredIn("Settings", hdr, metrics_.text.header, CLR_TEXT_PRIMARY, FontStyle::Bold);
         }
 
         bool bp = bitperfectMode_.load();
@@ -1094,7 +1094,7 @@ void PlayerWindow::drawFrame() {
             canvas.rect(r.x + r.w - bt, r.y, bt, r.h, toColor(border));
             ColorRef textClr = (item.idx == 3 && bp) ? CLR_TEXT_DIM
                              : isActiveModeRow ? CLR_ACCENT : CLR_TEXT_PRIMARY;
-            centeredIn(item.label, r, textSizes_.nav, textClr, FontStyle::Roman);
+            centeredIn(item.label, r, metrics_.text.body, textClr, FontStyle::Roman);
         }
     }
 
@@ -1135,26 +1135,26 @@ void PlayerWindow::drawFrame() {
             // but ur not!!" class titles).
             {
                 std::vector<std::string> titleLines;
-                wrapText(canvas, base, colW, textSizes_.trackPanelTitle, FontStyle::Bold, titleLines);
+                wrapText(canvas, base, colW, metrics_.text.title, FontStyle::Bold, titleLines);
                 for (auto& ln : titleLines) {
-                    canvas.textStyled(ln, colX, y, textSizes_.trackPanelTitle,
+                    canvas.textStyled(ln, colX, y, metrics_.text.title,
                                       toColor(CLR_TEXT_PRIMARY), FontStyle::Bold);
-                    y += titleArtistAdvance(textSizes_.trackPanelTitle);
+                    y += titleArtistAdvance(metrics_.text.title);
                 }
             }
             if (!mod.empty()) {
                 std::vector<std::string> modLines;
-                wrapText(canvas, mod, colW, textSizes_.secondary, FontStyle::Italic, modLines);
+                wrapText(canvas, mod, colW, metrics_.text.secondary, FontStyle::Italic, modLines);
                 for (auto& ln : modLines) {
-                    canvas.textStyled(ln, colX, y, textSizes_.secondary,
+                    canvas.textStyled(ln, colX, y, metrics_.text.secondary,
                                       toColor(CLR_TEXT_DIM), FontStyle::Italic);
-                    y += textSizes_.secondary * 1.35f;
+                    y += metrics_.text.secondary * 1.35f;
                 }
             }
             if (!album.artist.empty()) {
-                canvas.textStyled(truncateToWidth(canvas, album.artist, colW, textSizes_.secondary, FontStyle::Italic),
-                                  colX, y, textSizes_.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Italic);
-                y += textSizes_.secondary * 1.35f;
+                canvas.textStyled(truncateToWidth(canvas, album.artist, colW, metrics_.text.secondary, FontStyle::Italic),
+                                  colX, y, metrics_.text.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Italic);
+                y += metrics_.text.secondary * 1.35f;
             }
             // Quality badge from the album's actual track metadata (max
             // rate/depth across tracks), not the folder-name suffix.
@@ -1165,9 +1165,9 @@ void PlayerWindow::drawFrame() {
             }
             std::string badge = formatQualityBadge(maxRate, maxBit);
             if (!badge.empty()) {
-                canvas.textStyled(badge, colX, y, textSizes_.badge,
+                canvas.textStyled(badge, colX, y, metrics_.text.caption,
                                   toColor(CLR_TEXT_DIM), FontStyle::Math);
-                y += textSizes_.badge * 1.8f;
+                y += metrics_.text.caption * 1.8f;
             }
             y += 6;
             canvas.rect(colX, y, colW, 1, toColor(CLR_SEPARATOR));
@@ -1180,7 +1180,7 @@ void PlayerWindow::drawFrame() {
 
             // Duration column width measured once (widest realistic stamp),
             // so titles reserve real space instead of a guessed constant.
-            float durColW = canvas.textWidthStyled("88:88", textSizes_.secondary, FontStyle::Math);
+            float durColW = canvas.textWidthStyled("88:88", metrics_.text.secondary, FontStyle::Math);
 
             // Quality-color "aura": if every track shares the same tier, the
             // whole list gets one border below; otherwise each row gets its
@@ -1236,28 +1236,28 @@ void PlayerWindow::drawFrame() {
                 // Baselines centered by the actual text size (the old "-6"
                 // magic offset drifted across resolutions), columns scaled.
                 float numColW = 30.0f * uiScale_, titleX = 46.0f * uiScale_;
-                float trackNumW = canvas.textWidthStyled(trackNumStr, textSizes_.body, FontStyle::Math);
+                float trackNumW = canvas.textWidthStyled(trackNumStr, metrics_.text.body, FontStyle::Math);
                 canvas.textStyled(trackNumStr, colX + numColW - trackNumW,
-                                rowY + trackRowHeight_ * 0.5f - textSizes_.body * 0.5f,
-                                textSizes_.body, toColor(isPlayingRow ? CLR_ACCENT : CLR_TEXT_SECONDARY), FontStyle::Math);
+                                rowY + trackRowHeight_ * 0.5f - metrics_.text.body * 0.5f,
+                                metrics_.text.body, toColor(isPlayingRow ? CLR_ACCENT : CLR_TEXT_SECONDARY), FontStyle::Math);
                 // Base-name priority: only the trailing "(from the Netflix
                 // Series...)" modifier ever gets truncated, never the name.
                 float titleMaxW = colW - titleX - durColW - 16.0f * uiScale_;
                 FontStyle rowStyle = isPlayingRow ? FontStyle::Bold : FontStyle::Roman;
                 drawNameWithModifier(canvas, album.tracks[i].title,
                                      colX + titleX,
-                                     rowY + trackRowHeight_ * 0.5f - textSizes_.nav * 0.5f,
-                                     titleMaxW, textSizes_.nav,
+                                     rowY + trackRowHeight_ * 0.5f - metrics_.text.body * 0.5f,
+                                     titleMaxW, metrics_.text.body,
                                      isPlayingRow ? CLR_ACCENT : CLR_TEXT_PRIMARY, rowStyle);
 
                 int durMs = album.tracks[i].durationMs;
                 if (durMs > 0) {
                     char durBuf[16];
                     snprintf(durBuf, sizeof(durBuf), "%d:%02d", durMs / 60000, (durMs % 60000) / 1000);
-                    float durW = canvas.textWidthStyled(durBuf, textSizes_.secondary, FontStyle::Math);
+                    float durW = canvas.textWidthStyled(durBuf, metrics_.text.secondary, FontStyle::Math);
                     canvas.textStyled(durBuf, colX + colW - durW,
-                                    rowY + trackRowHeight_ * 0.5f - textSizes_.secondary * 0.5f,
-                                    textSizes_.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Math);
+                                    rowY + trackRowHeight_ * 0.5f - metrics_.text.secondary * 0.5f,
+                                    metrics_.text.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Math);
                 }
             }
             float tracksBottom = y + (float)album.tracks.size() * trackRowHeight_;
@@ -1278,24 +1278,24 @@ void PlayerWindow::drawFrame() {
                 albumDescLines_.clear();
                 artistBioLines_.clear();
                 if (!albumDescText_.empty())
-                    wrapText(canvas, albumDescText_, textW, textSizes_.secondary, FontStyle::Roman, albumDescLines_);
+                    wrapText(canvas, albumDescText_, textW, metrics_.text.secondary, FontStyle::Roman, albumDescLines_);
                 if (!artistBioText_.empty())
-                    wrapText(canvas, artistBioText_, textW, textSizes_.secondary, FontStyle::Roman, artistBioLines_);
+                    wrapText(canvas, artistBioText_, textW, metrics_.text.secondary, FontStyle::Roman, artistBioLines_);
                 albumTextWrapW_ = textW;
             }
-            float lineAdv = textSizes_.secondary * 1.5f;
+            float lineAdv = metrics_.text.secondary * 1.5f;
             auto drawSection = [&](const std::string& caption,
                                    const std::vector<std::string>& lines, float& yy) {
                 if (lines.empty()) return;
-                canvas.textStyled(caption, tp.x + pad, yy, textSizes_.badge,
+                canvas.textStyled(caption, tp.x + pad, yy, metrics_.text.caption,
                                   toColor(CLR_TEXT_DIM), FontStyle::Bold);
-                yy += textSizes_.badge * 2.2f;
+                yy += metrics_.text.caption * 2.2f;
                 for (auto& ln : lines) {
                     if (ln.empty()) { yy += lineAdv * 0.6f; continue; }
                     // Height accounting always runs; drawing is culled to
                     // the visible band.
                     if (yy + lineAdv >= tp.y && yy <= tp.y + tp.h)
-                        canvas.textStyled(ln, tp.x + pad, yy, textSizes_.secondary,
+                        canvas.textStyled(ln, tp.x + pad, yy, metrics_.text.secondary,
                                           toColor(CLR_TEXT_SECONDARY), FontStyle::Roman);
                     yy += lineAdv;
                 }
@@ -1339,13 +1339,13 @@ void PlayerWindow::drawFrame() {
         drawNameWithModifier(canvas,
                              currentTitle_.empty() ? "No track" : currentTitle_,
                              infoR.x, infoR.y, infoR.w,
-                             textSizes_.transportTitle, CLR_TEXT_PRIMARY, FontStyle::Bold);
+                             metrics_.text.title, CLR_TEXT_PRIMARY, FontStyle::Bold);
         std::string artist = currentArtist_;
         if (!artist.empty()) {
             std::string a = truncateToWidth(canvas, artist, infoR.w,
-                                            textSizes_.secondary, FontStyle::Italic);
-            canvas.textStyled(a, infoR.x, infoR.y + titleArtistAdvance(textSizes_.transportTitle),
-                              textSizes_.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Italic);
+                                            metrics_.text.secondary, FontStyle::Italic);
+            canvas.textStyled(a, infoR.x, infoR.y + titleArtistAdvance(metrics_.text.title),
+                              metrics_.text.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Italic);
         }
 
         // Three buttons only — prev / play-stop / next, same combined
@@ -1377,13 +1377,13 @@ void PlayerWindow::drawFrame() {
             ColorRef dspClr = bp ? CLR_ACCENT : CLR_TEXT_DIM;
             float rightEdge = t.x + t.w - 16;
             float cy = t.y + t.h * 0.5f;
-            float tagW = canvas.textWidthStyled(dsp, textSizes_.badge, FontStyle::Math);
+            float tagW = canvas.textWidthStyled(dsp, metrics_.text.caption, FontStyle::Math);
 
             // Hover hit rect always tracks the compact tag's home (with a
             // little slop), so the hover state stays stable while the
             // expanded readout is showing.
-            rcDspBadge_ = { (int)(rightEdge - tagW - 8), (int)(cy - textSizes_.badge),
-                            (int)(rightEdge + 8),        (int)(cy + textSizes_.badge) };
+            rcDspBadge_ = { (int)(rightEdge - tagW - 8), (int)(cy - metrics_.text.caption),
+                            (int)(rightEdge + 8),        (int)(cy + metrics_.text.caption) };
 
             if (hoverDspBadge_) {
                 std::string src;
@@ -1403,25 +1403,25 @@ void PlayerWindow::drawFrame() {
                 segs.push_back({audioBackendLabel(), CLR_TEXT_DIM});
 
                 float total = 0;
-                for (auto& s : segs) total += canvas.textWidthStyled(s.text, textSizes_.badge, FontStyle::Math);
+                for (auto& s : segs) total += canvas.textWidthStyled(s.text, metrics_.text.caption, FontStyle::Math);
                 float sx = rightEdge - total;
-                float sy = cy - textSizes_.badge * 0.5f;
+                float sy = cy - metrics_.text.caption * 0.5f;
                 for (auto& s : segs) {
-                    canvas.textStyled(s.text, sx, sy, textSizes_.badge, toColor(s.clr), FontStyle::Math);
-                    sx += canvas.textWidthStyled(s.text, textSizes_.badge, FontStyle::Math);
+                    canvas.textStyled(s.text, sx, sy, metrics_.text.caption, toColor(s.clr), FontStyle::Math);
+                    sx += canvas.textWidthStyled(s.text, metrics_.text.caption, FontStyle::Math);
                 }
             } else {
-                canvas.textStyled(dsp, rightEdge - tagW, cy - textSizes_.badge * 0.5f,
-                                  textSizes_.badge, toColor(dspClr), FontStyle::Math);
+                canvas.textStyled(dsp, rightEdge - tagW, cy - metrics_.text.caption * 0.5f,
+                                  metrics_.text.caption, toColor(dspClr), FontStyle::Math);
 
                 char timeBuf[64];
                 snprintf(timeBuf, sizeof(timeBuf), "%d:%02d / %d:%02d",
                         seekPosMs_ / 60000, (seekPosMs_ % 60000) / 1000,
                         seekTotalMs_ / 60000, (seekTotalMs_ % 60000) / 1000);
-                float timeW = canvas.textWidthStyled(timeBuf, textSizes_.secondary, FontStyle::Math);
+                float timeW = canvas.textWidthStyled(timeBuf, metrics_.text.secondary, FontStyle::Math);
                 canvas.textStyled(timeBuf, rightEdge - tagW - 24 - timeW,
-                                  cy - textSizes_.secondary * 0.5f,
-                                  textSizes_.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Math);
+                                  cy - metrics_.text.secondary * 0.5f,
+                                  metrics_.text.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Math);
             }
         }
     }
@@ -1441,8 +1441,8 @@ void PlayerWindow::drawFrame() {
         drawWarningIcon(canvas, iconRc, toColor(CLR_WARNING));
 
         float textX = iconRc.right + 8.0f;
-        float textY = w.y + w.h * 0.5f - textSizes_.secondary * 0.5f;
-        canvas.text(bitperfectWarning_, textX, textY, textSizes_.secondary, toColor(CLR_WARNING));
+        float textY = w.y + w.h * 0.5f - metrics_.text.secondary * 0.5f;
+        canvas.text(bitperfectWarning_, textX, textY, metrics_.text.secondary, toColor(CLR_WARNING));
     }
 
     renderer_->draw(frameCurves_, /*overlay_rotation_deg=*/0, frameImages_, frameImagesFg_, msdfQuads_, frameShapes_);
@@ -1453,23 +1453,15 @@ void PlayerWindow::drawFrame() {
 void PlayerWindow::recalcLayout() {
     int W = (int)renderer_->width(), H = (int)renderer_->height();
 
-    // Window-relative text sizes, floored at the geometric minimum (see
-    // player_window.h) — a defensive backstop in case anything ever resizes
-    // the window without going through toggleUiMode() (which is the only
-    // place either mode's size is ever set; there's no interactive resize).
-    ResponsiveTextScale scale{kMinReadableTextSizePx};
-    textSizes_.badge           = scale.sizeFor(kTextSizeBadgePct, (float)H);
-    textSizes_.secondary       = scale.sizeFor(kTextSizeSecondaryPct, (float)H);
-    textSizes_.body            = scale.sizeFor(kTextSizeBodyPct, (float)H);
-    textSizes_.nav             = scale.sizeFor(kTextSizeNavPct, (float)H);
-    textSizes_.transportTitle  = scale.sizeFor(kTextSizeTransportTitlePct, (float)H);
-    textSizes_.trackPanelTitle = scale.sizeFor(kTextSizeTrackPanelTitlePct, (float)H);
-    textSizes_.header          = scale.sizeFor(kTextSizeHeaderPct, (float)H);
+    // Type roles + geometry factor, both from the window's content height.
+    metrics_ = computeUiMetrics((float)H);
 
-    // The one proportion factor for all remaining fixed-pixel layout values
-    // (see uiScale_'s comment in player_window.h): 13.0f is the nav role's
-    // calibration size at the reference window height.
-    uiScale_ = textSizes_.nav / 13.0f;
+    // LEGACY, being retired: reproduce the old factor exactly so that call
+    // sites not yet migrated keep rendering at their current size. 13.0f was
+    // the old "nav" role's calibration size and 661.0f its reference height —
+    // both are gone from the type scale now, so the formula is spelled out
+    // here rather than derived. Deleted once nothing multiplies by uiScale_.
+    uiScale_ = std::max(13.0f / 661.0f * (float)H, kMinReadableTextSizePx) / 13.0f;
     const float us = uiScale_;
 
     if (uiMode_ == UiMode::Essential) {
@@ -1541,8 +1533,8 @@ void PlayerWindow::recalcLayout() {
 
     // Tile text block height from the ACTUAL text sizes (two title lines +
     // artist + breathing room) — see gridRowGap_'s comment in the header.
-    gridRowGap_ = (int)(titleArtistAdvance(textSizes_.body) * 2.0f
-                        + textSizes_.secondary * 1.35f + 18.0f * us);
+    gridRowGap_ = (int)(titleArtistAdvance(metrics_.text.body) * 2.0f
+                        + metrics_.text.secondary * 1.35f + 18.0f * us);
 
     // Track rows likewise scale with their text.
     trackRowHeight_ = (int)(40 * us);
@@ -2350,7 +2342,7 @@ void PlayerWindow::drawActivePanel(Canvas& canvas, const LayoutRect& area) {
         break;
     }
     if (closeRc)
-        panels::drawButton(canvas, *closeRc, "Close", hoverClose, textSizes_.nav);
+        panels::drawButton(canvas, *closeRc, "Close", hoverClose, metrics_.text.body);
 }
 
 void PlayerWindow::onPanelMouseMove(int x, int y) {
@@ -2590,7 +2582,7 @@ void PlayerWindow::onManageFolders() {
 }
 
 void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
-    LayoutRect content = panels::drawHeader(canvas, area, "Music Folders", uiScale_, textSizes_.header, mfCloseRc_);
+    LayoutRect content = panels::drawHeader(canvas, area, "Music Folders", uiScale_, metrics_.text.header, mfCloseRc_);
     float pad = SP_LG * uiScale_;
     float btnH = 36.0f * uiScale_;
 
@@ -2604,15 +2596,15 @@ void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
     if (mfRoots_.empty()) {
         Rect a = toRect(listArea);
         canvas.textStyled("No music folders added yet.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,
-                          textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+                          metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
     }
 
     float btnW = 170.0f * uiScale_;
     int by = (int)(content.bottom - (btnH + pad));
     mfBtnRemove_ = { content.left + (int)pad, by, (int)(content.left + pad + btnW), (int)(by + btnH) };
     mfBtnDone_   = { (int)(content.right - pad - btnW), by, content.right - (int)pad, (int)(by + btnH) };
-    panels::drawButton(canvas, mfBtnRemove_, "Remove Selected", mfHoverRemove_, textSizes_.nav);
-    panels::drawButton(canvas, mfBtnDone_, "Done", mfHoverDone_, textSizes_.nav, true);
+    panels::drawButton(canvas, mfBtnRemove_, "Remove Selected", mfHoverRemove_, metrics_.text.body);
+    panels::drawButton(canvas, mfBtnDone_, "Done", mfHoverDone_, metrics_.text.body, true);
 }
 
 // ── Audio Settings panel ─────────────────────────────────────────────────────
@@ -2693,13 +2685,13 @@ void PlayerWindow::onAudioSettings() {
 }
 
 void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
-    LayoutRect content = panels::drawHeader(canvas, area, "Audio Output Settings", uiScale_, textSizes_.header, asCloseRc_);
+    LayoutRect content = panels::drawHeader(canvas, area, "Audio Output Settings", uiScale_, metrics_.text.header, asCloseRc_);
     Rect c = toRect(content);
     float pad = SP_LG * uiScale_;
     float y = c.y + pad;
 
-    canvas.textStyled("Output backend:", c.x + pad, y, textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Roman);
-    y += textSizes_.nav * 1.8f;
+    canvas.textStyled("Output backend:", c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+    y += metrics_.text.body * 1.8f;
 
     float rowH = 34.0f * uiScale_;
     asBackendRowRects_.assign(asBackendOptions_.size(), LayoutRect{});
@@ -2722,11 +2714,11 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     // a scroll with no affordance — drawScrollList clips silently and draws no
     // scrollbar, so a DAC in row 7 simply looked absent.
     float btnH = 36.0f * uiScale_;
-    float listTop = y + textSizes_.nav * 1.6f;   // every branch draws its label first
+    float listTop = y + metrics_.text.body * 1.6f;   // every branch draws its label first
     float listBottomLimit = (float)content.bottom - pad - btnH - pad;
 #ifdef _WIN32
     if (sel == AudioBackend::Wasapi)             // the Mode radios sit below the list
-        listBottomLimit -= 12.0f * uiScale_ + textSizes_.nav * 1.6f + 2.0f * rowH + 12.0f * uiScale_;
+        listBottomLimit -= 12.0f * uiScale_ + metrics_.text.body * 1.6f + 2.0f * rowH + 12.0f * uiScale_;
 #endif
     // 3-row floor keeps the empty-state messages below readable.
     auto listHeightFor = [&](int rowCount) {
@@ -2736,8 +2728,8 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     };
 
     if (sel == AudioBackend::Usb) {
-        canvas.textStyled("USB DAC:", c.x + pad, y, textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Roman);
-        y += textSizes_.nav * 1.6f;
+        canvas.textStyled("USB DAC:", c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+        y += metrics_.text.body * 1.6f;
         std::vector<std::string> labels;
         for (auto& d : asUsbDevices_) labels.push_back(d.name);
         float listH = listHeightFor((int)labels.size());
@@ -2750,14 +2742,14 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         if (labels.empty()) {
             Rect a = toRect(asDeviceListArea_);
             canvas.textStyled("No USB audio devices found.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,
-                              textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+                              metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
         }
         y += listH + 12.0f * uiScale_;
     }
 #ifdef _WIN32
     else if (sel == AudioBackend::Wasapi) {
-        canvas.textStyled("Device:", c.x + pad, y, textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Roman);
-        y += textSizes_.nav * 1.6f;
+        canvas.textStyled("Device:", c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+        y += metrics_.text.body * 1.6f;
         std::vector<std::string> labels;
         labels.push_back("(Default device)");
         for (auto& d : asWasapiDevices_) labels.push_back(wideToUtf8(d.name));
@@ -2770,8 +2762,8 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
                               asDeviceScrollY_, uiScale_);
         y += listH + 12.0f * uiScale_;
 
-        canvas.textStyled("Mode:", c.x + pad, y, textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Roman);
-        y += textSizes_.nav * 1.6f;
+        canvas.textStyled("Mode:", c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+        y += metrics_.text.body * 1.6f;
         static const char* kModeLabels[2] = {
             "Shared \xE2\x80\x94 other apps can play simultaneously",
             "Exclusive \xE2\x80\x94 lower latency, blocks other apps" };
@@ -2788,8 +2780,8 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
 #else
 #ifdef MATRIX_HAVE_ALSA
     else if (sel == AudioBackend::Alsa) {
-        canvas.textStyled("Device:", c.x + pad, y, textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Roman);
-        y += textSizes_.nav * 1.6f;
+        canvas.textStyled("Device:", c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+        y += metrics_.text.body * 1.6f;
         std::vector<std::string> labels;
         labels.push_back("(System default)");
         for (auto& d : asAlsaDevices_) labels.push_back(d.name);
@@ -2805,8 +2797,8 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
 #endif
 #ifdef MATRIX_HAVE_JACK
     else if (sel == AudioBackend::Jack) {
-        canvas.textStyled("Starting port:", c.x + pad, y, textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Roman);
-        y += textSizes_.nav * 1.6f;
+        canvas.textStyled("Starting port:", c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+        y += metrics_.text.body * 1.6f;
         std::vector<std::string> labels;
         labels.push_back("(Auto-connect to first available ports)");
         for (auto& p : asJackPorts_) labels.push_back(p.portName);
@@ -2821,7 +2813,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
             Rect a = toRect(asDeviceListArea_);
             canvas.textStyled("No running JACK server found (or no physical playback ports).",
                               a.x + 14.0f * uiScale_, a.y + 60.0f * uiScale_,
-                              textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+                              metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
         }
         y += listH + 12.0f * uiScale_;
     }
@@ -2831,7 +2823,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     float btnW = 120.0f * uiScale_;   // btnH declared above — the list is sized against it
     int by = (int)(content.bottom - (btnH + pad));
     asBtnApply_ = { (int)(content.right - pad - btnW), by, content.right - (int)pad, (int)(by + btnH) };
-    panels::drawButton(canvas, asBtnApply_, "Apply", asHoverApply_, textSizes_.nav, true);
+    panels::drawButton(canvas, asBtnApply_, "Apply", asHoverApply_, metrics_.text.body, true);
 }
 
 void PlayerWindow::applyAudioSettingsPanel() {
@@ -2929,30 +2921,30 @@ void PlayerWindow::eqRefilter() {
 }
 
 void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
-    LayoutRect content = panels::drawHeader(canvas, area, "EQ / AutoEQ Profiles", uiScale_, textSizes_.header, eqCloseRc_);
+    LayoutRect content = panels::drawHeader(canvas, area, "EQ / AutoEQ Profiles", uiScale_, metrics_.text.header, eqCloseRc_);
     Rect c = toRect(content);
     float pad = SP_LG * uiScale_;
     float y = c.y + pad;
 
-    canvas.textStyled("Device: " + eqDeviceKey_, c.x + pad, y, textSizes_.secondary, toColor(CLR_TEXT_DIM), FontStyle::Roman);
-    y += textSizes_.secondary * 1.6f;
+    canvas.textStyled("Device: " + eqDeviceKey_, c.x + pad, y, metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+    y += metrics_.text.secondary * 1.6f;
 
     EqAssignment assign;
     std::string assignLine = "No EQ assigned";
     if (db_.loadEqAssignment(eqDeviceKey_, assign) || db_.loadEqAssignment("global", assign))
         assignLine = "Current EQ: " + assign.name;
-    canvas.textStyled(assignLine, c.x + pad, y, textSizes_.secondary, toColor(CLR_ACCENT), FontStyle::Roman);
-    y += textSizes_.secondary * 1.8f;
+    canvas.textStyled(assignLine, c.x + pad, y, metrics_.text.secondary, toColor(CLR_ACCENT), FontStyle::Roman);
+    y += metrics_.text.secondary * 1.8f;
 
     if (eqBitperfectActive_) {
         canvas.textStyled("Bitperfect mode active \xE2\x80\x94 EQ applies once Reference EQ mode is enabled.",
-                          c.x + pad, y, textSizes_.secondary, toColor(CLR_TEXT_DIM), FontStyle::Italic);
-        y += textSizes_.secondary * 1.6f;
+                          c.x + pad, y, metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        y += metrics_.text.secondary * 1.6f;
     }
 
     eqSearchRc_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + 34.0f * uiScale_) };
     drawSearchField(canvas, eqSearchRc_, eqSearch_, eqSearchFocused_, "Search profiles",
-                    textSizes_.nav);
+                    metrics_.text.body);
     y += 34.0f * uiScale_ + 10.0f * uiScale_;
 
     float btnH = 36.0f * uiScale_;
@@ -2974,7 +2966,7 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     if (labels.empty()) {
         Rect a = toRect(listArea);
         canvas.textStyled("No profiles match.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,
-                          textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+                          metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
     }
 
     float btnW = 170.0f * uiScale_;
@@ -2982,8 +2974,8 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     eqBtnAssign_ = { content.left + (int)pad, by, (int)(content.left + pad + btnW), (int)(by + btnH) };
     eqBtnClear_  = { (int)(content.left + pad + btnW + 12.0f * uiScale_), by,
                      (int)(content.left + pad + 2.0f * btnW + 12.0f * uiScale_), (int)(by + btnH) };
-    panels::drawButton(canvas, eqBtnAssign_, "Assign to Device", eqHoverAssign_, textSizes_.nav, true);
-    panels::drawButton(canvas, eqBtnClear_, "Clear", eqHoverClear_, textSizes_.nav);
+    panels::drawButton(canvas, eqBtnAssign_, "Assign to Device", eqHoverAssign_, metrics_.text.body, true);
+    panels::drawButton(canvas, eqBtnClear_, "Clear", eqHoverClear_, metrics_.text.body);
 }
 
 // ── Folder picker panel (also reached via "Add Music Folder") ───────────────
@@ -3037,14 +3029,14 @@ void PlayerWindow::onAddFolder() {
 }
 
 void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
-    LayoutRect content = panels::drawHeader(canvas, area, "Select Music Folder", uiScale_, textSizes_.header, fpCloseRc_);
+    LayoutRect content = panels::drawHeader(canvas, area, "Select Music Folder", uiScale_, metrics_.text.header, fpCloseRc_);
     Rect c = toRect(content);
     float pad = SP_LG * uiScale_;
 
-    canvas.textStyled(truncateToWidth(canvas, fpCurrentDir_, c.w - 2.0f * pad, textSizes_.secondary, FontStyle::Roman),
-                      c.x + pad, c.y + pad, textSizes_.secondary, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+    canvas.textStyled(truncateToWidth(canvas, fpCurrentDir_, c.w - 2.0f * pad, metrics_.text.secondary, FontStyle::Roman),
+                      c.x + pad, c.y + pad, metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Roman);
 
-    float listTop = pad * 2.0f + textSizes_.secondary * 1.4f;
+    float listTop = pad * 2.0f + metrics_.text.secondary * 1.4f;
     float btnH = 36.0f * uiScale_;
     LayoutRect listArea = { content.left, (int)(content.top + listTop),
                             content.right, (int)(content.bottom - (btnH + pad * 2.0f)) };
@@ -3062,15 +3054,15 @@ void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
     if (labels.empty()) {
         Rect a = toRect(listArea);
         canvas.textStyled("No subfolders here.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,
-                          textSizes_.nav, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+                          metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
     }
 
     float btnW = 200.0f * uiScale_;
     int by = (int)(content.bottom - (btnH + pad));
     fpBtnCancel_ = { content.left + (int)pad, by, (int)(content.left + pad + btnW), (int)(by + btnH) };
     fpBtnSelect_ = { (int)(content.right - pad - btnW), by, content.right - (int)pad, (int)(by + btnH) };
-    panels::drawButton(canvas, fpBtnCancel_, "Cancel", fpHoverCancel_, textSizes_.nav);
-    panels::drawButton(canvas, fpBtnSelect_, "Select This Folder", fpHoverSelect_, textSizes_.nav, true);
+    panels::drawButton(canvas, fpBtnCancel_, "Cancel", fpHoverCancel_, metrics_.text.body);
+    panels::drawButton(canvas, fpBtnSelect_, "Select This Folder", fpHoverSelect_, metrics_.text.body, true);
 }
 
 // ── Album / Track selection (simplified for custom UI) ──────────────────────

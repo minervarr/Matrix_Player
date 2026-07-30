@@ -38,68 +38,27 @@
 #include "texture.hh"
 #include "font.hh"
 #include "msdf.hh"
-#include "responsive_text.hh"
-#include "ui_min_text_size.gen.h"
 #include "theme.hh"
+#include "ui_metrics.hh"
 #include "panels/settings_panels.hh"
 
-// ── UI text sizing: window-relative, floored at a geometric minimum ────────
+// ── UI text sizing and geometry scale ──────────────────────────────────────
 //
-// Text sizes are percentages of the window's content height (not fixed
-// pixel literals) so they scale with the actual window on any monitor —
-// 1080p, 4K, or a tiny TV — instead of silently shrinking below legibility
-// on a small window/display. kMinReadableTextSizePx (ui_min_text_size.gen.h,
-// generated at build time by the min_text_size tool from the shipped fonts'
-// own outline geometry — see its header comment) is the hard floor: below
-// it, the font's strokes are objectively too thin for this antialiased
-// renderer to represent well, not a matter of taste.
+// Both now live in ui_metrics.hh: one factor anchored at the app's real render
+// height (1080), with the smallest type role pinned to the font's own
+// legibility floor and every other role derived from it by a fixed ratio. That
+// replaces the seven independently hand-tuned percentages that used to live
+// here — every one of which sat below the floor at their own 661px reference,
+// so the hierarchy they described only partly existed on screen.
 //
-// Percentages are calibrated against kReferenceWindowHeight, the app's
-// original default client height (CreateWindowExW's 1200x700 outer size,
-// standard WS_OVERLAPPEDWINDOW chrome), so appearance at that size is
-// unchanged from before this system existed.
-static constexpr float kReferenceWindowHeight = 661.0f;
+// See ui_metrics.hh's header comment and
+// docs/superpowers/specs/2026-07-28-ui-design-system-rigor-pass-design.md.
 
-// Compressed upward from the original 9-16px scale: every size in that scale
-// sat below kMinReadableTextSizePx (18.29px) at kReferenceWindowHeight, which
-// meant enforcing the floor via minimum window size alone required a
-// ~1343px-tall window — the app refused to even launch on a 1920x1080
-// monitor. The 9px "badge" role (REF EQ/BITPERFECT) was a standalone outlier
-// smaller than everything else; merged into the same size as "secondary"
-// here so there's one smallest role instead of two, and the whole scale
-// shifted up so that role clears the floor at a window size that actually
-// fits common displays (see kMinWindowContentH below).
-// Retuned (was 15–20/661): at 1080p the old scale produced 24–33px type —
-// nearly double the title-to-tile ratio of reference players (Roon,
-// Audirvana sit near 14px titles on ~200px tiles). These values land at
-// ~19–28px @1080p, floored at kMinReadableTextSizePx for MSDF quality.
-static constexpr float kTextSizeBadgePct           = 11.5f / kReferenceWindowHeight;  // REF EQ / BITPERFECT badge
-static constexpr float kTextSizeSecondaryPct       = 11.5f / kReferenceWindowHeight;  // artist/secondary/time/duration
-static constexpr float kTextSizeBodyPct            = 12.5f / kReferenceWindowHeight;  // grid album title, track number
-static constexpr float kTextSizeNavPct             = 13.0f / kReferenceWindowHeight;  // nav items, settings rows, track title
-static constexpr float kTextSizeTransportTitlePct  = 14.0f / kReferenceWindowHeight;  // now-playing title
-static constexpr float kTextSizeTrackPanelTitlePct = 16.0f / kReferenceWindowHeight;  // track panel album name
-static constexpr float kTextSizeHeaderPct          = 17.0f / kReferenceWindowHeight;  // "Settings" page header
-
-// The smallest role (badge/secondary, tied) hits the floor first as the
-// window shrinks, so it determines the minimum content height Complete
-// mode's fixed window size must be at least as tall as (see UiMode below).
-static constexpr float kMinWindowContentH = kMinReadableTextSizePx / kTextSizeBadgePct;
-
-// Sanity check on the calibration itself (font choice / EM / percentile in
-// min_text_size), independent of any specific window size: if a future font
-// swap or recalibration blows this up (as the very first, uncalibrated
-// attempt did — it computed a ~3400px minimum), fail the build immediately
-// instead of silently shipping a window-size requirement no real monitor
-// can satisfy.
-static_assert(kMinWindowContentH <= 2000.0f,
-    "Computed minimum window content height is implausibly large - check "
-    "the font/EM/percentile calibration in min_text_size. See CMakeLists.txt's "
-    "generate_ui_min_text_size step and ui_min_text_size.gen.h.");
-
-struct UiTextSizes {
-    float badge, secondary, body, nav, transportTitle, trackPanelTitle, header;
-};
+// The smallest role IS the floor, so the minimum content height at which the
+// scale is not clamped is exactly the reference height. Complete mode's window
+// sizing must be at least this tall (see UiMode in host.hh); below it the whole
+// scale clamps uniformly rather than distorting.
+static constexpr float kMinWindowContentH = kUiReferenceHeight;
 
 // UiMode itself is declared in host.hh (Host's window-sizing methods need it
 // too): Complete = today's full browsing UI, true fullscreen; Essential = a
@@ -387,12 +346,13 @@ private:
     // monitors where text scales up (artist descenders clipped by the art
     // below — the 1920x1200 "Anaima y" bug).
     //
-    // uiScale_: the one proportion factor for every remaining fixed-pixel
-    // layout value (sidebar rows, transport bar, paddings). Same ratio the
-    // text already scales by, so text and the chrome around it keep the
-    // reference layout's proportions on any monitor/resolution.
     int   gridRowGap_ = 64;
-    float uiScale_    = 1.0f;   // = textSizes_.nav / 13.0f, see recalcLayout()
+
+    // LEGACY, being retired: the pre-rigor-pass geometry factor. Every
+    // remaining `* uiScale_` in the .cc is a call site not yet migrated to
+    // metrics_.space()/stroke(). Deleted when the last one is gone — see
+    // docs/superpowers/plans/2026-07-28-ui-design-system-rigor-pass.md.
+    float uiScale_    = 1.0f;
     int gridScrollY_     = 0;
     int gridTileSize_    = 180;
     int gridArtSize_     = 150;
@@ -634,7 +594,8 @@ private:
     // bakeFallbackGlyphs() to find the bundled fallback-script font files.
     std::string          fontsDir_;
 
-    // Computed once per recalcLayout() call from the window's current
-    // content height and the *Pct constants above.
-    UiTextSizes textSizes_{};
+    // Recomputed once per recalcLayout() from the window's content height.
+    // metrics_.text.* are the type roles; metrics_.space()/stroke() are the
+    // geometry helpers. See ui_metrics.hh.
+    UiMetrics metrics_{};
 };

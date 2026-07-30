@@ -38,9 +38,11 @@ static constexpr ColorRef CLR_WARNING         = RGB(224, 180, 40);
 static constexpr float UI_CORNER_RADIUS = 0.0f;
 
 // ── Spacing scale ────────────────────────────────────────────────────────────
-// Base pixel rhythm for pads/gaps/margins; callers multiply by uiScale_ (the
-// one proportion factor, = textSizes_.nav / 13). Prefer these over ad-hoc
-// literals so the layout keeps a consistent step. See docs/UI_DESIGN_SYSTEM.md.
+// Base pixel rhythm for pads/gaps/margins. Callers pass these through
+// UiMetrics::space() (see ui_metrics.hh) rather than multiplying by hand.
+// Prefer them over ad-hoc literals so the layout keeps a consistent step.
+// (Values are re-authored at the 1080 reference height in a later step of the
+// rigor pass — see docs/UI_DESIGN_SYSTEM.md.)
 static constexpr float SP_XS = 4.0f;
 static constexpr float SP_SM = 8.0f;
 static constexpr float SP_MD = 12.0f;
