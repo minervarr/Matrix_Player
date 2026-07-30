@@ -1462,7 +1462,6 @@ void PlayerWindow::recalcLayout() {
     // both are gone from the type scale now, so the formula is spelled out
     // here rather than derived. Deleted once nothing multiplies by uiScale_.
     uiScale_ = std::max(13.0f / 661.0f * (float)H, kMinReadableTextSizePx) / 13.0f;
-    const float us = uiScale_;
 
     if (uiMode_ == UiMode::Essential) {
         // Phone-shaped panel (see computeEssentialWindowRect()): art fills
@@ -1491,13 +1490,17 @@ void PlayerWindow::recalcLayout() {
         return;
     }
 
-    int transportH = (int)(80 * us);  // scales with the text it contains
+    // Every fixed-pixel value below is authored at the 1080 reference height
+    // and passed through metrics_.space() — see ui_metrics.hh. Values that used
+    // to read `X * us` were multiplied by 1.63389 (the old factor at 1080) so
+    // they render identically; values that used to be bare kept their number.
+    int transportH = (int)metrics_.space(131.0f);  // scales with the text it contains
 
     // Sidebar width scales the same way — fixed pixel widths with
     // height-scaled text is how "MATRIX PLAYER" ended up painted over the
     // first grid column's art at 1080p: the sidebar stayed 170px while its
     // text grew ~1.6x.
-    int sidebarW = std::max(170, (int)(170.0f * us));
+    int sidebarW = (int)metrics_.space(278.0f);
 
     rcTransport_ = { 0, H - transportH, W, H };
     rcSidebar_   = { 0, 0, sidebarW, H - transportH };
@@ -1517,61 +1520,71 @@ void PlayerWindow::recalcLayout() {
     static constexpr int kMinGridArtSize  = 80;   // legible floor; drop a column instead of going below it
     static constexpr int kGridArtMargin   = 30;   // gap reserved around the art within its cell
 
-    int gridW = rcGrid_.right - rcGrid_.left - gridPadX_ * 2;
-    int desiredCols = std::clamp(gridW / kTargetTilePitch, 2, 8);
-    while (desiredCols > 1 && (gridW / desiredCols) - kGridArtMargin < kMinGridArtSize) desiredCols--;
+    // These three were bare literals (never scaled), so they keep their numbers
+    // and merely gain space() — a no-op at the reference height, and it finally
+    // makes tile density track the window on a taller display.
+    const int tilePitch  = (int)metrics_.space((float)kTargetTilePitch);
+    const int minArtSize = (int)metrics_.space((float)kMinGridArtSize);
+    const int artMargin  = (int)metrics_.space((float)kGridArtMargin);
+
+    int gridW = rcGrid_.right - rcGrid_.left - (int)metrics_.space((float)gridPadX_) * 2;
+    int desiredCols = std::clamp(gridW / tilePitch, 2, 8);
+    while (desiredCols > 1 && (gridW / desiredCols) - artMargin < minArtSize) desiredCols--;
     gridCols_ = std::max(1, desiredCols);
 
-    int newGridArtSize = std::max(kMinGridArtSize, gridW / gridCols_ - kGridArtMargin);
+    int newGridArtSize = std::max(minArtSize, gridW / gridCols_ - artMargin);
     if (newGridArtSize != gridArtSize_) {
         // Tile size changed (resize, monitor change, panel open/close) — cached
         // art was decoded for the old size, so it must reload at the new one.
         gridArtSize_ = newGridArtSize;
         clearGridArtTexCache();
     }
-    gridTileSize_ = gridArtSize_ + kGridArtMargin;
+    gridTileSize_ = gridArtSize_ + artMargin;
 
     // Tile text block height from the ACTUAL text sizes (two title lines +
     // artist + breathing room) — see gridRowGap_'s comment in the header.
     gridRowGap_ = (int)(titleArtistAdvance(metrics_.text.body) * 2.0f
-                        + metrics_.text.secondary * 1.35f + 18.0f * us);
+                        + metrics_.text.secondary * 1.35f + metrics_.space(29.0f));
 
     // Track rows likewise scale with their text.
-    trackRowHeight_ = (int)(40 * us);
+    trackRowHeight_ = (int)metrics_.space(65.0f);
 
     int albumRows = ((int)gridIndices_.size() + gridCols_ - 1) / gridCols_;
-    gridTotalHeight_ = albumRows * (gridTileSize_ + gridRowGap_) + gridPadY_;
+    gridTotalHeight_ = albumRows * (gridTileSize_ + gridRowGap_) + (int)metrics_.space((float)gridPadY_);
 
     // Sidebar items — search box sits between the brand and the nav. All
     // Y positions scale with the text (fixed values put "Albums" visibly
     // adrift of the search box across resolutions).
-    rcBrand_       = { 0, 0, sidebarW, (int)(50 * us) };
-    rcSearch_      = { 12, (int)(58 * us), sidebarW - 12, (int)(90 * us) };
-    float navRowH = 40.0f * us, navTop = 102.0f * us;
+    rcBrand_       = { 0, 0, sidebarW, (int)metrics_.space(82.0f) };
+    const int searchInset = (int)metrics_.space(12.0f);
+    rcSearch_      = { searchInset, (int)metrics_.space(95.0f),
+                       sidebarW - searchInset, (int)metrics_.space(147.0f) };
+    float navRowH = metrics_.space(65.0f), navTop = metrics_.space(167.0f);
     rcNavAlbum_  = { 0, (int)(navTop),               sidebarW, (int)(navTop + navRowH) };
     rcNavEp_     = { 0, (int)(navTop + navRowH),     sidebarW, (int)(navTop + navRowH * 2) };
     rcNavSingle_ = { 0, (int)(navTop + navRowH * 2), sidebarW, (int)(navTop + navRowH * 3) };
     rcNavRemix_  = { 0, (int)(navTop + navRowH * 3), sidebarW, (int)(navTop + navRowH * 4) };
-    rcNavGear_   = { 0, (int)(navTop + navRowH * 4 + 8.0f * us),
-                        sidebarW, (int)(navTop + navRowH * 5 + 8.0f * us) };
+    const float gearOffset = metrics_.space(13.0f);
+    rcNavGear_   = { 0, (int)(navTop + navRowH * 4 + gearOffset),
+                        sidebarW, (int)(navTop + navRowH * 5 + gearOffset) };
 
     // Transport sub-regions — proportional to the (scaled) bar height.
     int tTop = rcTransport_.top;
-    int tPad = (int)(12 * us);
+    int tPad = (int)metrics_.space(20.0f);
     int artSide = transportH - 2 * tPad;
     rcTransportArt_  = { tPad, tTop + tPad, tPad + artSide, tTop + tPad + artSide };
 
     // Bitperfect-mismatch warning strip: a full-width overlay directly above
     // the transport bar. Doesn't reserve/shrink grid space — this is a rare,
     // transient event, not worth a permanent layout dependency.
-    int warnH = (int)(28 * us);
+    int warnH = (int)metrics_.space(46.0f);
     rcBitperfectWarning_ = { 0, tTop - warnH, W, tTop };
 
     // Center buttons: the app's primary interactive elements (44px at the
     // reference window; scaled like everything else). Three of them:
     // prev / play-stop / next (no pause, no separate stop).
-    int btnSize = (int)(44 * us);
-    int btnGap = (int)(12 * us);
+    int btnSize = (int)metrics_.space(72.0f);
+    int btnGap = (int)metrics_.space(20.0f);
     int totalBtnW = btnSize * 3 + btnGap * 2;
     int btnX = W / 2 - totalBtnW / 2;
     int btnY = tTop + (transportH - btnSize) / 2;
@@ -1584,8 +1597,9 @@ void PlayerWindow::recalcLayout() {
     // Now-playing text runs from the art thumb to ~2cm (76px @96dpi) short
     // of the Prev button — was a fixed 360px that wasted the whole gap and
     // needlessly ellipsized titles.
-    rcTransportInfo_ = { rcTransportArt_.right + tPad, tTop + (int)(16 * us),
-                         rcBtnPrev_.left - 76, tTop + transportH - tPad };
+    rcTransportInfo_ = { rcTransportArt_.right + tPad, tTop + (int)metrics_.space(26.0f),
+                         rcBtnPrev_.left - (int)metrics_.space(76.0f),
+                         tTop + transportH - tPad };
 
     // (The album view has no on-screen close button — Escape closes it.)
 
@@ -1594,10 +1608,10 @@ void PlayerWindow::recalcLayout() {
     // and off-center at 1080p), centered on the content area with a uniform
     // vertical rhythm.
     int settCx   = (rcGrid_.left + rcGrid_.right) / 2;
-    int settTop  = (int)(90.0f * us);
-    int rowHalfW = (int)(220.0f * us);
-    int rowH     = (int)(52.0f * us);
-    int rowStep  = rowH + (int)(14.0f * us);
+    int settTop  = (int)metrics_.space(147.0f);
+    int rowHalfW = (int)metrics_.space(360.0f);
+    int rowH     = (int)metrics_.space(85.0f);
+    int rowStep  = rowH + (int)metrics_.space(23.0f);
     auto settRow = [&](int i) -> LayoutRect {
         return { settCx - rowHalfW, settTop + i * rowStep,
                  settCx + rowHalfW, settTop + i * rowStep + rowH };
