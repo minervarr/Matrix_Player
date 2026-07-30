@@ -1,6 +1,6 @@
 #include "art_view.hh"
 #include "art_texture.hh"
-#include "ui_min_text_size.gen.h"
+#include "ui_metrics.hh"
 #include "theme.hh"
 #include "host.hh"
 #include <cstdio>
@@ -363,13 +363,14 @@ void ArtWindow::drawFrame() {
                      std::floor((canvas.h() - dstH) * 0.5f), dstW, dstH);
     } else {
         canvas.clear(toColor(CLR_BG_MAIN));
-        // Floored at the geometric minimum (ui_min_text_size.gen.h) like every
-        // other text size in the app — see player_window.h for the full
-        // window-relative system this fullscreen fallback text doesn't need
-        // (this window is either fullscreen art or this one rarely-shown
-        // placeholder string, not a dense UI needing per-role scaling).
+        // One rarely-shown placeholder string, so this window doesn't need the
+        // main UI's full per-role scale — but it does need to SCALE. The old
+        // max(18.0f, kMinReadableTextSizePx) was always 18.29px (the floor
+        // always won), which is nearly invisible on the 4K display a fullscreen
+        // album-art window actually exists for. computeUiMetrics() is a free
+        // function, so this window can use the same scale without a PlayerWindow.
         canvas.textCentered("No artwork", canvas.w() * 0.5f, canvas.h() * 0.5f,
-                            std::max(18.0f, kMinReadableTextSizePx), toColor(CLR_TEXT_DIM));
+                            computeUiMetrics(canvas.h()).text.body, toColor(CLR_TEXT_DIM));
     }
     renderer_->draw(frameCurves_, /*overlay_rotation_deg=*/0, frameImages_, {}, msdfQuads_,
                     frameShapes_);

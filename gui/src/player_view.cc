@@ -935,9 +935,18 @@ void PlayerWindow::drawFrame() {
         Rect g = toRect(rcGrid_);
         canvas.rect(g.x, g.y, g.w, g.h, toColor(CLR_BG_MAIN));
 
+        // Empty states are centred by MEASURING the string, not by subtracting a
+        // guessed half-width (the old `- 160` / `- 120`, each hardcoded for one
+        // string at one text size and already visibly off before the type scale
+        // changed underneath them).
+        auto emptyState = [&](const std::string& msg) {
+            float w = canvas.textWidthStyled(msg, metrics_.text.body, FontStyle::Italic);
+            canvas.textStyled(msg, g.x + (g.w - w) * 0.5f, g.y + metrics_.space(100.0f),
+                              metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        };
+
         if (albums_.empty()) {
-            canvas.text("No albums yet. Use the gear icon below to add a music folder.",
-                       g.x + g.w * 0.5f - 160, g.y + 100, metrics_.text.body, toColor(CLR_TEXT_DIM));
+            emptyState("No albums yet. Use the gear icon below to add a music folder.");
         } else if (gridIndices_.empty()) {
             std::string msg;
             if (!searchQuery_.empty()) {
@@ -949,7 +958,7 @@ void PlayerWindow::drawFrame() {
                     albumTypeFilter_ == AlbumTypeFilter::Remix  ? "Remixes" : "Albums";
                 msg = std::string("No ") + filterLabel + " yet";
             }
-            canvas.text(msg, g.x + g.w * 0.5f - 120, g.y + 100, metrics_.text.body, toColor(CLR_TEXT_DIM));
+            emptyState(msg);
         } else {
             canvas.setClip(g.x, g.y, g.w, g.h);
             int tileSpaceW = rcGrid_.right - rcGrid_.left - gridPadX_ * 2;
