@@ -17,6 +17,7 @@
 #include <fstream>
 
 #include <soxr.h>
+#include "core/dsp/dither.h"   // ae::TpdfQuantizer — Reference EQ output stage
 
 static int pickOutputRate(int inRate, const std::vector<int>& supported) {
     for (int r : supported)
@@ -26,32 +27,15 @@ static int pickOutputRate(int inRate, const std::vector<int>& supported) {
     return supported.empty() ? 48000 : supported.back();
 }
 
-// Fast LCG for TPDF dither noise generation.
-static uint32_t s_lcgState = 0x9E3779B9u;
-static inline uint32_t lcgNext() {
-    s_lcgState = s_lcgState * 1664525u + 1013904223u;
-    return s_lcgState;
-}
+// TPDF dither + the single final quantize now live in the engine
+// (framework/audio_engine/core/include/core/dsp/dither.h) so that the engine's
+// dsp_null_test can assert their output against a frozen reference. The state
+// is file-static here for the same reason it always was: the dither sequence
+// must continue across callbacks, not restart every buffer.
+static ae::TpdfQuantizer s_quantizer;
 
-// TPDF dither + single quantize to the device's max bit depth.
-// Output is always int32 wire format (lower bits zeroed for 16/24-bit targets).
 static void ditherAndQuantize(const double* in, int32_t* out, int n, int bits) {
-    double scale = (bits == 16) ? 32767.0   * (double)(1 << 16)
-                 : (bits == 24) ? 8388607.0 * (double)(1 << 8)
-                 :                2147483647.0;
-    double ditherAmp = (bits < 32) ? (1.0 / scale) : 0.0;
-    for (int i = 0; i < n; i++) {
-        // TPDF: triangular distribution from two uniform random values
-        double r = ditherAmp * ((double)(int32_t)(lcgNext() >> 1) -
-                                (double)(int32_t)(lcgNext() >> 1)) * (1.0 / 1073741824.0);
-        double s = in[i] + r;
-        if (s >  1.0) s =  1.0;
-        if (s < -1.0) s = -1.0;
-        long long q = llround(s * scale);
-        if (q >  2147483647LL) q =  2147483647LL;
-        if (q < -2147483648LL) q = -2147483648LL;
-        out[i] = (int32_t)q;
-    }
+    s_quantizer.process(in, out, n, bits);
 }
 
 #ifdef _WIN32

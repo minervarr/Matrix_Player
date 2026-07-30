@@ -192,6 +192,30 @@ Keep them pure. `ui_icons.cc` is deliberately split from `ui_icons_draw.cc`
 precisely so the test links the real placement code without dragging in
 Canvas/Vulkan — don't collapse them back together.
 
+The audio_engine submodule adds two more, same convention, same Debug-only
+gating:
+
+```bash
+./build/linux_debug/framework/audio_engine/dsp_null_test   # DSP bit-exactness gate
+./build/linux_debug/framework/audio_engine/dsp_bench       # ns/sample for the same paths
+```
+
+**`dsp_null_test` is the gate for any change to the audio path.** It holds
+frozen copies of the EQ, the USB wire packing, and the dither/quantize stage as
+they stood before optimization, and asserts the live code still produces
+identical output. If it fails, the audio changed — that is the whole point.
+Speed on this path comes from removing overhead, never from touching the
+signal; see rule 9 in `framework/audio_engine/CLAUDE.md`.
+
+Hardware smoke tests, when a DAC is plugged in:
+
+```bash
+MATRIX_ISO_TEST=1 ./build/linux/gui/matrix_player   # 20 s 440 Hz through the iso path
+```
+
+then check `matrix_player.log` for `underrun` / `Transfer status` lines — a
+clean run logs neither.
+
 Everything else is manual. `tools/ab_test.cpp` (`matrix_ab_test`, Windows-only,
 opt-in via `-DMATRIX_BUILD_AB_TEST=ON` or the Debug build presets above) is an
 A/B listening-comparison tool for EQ changes, not an automated check. Validate
@@ -260,6 +284,12 @@ int32 exactly once — before soxr resampling if the device rate differs from
 the source, never before it — to avoid a second rounding error. Bit-perfect
 mode is unrelated to this path and aborts outright on any format mismatch
 rather than resampling.
+
+The DSP primitives it rests on live in `framework/audio_engine/core/dsp/`:
+`eq_processor.h` (cascade, SSE2/NEON stereo, no FMA), `dither.h`
+(`ae::TpdfQuantizer`), and `round.h` (exact inline `llround`/`lrint`
+replacements — both are libm *calls* otherwise, once per sample). All of it is
+pinned by `dsp_null_test`.
 
 ---
 

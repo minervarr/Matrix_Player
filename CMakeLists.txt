@@ -50,6 +50,28 @@ elseif(MATRIX_ARCH_LEVEL AND MSVC)
                      "MSVC equivalent for v4 (MSVC tops out at /arch:AVX2) — ignored.")
 endif()
 
+# -fno-math-errno: let the compiler emit math instructions instead of libm
+# calls. GCC 15 at -O3 compiles `lrint(x)` to `jmp lrint@PLT` purely because
+# lrint is allowed to set errno; with this flag it becomes a single cvtsd2siq.
+# The audio path calls into that family once per sample, so it is worth having.
+#
+# This does NOT change any result: errno is the only thing dropped, and nothing
+# in this tree reads errno after a math call. It is emphatically NOT
+# -ffast-math, which would license reassociation and flush-to-zero and destroy
+# the bit-exactness the DSP is built around (see framework/audio_engine/
+# tests/dsp_null_test.cpp). Do not "upgrade" it.
+#
+# Appended to the global flags for the same reason as MATRIX_ARCH_LEVEL above:
+# the ExternalProject sub-builds forward these variables.
+if(NOT MSVC)
+    include(CheckCXXCompilerFlag)
+    check_cxx_compiler_flag("-fno-math-errno" MATRIX_HAVE_NO_MATH_ERRNO)
+    if(MATRIX_HAVE_NO_MATH_ERRNO)
+        string(APPEND CMAKE_CXX_FLAGS " -fno-math-errno")
+        string(APPEND CMAKE_C_FLAGS " -fno-math-errno")
+    endif()
+endif()
+
 # Standalone dev tool, not part of the shipped player — off by default so a
 # normal build never compiles or links it. Turn on with
 # `cmake -B build -DMATRIX_BUILD_AB_TEST=ON`. Windows-only (uses <windows.h>

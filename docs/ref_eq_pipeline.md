@@ -72,7 +72,16 @@ TPDF adds ±1 LSB of shaped random noise that eliminates quantization distortion
 replaces it with low-level uncorrelated noise — inaudible in practice, and far
 preferable to harmonic distortion artifacts from straight truncation.
 
-At 32-bit output, dither amplitude is set to zero (no dither needed at full depth).
+At 32-bit output no dither is applied at all: the quantization error already sits
+below any DAC's noise floor, so dither would only spend headroom. This is a
+separate loop in `ae::TpdfQuantizer::process()`, not an amplitude of zero — the
+old single-loop form still ran the full noise generator per sample and then
+scaled it by zero, which measured as an identical per-sample cost at 16, 24 and
+32 bits.
+
+The generator's state lives in the `TpdfQuantizer` instance and must persist
+across callbacks. A generator restarted per buffer repeats the same noise every
+buffer, which is audible as a correlated tone rather than a flat noise floor.
 
 ---
 
@@ -80,13 +89,15 @@ At 32-bit output, dither amplitude is set to zero (no dither needed at full dept
 
 | What | Where |
 |---|---|
-| EQ biquad filters (double math) | `libs/firstparty/audio_engine/src/main/cpp/eq_processor.h` — `processSample()`, `process32()` |
+| EQ biquad filters (double math) | `framework/audio_engine/core/include/core/dsp/eq_processor.h` — `processStereoCascade()`, `process32()` |
 | EQ → double (no snap) | `eq_processor.h` — `processToDouble()` |
-| EqManager resample-aware path | `src/eq_manager.cpp` — `processToDouble()` |
-| soxr resampler setup + callback | `src/player_window.cpp` — Ref EQ branch in `onPlay()` |
-| TPDF dither + quantize | `src/player_window.cpp` — `ditherAndQuantize()` |
-| WASAPI rate probing | `src/wasapi_output.cpp` — `probeRates()`, `getMaxBitDepth()` |
-| Rate selection logic | `src/player_window.cpp` — `pickOutputRate()` (prefers integer multiples) |
+| EqManager resample-aware path | `core/src/eq_manager.cpp` — `processToDouble()` |
+| soxr resampler setup + callback | `gui/src/player_view.cc` — Ref EQ branch in `onPlay()` |
+| TPDF dither + quantize | `framework/audio_engine/core/include/core/dsp/dither.h` — `ae::TpdfQuantizer` |
+| Exact inline rounding (`llround`/`lrint` replacements) | `core/dsp/round.h` — `ae::roundHalfAway`, `ae::roundHalfEven` |
+| Bit-exactness gate for all of the above | `framework/audio_engine/tests/dsp_null_test.cpp` |
+| WASAPI rate probing | `gui/src/wasapi_output.cc` — `probeRates()`, `getMaxBitDepth()` |
+| Rate selection logic | `gui/src/player_view.cc` — `pickOutputRate()` (prefers integer multiples) |
 
 ---
 
