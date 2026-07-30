@@ -1484,22 +1484,50 @@ void PlayerWindow::recalcLayout() {
     metrics_ = computeUiMetrics((float)H);
 
 
-    if (uiMode_ == UiMode::Essential) {
-        // Phone-shaped panel (see computeEssentialWindowRect()): art fills
-        // most of it, title band below, prev/play-stop/next centered near
-        // the bottom. No seek bar, no artist text, per design.
+    // ── Essential-mode geometry — computed in BOTH modes, deliberately ──────
+    //
+    // Not just when Essential is active: loadTransportArtTexture() sizes the
+    // now-playing texture for max(transportArt, essentialArt) so that toggling
+    // modes never stretches it. With rcEssentialArt_ left at {} in Complete
+    // mode, that max() picked the ~92px transport thumb, and Alt+L then scaled
+    // it ~5.4x — the blurry-art bug. Its tell was that the art snapped sharp on
+    // the next track change, because that reload finally saw a populated rect.
+    //
+    // This block is pure arithmetic on W/H (no cache side effects), so running
+    // it in Complete mode costs nothing.
+    {
+        // Phone-shaped panel: art fills most of it, title band below,
+        // prev/play-stop/next centered near the bottom. No seek bar, no artist
+        // text, per design. Geometry is deliberately proportional to the window
+        // (W/20, H/5, ...) rather than going through metrics_.space() — a
+        // compact mode sized off window fractions is a valid choice, not drift,
+        // and it is what lets this mode work at sizes Complete mode refuses.
         int margin = std::max(12, W / 20);
-        int bottomReserve = std::max(120, H / 5);
-        int artSize = std::min({ W - margin * 2, H - bottomReserve - margin, H });
+        int btnSize = std::max(40, W / 8);
+        int btnGap  = std::max(16, W / 12);
+        int titleH  = (int)(metrics_.text.title * 1.6f);
+        int titleGap = 12;
+
+        // The bottom stack (title + buttons) is laid out FIRST and the art takes
+        // whatever is left. The old code did the reverse — it sized the art
+        // against a `bottomReserve = max(120, H/5)` that had no relationship to
+        // what actually goes in it, then placed W/8-sized buttons inside. At
+        // this mode's own default 1200x700 that reserve was 140px against a
+        // 12 + 40 + 150 + 60 = 262px stack, so the buttons overlapped the bottom
+        // 70px of the album art AND sat on top of the title band. Deriving the
+        // art from the stack cannot overlap by construction, and it keeps the
+        // controls at full size — this is a now-playing widget, so the buttons
+        // are the last thing that should shrink.
+        int bottomStack = titleGap * 2 + titleH + btnSize;
+        int artSize = std::min(W - margin * 2, H - margin * 2 - bottomStack);
+        artSize = std::max(artSize, 1);   // degenerate windows: never negative
         int artX = (W - artSize) / 2;
         int artY = margin;  // (no corner toggle button to clear anymore)
         rcEssentialArt_ = { artX, artY, artX + artSize, artY + artSize };
 
-        int titleY = rcEssentialArt_.bottom + 12;
-        rcEssentialTitle_ = { margin, titleY, W - margin, titleY + 30 };
+        int titleY = rcEssentialArt_.bottom + titleGap;
+        rcEssentialTitle_ = { margin, titleY, W - margin, titleY + titleH };
 
-        int btnSize = std::max(40, W / 8);
-        int btnGap  = std::max(16, W / 12);
         int totalBtnW = btnSize * 3 + btnGap * 2;
         int btnX = (W - totalBtnW) / 2;
         int btnY = H - margin - btnSize;
@@ -1508,8 +1536,9 @@ void PlayerWindow::recalcLayout() {
         rcEssentialPlayStop_ = { btnX, btnY, btnX + btnSize, btnY + btnSize };
         btnX += btnSize + btnGap;
         rcEssentialNext_     = { btnX, btnY, btnX + btnSize, btnY + btnSize };
-        return;
     }
+
+    if (uiMode_ == UiMode::Essential) return;
 
     // Every fixed-pixel value below is authored at the 1080 reference height
     // and passed through metrics_.space() — see ui_metrics.hh. Values that used
