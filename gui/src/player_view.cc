@@ -851,14 +851,17 @@ void PlayerWindow::drawFrame() {
     {
         Rect sb = toRect(rcSidebar_);
         canvas.rect(sb.x, sb.y, sb.w, sb.h, toColor(CLR_BG_SIDEBAR));
-        canvas.rect(sb.x + sb.w - 1, sb.y, 1, sb.h, toColor(CLR_SEPARATOR));
+        canvas.rect(sb.x + sb.w - metrics_.stroke(1.0f), sb.y, metrics_.stroke(1.0f), sb.h,
+                    toColor(CLR_SEPARATOR));
 
         // Brand must stay inside the sidebar — it once painted over the
         // first grid column's art because the sidebar width didn't scale
         // with the text (see recalcLayout()). The truncate is a backstop.
-        canvas.textStyled(truncateToWidth(canvas, "MATRIX PLAYER", sb.w - 32,
+        canvas.textStyled(truncateToWidth(canvas, "MATRIX PLAYER",
+                                          sb.w - metrics_.space(32.0f),
                                           metrics_.text.body, FontStyle::Bold),
-                          16, rcBrand_.bottom * 0.5f - metrics_.text.body * 0.5f,
+                          metrics_.space(16.0f),
+                          rcBrand_.bottom * 0.5f - metrics_.text.body * 0.5f,
                           metrics_.text.body, toColor(CLR_ACCENT), FontStyle::Bold);
 
         // Search box — filters the album grid live as the user types.
@@ -876,16 +879,20 @@ void PlayerWindow::drawFrame() {
             bool active = (!settingsOpen_ && albumTypeFilter_ == item.filter);
             bool hovered = (hoverSidebarItem_ == (int)item.filter && !active);
             Rect r = toRect(item.rc);
+            const float pillX = r.x + metrics_.space(4.0f);
+            const float pillW = r.w - metrics_.space(8.0f);
             if (active) {
                 // Selected: accent-tint fill + left bar, full height + square —
                 // matches the hover highlight exactly (one selection family).
-                canvas.rect(r.x + 4, r.y, r.w - 8, r.h,
+                canvas.rect(pillX, r.y, pillW, r.h,
                             toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
-                canvas.rect(r.x + 4, r.y, 3.0f, r.h, toColor(CLR_ACCENT), UI_CORNER_RADIUS);
+                canvas.rect(pillX, r.y, metrics_.stroke(3.0f), r.h,
+                            toColor(CLR_ACCENT), UI_CORNER_RADIUS);
             } else if (hovered) {
-                canvas.rect(r.x + 4, r.y, r.w - 8, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+                canvas.rect(pillX, r.y, pillW, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
             }
-            canvas.text(item.label, r.x + 20, r.y + r.h * 0.5f - metrics_.text.body * 0.5f,
+            canvas.text(item.label, r.x + metrics_.space(20.0f),
+                       r.y + r.h * 0.5f - metrics_.text.body * 0.5f,
                        metrics_.text.body, toColor(active ? CLR_ACCENT : CLR_TEXT_SECONDARY));
         }
 
@@ -893,20 +900,25 @@ void PlayerWindow::drawFrame() {
         // into the content-type list above (the user's explicit ask: a
         // music player should read as albums-and-music first, configuration
         // second).
-        canvas.rect((float)rcNavGear_.left, rcNavGear_.top - 4.0f * uiScale_, sb.w, 1, toColor(CLR_SEPARATOR));
+        canvas.rect((float)rcNavGear_.left, rcNavGear_.top - metrics_.space(7.0f),
+                    sb.w, metrics_.stroke(1.0f), toColor(CLR_SEPARATOR));
         {
             bool hovered = (hoverSidebarItem_ == kSidebarGearHit && !settingsOpen_);
             Rect r = toRect(rcNavGear_);
+            const float gearPillX = r.x + metrics_.space(4.0f);
+            const float gearPillW = r.w - metrics_.space(8.0f);
             if (settingsOpen_) {
-                canvas.rect(r.x + 4, r.y, r.w - 8, r.h,
+                canvas.rect(gearPillX, r.y, gearPillW, r.h,
                             toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
-                canvas.rect(r.x + 4, r.y, 3.0f, r.h, toColor(CLR_ACCENT), UI_CORNER_RADIUS);
+                canvas.rect(gearPillX, r.y, metrics_.stroke(3.0f), r.h,
+                            toColor(CLR_ACCENT), UI_CORNER_RADIUS);
             } else if (hovered) {
-                canvas.rect(r.x + 4, r.y, r.w - 8, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+                canvas.rect(gearPillX, r.y, gearPillW, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
             }
-            float iconHalf = 9.0f * uiScale_;
-            LayoutRect gearIconRc = { (int)(rcNavGear_.left + 16.0f * uiScale_), (int)(r.y + r.h * 0.5f - iconHalf),
-                                      (int)(rcNavGear_.left + 16.0f * uiScale_ + iconHalf * 2), (int)(r.y + r.h * 0.5f + iconHalf) };
+            float iconHalf = metrics_.space(15.0f);
+            float gearIconX = rcNavGear_.left + metrics_.space(26.0f);
+            LayoutRect gearIconRc = { (int)gearIconX,                (int)(r.y + r.h * 0.5f - iconHalf),
+                                      (int)(gearIconX + iconHalf * 2), (int)(r.y + r.h * 0.5f + iconHalf) };
             drawUiIcon(canvas, gearIconRc, UiIcon::Settings,
                       toColor(settingsOpen_ ? CLR_ACCENT : CLR_TEXT_SECONDARY));
         }
@@ -965,16 +977,25 @@ void PlayerWindow::drawFrame() {
                     // larger than the art reads as a border halo once the art
                     // (drawn above the vector layer) covers its center.
                     if (hoverAlbumIdx_ == idx && !nowPlaying && selectedAlbumIdx_ != idx) {
-                        canvas.rect(x - 6, y - 6, a + 12, a + 12, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+                        canvas.rect(x - metrics_.space(6.0f), y - metrics_.space(6.0f),
+                                    a + metrics_.space(12.0f), a + metrics_.space(12.0f),
+                                    toColor(CLR_HOVER), UI_CORNER_RADIUS);
                     }
                     // Now-playing: unmistakable green glow border (stronger
                     // than hover, stronger than selection).
                     if (nowPlaying) {
-                        canvas.rect(x - 9, y - 9, a + 18, a + 18, toColor(CLR_ACCENT, 0.20f), 12.0f);
-                        canvas.rect(x - 6, y - 6, a + 12, a + 12, toColor(CLR_ACCENT, 0.45f), 10.0f);
-                        canvas.rect(x - 3, y - 3, a + 6,  a + 6,  toColor(CLR_ACCENT),        8.0f);
+                        auto glow = [&](float inset, float radius, float alpha) {
+                            const float d = metrics_.space(inset);
+                            canvas.rect(x - d, y - d, a + d * 2, a + d * 2,
+                                        toColor(CLR_ACCENT, alpha), metrics_.space(radius));
+                        };
+                        glow(9.0f, 12.0f, 0.20f);
+                        glow(6.0f, 10.0f, 0.45f);
+                        glow(3.0f,  8.0f, 1.00f);
                     } else if (selectedAlbumIdx_ == idx) {
-                        canvas.rect(x - 3, y - 3, a + 6, a + 6, toColor(CLR_ACCENT, 0.8f), 8.0f);
+                        const float d = metrics_.space(3.0f);
+                        canvas.rect(x - d, y - d, a + d * 2, a + d * 2,
+                                    toColor(CLR_ACCENT, 0.8f), metrics_.space(8.0f));
                     }
 
                     // Quality-color frame — objective audio-quality metadata,
@@ -982,7 +1003,7 @@ void PlayerWindow::drawFrame() {
                     // above, which sit further out and never overlap this).
                     QualityColor qc = qualityColorFor(alb.avgSampleRate, alb.hasDsd);
                     if (qc.hasColor) {
-                        float bw = 2.0f * uiScale_;
+                        float bw = metrics_.stroke(3.0f);
                         canvas.rect(x - bw, y - bw, a + bw * 2, bw, toColor(qc.color));
                         canvas.rect(x - bw, y + a, a + bw * 2, bw, toColor(qc.color));
                         canvas.rect(x - bw, y - bw, bw, a + bw * 2, toColor(qc.color));
@@ -1002,7 +1023,10 @@ void PlayerWindow::drawFrame() {
                         alb.name == lastPlayedAlbumName_ &&
                         alb.artist == lastPlayedArtistName_;
                     if (lastPlayed)
-                        canvas.rect(x, y + a + 2, a, 2, toColor(CLR_ACCENT, 0.4f));
+                        // The +2 is the GAP below the art; the trailing 2 is the
+                        // bar's THICKNESS — different classes, same call.
+                        canvas.rect(x, y + a + metrics_.space(2.0f), a,
+                                    metrics_.stroke(2.0f), toColor(CLR_ACCENT, 0.4f));
 
                     // Tile text is centered under the art and confined to
                     // exactly the art's width — the grid's vertical edges are
@@ -1020,7 +1044,7 @@ void PlayerWindow::drawFrame() {
                                           sz, toColor(clr), st);
                     };
                     float adv = titleArtistAdvance(metrics_.text.body);
-                    float ty = y + a + 10.0f * uiScale_;
+                    float ty = y + a + metrics_.space(16.0f);
                     std::string base, mod;
                     if (splitNameModifier(alb.displayName, base, mod)) {
                         centered(truncateToWidth(canvas, base, textMaxW, metrics_.text.body, FontStyle::Bold),
@@ -1087,7 +1111,7 @@ void PlayerWindow::drawFrame() {
             // Outlined box: a full 4-side rectangle border per row. The active
             // bitperfect toggle gets a 2px accent border; the rest a 1px hairline.
             ColorRef border = isActiveModeRow ? CLR_ACCENT : CLR_SEPARATOR;
-            float bt = isActiveModeRow ? 2.0f : 1.0f;
+            float bt = isActiveModeRow ? metrics_.stroke(2.0f) : metrics_.stroke(1.0f);
             canvas.rect(r.x, r.y, r.w, bt, toColor(border));
             canvas.rect(r.x, r.y + r.h - bt, r.w, bt, toColor(border));
             canvas.rect(r.x, r.y, bt, r.h, toColor(border));
@@ -1111,11 +1135,11 @@ void PlayerWindow::drawFrame() {
             const Album& album = albums_[selectedAlbumIdx_];
             canvas.setClip(tp.x, tp.y, tp.w, tp.h);
 
-            float pad = SP_XL * uiScale_;
+            float pad = metrics_.space(65.0f);
             float scroll = (float)trackScrollY_;
             float artSize = std::min(tp.w * 0.32f, tp.h * 0.55f);
             float artX = tp.x + pad;
-            float artY = tp.y + pad + 16 - scroll;
+            float artY = tp.y + pad + metrics_.space(16.0f) - scroll;
             // The art scrolls with the page. imageFg isn't clipped by
             // setClip, but the art sits at the top of the content, so
             // scrolling only ever moves it up off the window — never down
@@ -1123,9 +1147,9 @@ void PlayerWindow::drawFrame() {
             drawArtOrPlaceholder(canvas, trackPanelArtTex_, artX, artY, artSize, artSize);
 
             // Right column: title block + track list.
-            float colX = artX + artSize + 40.0f * uiScale_;
+            float colX = artX + artSize + metrics_.space(65.0f);
             float colW = tp.x + tp.w - pad - colX;
-            float y = artY + 4;
+            float y = artY + metrics_.space(4.0f);
 
             std::string base, mod;
             splitNameModifier(album.displayName, base, mod);
@@ -1169,9 +1193,9 @@ void PlayerWindow::drawFrame() {
                                   toColor(CLR_TEXT_DIM), FontStyle::Math);
                 y += metrics_.text.caption * 1.8f;
             }
-            y += 6;
-            canvas.rect(colX, y, colW, 1, toColor(CLR_SEPARATOR));
-            y += 12;
+            y += metrics_.space(6.0f);
+            canvas.rect(colX, y, colW, metrics_.stroke(1.0f), toColor(CLR_SEPARATOR));
+            y += metrics_.space(12.0f);
 
             // Hit-test anchors for trackPanelHitTest() (scroll-0 baseline).
             trackListTop_   = (int)(y + scroll);
@@ -1206,13 +1230,13 @@ void PlayerWindow::drawFrame() {
                 if (rowY > tp.y + tp.h) break;
 
                 bool isPlayingRow = (displayAlbum_ == selectedAlbumIdx_ && displayTrack_ == i && isPlaying_);
-                float rpx = colX - 12, rpw = colW + 24;
+                float rpx = colX - metrics_.space(12.0f), rpw = colW + metrics_.space(24.0f);
                 if (isPlayingRow) {
                     // Playing row: accent-tint pill + left bar (one selection family) —
                     // full height + square, matching the hover highlight exactly.
                     canvas.rect(rpx, rowY, rpw, (float)trackRowHeight_,
                                 toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
-                    canvas.rect(rpx, rowY, 3.0f, (float)trackRowHeight_,
+                    canvas.rect(rpx, rowY, metrics_.stroke(3.0f), (float)trackRowHeight_,
                                 toColor(CLR_ACCENT), UI_CORNER_RADIUS);
                 } else if (hoverTrackIdx_ == i) {
                     canvas.rect(rpx, rowY, rpw, (float)trackRowHeight_, toColor(CLR_HOVER), UI_CORNER_RADIUS);
@@ -1221,7 +1245,7 @@ void PlayerWindow::drawFrame() {
                 if (qualityMixed) {
                     QualityColor tc = qualityColorFor(album.tracks[i].sampleRate, false);
                     if (tc.hasColor) {
-                        float bw = 1.5f * uiScale_;
+                        float bw = metrics_.stroke(2.0f);
                         canvas.rect(rpx, rowY, rpw, bw, toColor(tc.color));
                         canvas.rect(rpx, rowY + trackRowHeight_ - bw, rpw, bw, toColor(tc.color));
                         canvas.rect(rpx, rowY, bw, (float)trackRowHeight_, toColor(tc.color));
@@ -1235,14 +1259,14 @@ void PlayerWindow::drawFrame() {
                 std::string trackNumStr = std::to_string(trackNum);
                 // Baselines centered by the actual text size (the old "-6"
                 // magic offset drifted across resolutions), columns scaled.
-                float numColW = 30.0f * uiScale_, titleX = 46.0f * uiScale_;
+                float numColW = metrics_.space(49.0f), titleX = metrics_.space(75.0f);
                 float trackNumW = canvas.textWidthStyled(trackNumStr, metrics_.text.body, FontStyle::Math);
                 canvas.textStyled(trackNumStr, colX + numColW - trackNumW,
                                 rowY + trackRowHeight_ * 0.5f - metrics_.text.body * 0.5f,
                                 metrics_.text.body, toColor(isPlayingRow ? CLR_ACCENT : CLR_TEXT_SECONDARY), FontStyle::Math);
                 // Base-name priority: only the trailing "(from the Netflix
                 // Series...)" modifier ever gets truncated, never the name.
-                float titleMaxW = colW - titleX - durColW - 16.0f * uiScale_;
+                float titleMaxW = colW - titleX - durColW - metrics_.space(26.0f);
                 FontStyle rowStyle = isPlayingRow ? FontStyle::Bold : FontStyle::Roman;
                 drawNameWithModifier(canvas, album.tracks[i].title,
                                      colX + titleX,
@@ -1263,7 +1287,7 @@ void PlayerWindow::drawFrame() {
             float tracksBottom = y + (float)album.tracks.size() * trackRowHeight_;
 
             if (!qualityMixed && unifiedQuality.hasColor) {
-                float lb = 2.0f * uiScale_;
+                float lb = metrics_.stroke(3.0f);
                 float lx = (float)trackListLeft_, rx = (float)trackListRight_;
                 canvas.rect(lx - lb, y - lb, (rx - lx) + lb * 2, lb, toColor(unifiedQuality.color));
                 canvas.rect(lx - lb, tracksBottom, (rx - lx) + lb * 2, lb, toColor(unifiedQuality.color));
@@ -1272,7 +1296,7 @@ void PlayerWindow::drawFrame() {
             }
 
             // ── Sidecar text sections (album description, artist bio) ──
-            float sectY = std::max(tracksBottom, artY + artSize) + 36.0f;
+            float sectY = std::max(tracksBottom, artY + artSize) + metrics_.space(36.0f);
             float textW = tp.w - pad * 2.0f;
             if (albumTextWrapW_ != textW) {
                 albumDescLines_.clear();
@@ -1299,7 +1323,7 @@ void PlayerWindow::drawFrame() {
                                           toColor(CLR_TEXT_SECONDARY), FontStyle::Roman);
                     yy += lineAdv;
                 }
-                yy += 28.0f;
+                yy += metrics_.space(28.0f);
             };
             drawSection("ABOUT THIS ALBUM", albumDescLines_, sectY);
             if (!artistBioLines_.empty()) {
@@ -1307,10 +1331,10 @@ void PlayerWindow::drawFrame() {
                 // panel's bottom edge — imageFg composites over the
                 // transport bar otherwise).
                 if (artistImgTex_ != kInvalidTexture) {
-                    float imgSize = 120.0f * uiScale_;
+                    float imgSize = metrics_.space(196.0f);
                     if (sectY + imgSize <= tp.y + tp.h && sectY + imgSize > tp.y)
                         canvas.imageFg(artistImgTex_, tp.x + pad, sectY, imgSize, imgSize);
-                    sectY += imgSize + 16.0f;
+                    sectY += imgSize + metrics_.space(16.0f);
                 }
                 drawSection(album.artist.empty() ? std::string("ABOUT THE ARTIST")
                                                  : album.artist, artistBioLines_, sectY);
@@ -1327,7 +1351,7 @@ void PlayerWindow::drawFrame() {
     {
         Rect t = toRect(rcTransport_);
         canvas.rect(t.x, t.y, t.w, t.h, toColor(CLR_BG_TRANSPORT));
-        canvas.rect(t.x, t.y, t.w, 1, toColor(CLR_SEPARATOR));
+        canvas.rect(t.x, t.y, t.w, metrics_.stroke(1.0f), toColor(CLR_SEPARATOR));
 
         Rect artR = toRect(rcTransportArt_);
         drawArtOrPlaceholder(canvas, transportArtTex_, artR.x, artR.y, artR.w, artR.h);
@@ -1375,15 +1399,16 @@ void PlayerWindow::drawFrame() {
             bool bp = bitperfectMode_.load();
             const char* dsp = bp ? "BITPERFECT" : "REF EQ";
             ColorRef dspClr = bp ? CLR_ACCENT : CLR_TEXT_DIM;
-            float rightEdge = t.x + t.w - 16;
+            float rightEdge = t.x + t.w - metrics_.space(16.0f);
             float cy = t.y + t.h * 0.5f;
             float tagW = canvas.textWidthStyled(dsp, metrics_.text.caption, FontStyle::Math);
 
             // Hover hit rect always tracks the compact tag's home (with a
             // little slop), so the hover state stays stable while the
             // expanded readout is showing.
-            rcDspBadge_ = { (int)(rightEdge - tagW - 8), (int)(cy - metrics_.text.caption),
-                            (int)(rightEdge + 8),        (int)(cy + metrics_.text.caption) };
+            const float badgeSlop = metrics_.space(8.0f);
+            rcDspBadge_ = { (int)(rightEdge - tagW - badgeSlop), (int)(cy - metrics_.text.caption),
+                            (int)(rightEdge + badgeSlop),        (int)(cy + metrics_.text.caption) };
 
             if (hoverDspBadge_) {
                 std::string src;
@@ -1419,7 +1444,7 @@ void PlayerWindow::drawFrame() {
                         seekPosMs_ / 60000, (seekPosMs_ % 60000) / 1000,
                         seekTotalMs_ / 60000, (seekTotalMs_ % 60000) / 1000);
                 float timeW = canvas.textWidthStyled(timeBuf, metrics_.text.secondary, FontStyle::Math);
-                canvas.textStyled(timeBuf, rightEdge - tagW - 24 - timeW,
+                canvas.textStyled(timeBuf, rightEdge - tagW - metrics_.space(24.0f) - timeW,
                                   cy - metrics_.text.secondary * 0.5f,
                                   metrics_.text.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Math);
             }
@@ -1432,15 +1457,17 @@ void PlayerWindow::drawFrame() {
     if (!bitperfectWarning_.empty()) {
         Rect w = toRect(rcBitperfectWarning_);
         canvas.rect(w.x, w.y, w.w, w.h, toColor(CLR_WARNING, UI_SELECT_TINT_ALPHA));
-        canvas.rect(w.x, w.y, w.w, 1, toColor(CLR_WARNING));               // top hairline
-        canvas.rect(w.x, w.y + w.h - 1, w.w, 1, toColor(CLR_WARNING));     // bottom hairline
+        const float hair = metrics_.stroke(1.0f);
+        canvas.rect(w.x, w.y, w.w, hair, toColor(CLR_WARNING));                // top hairline
+        canvas.rect(w.x, w.y + w.h - hair, w.w, hair, toColor(CLR_WARNING));   // bottom hairline
 
-        float iconSize = w.h - 8.0f;
-        LayoutRect iconRc = { (int)(w.x + 8), (int)(w.y + 4),
-                              (int)(w.x + 8 + iconSize), (int)(w.y + 4 + iconSize) };
+        float iconSize = w.h - metrics_.space(8.0f);
+        float iconX = w.x + metrics_.space(8.0f), iconY = w.y + metrics_.space(4.0f);
+        LayoutRect iconRc = { (int)iconX,             (int)iconY,
+                              (int)(iconX + iconSize), (int)(iconY + iconSize) };
         drawWarningIcon(canvas, iconRc, toColor(CLR_WARNING));
 
-        float textX = iconRc.right + 8.0f;
+        float textX = iconRc.right + metrics_.space(8.0f);
         float textY = w.y + w.h * 0.5f - metrics_.text.secondary * 0.5f;
         canvas.text(bitperfectWarning_, textX, textY, metrics_.text.secondary, toColor(CLR_WARNING));
     }
