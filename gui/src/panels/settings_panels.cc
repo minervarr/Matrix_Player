@@ -5,6 +5,7 @@
 #include "msdf.hh"
 
 #include <algorithm>
+#include <cmath>
 
 namespace {
 Rect toRect(const LayoutRect& r) {
@@ -45,35 +46,39 @@ void drawButton(Canvas& canvas, const LayoutRect& rc, const std::string& label,
 }
 
 LayoutRect drawHeader(Canvas& canvas, const LayoutRect& area, const std::string& title,
-                      float uiScale, float headerTextSize, LayoutRect& closeRc) {
+                      float scale, float headerTextSize, LayoutRect& closeRc) {
     Rect a = toRect(area);
     canvas.rect(a.x, a.y, a.w, a.h, toColor(CLR_BG_MAIN));
 
-    float headerH = 56.0f * uiScale;
-    canvas.textStyled(title, a.x + 24.0f * uiScale, a.y + headerH * 0.5f - headerTextSize * 0.5f,
+    // Values authored at the 1080 reference height (see gui/src/ui_metrics.hh);
+    // `scale` is UiMetrics::scale, 1.0 there.
+    float headerH = 91.0f * scale;
+    canvas.textStyled(title, a.x + 39.0f * scale, a.y + headerH * 0.5f - headerTextSize * 0.5f,
                       headerTextSize, toColor(CLR_TEXT_PRIMARY), FontStyle::Bold);
-    canvas.rect(a.x, a.y + headerH, a.w, 1.0f, toColor(CLR_SEPARATOR));
+    canvas.rect(a.x, a.y + headerH, a.w, std::max(1.0f, std::round(scale)),
+                toColor(CLR_SEPARATOR));
 
-    float closeW = 90.0f * uiScale, closeH = 32.0f * uiScale;
-    closeRc = { (int)(area.right - closeW - 20.0f * uiScale), (int)(area.top + (headerH - closeH) * 0.5f),
-                (int)(area.right - 20.0f * uiScale), (int)(area.top + (headerH + closeH) * 0.5f) };
+    float closeW = 147.0f * scale, closeH = 52.0f * scale;
+    float closeMargin = 32.0f * scale;
+    closeRc = { (int)(area.right - closeW - closeMargin), (int)(area.top + (headerH - closeH) * 0.5f),
+                (int)(area.right - closeMargin),          (int)(area.top + (headerH + closeH) * 0.5f) };
 
     return { area.left, (int)(area.top + headerH), area.right, area.bottom };
 }
 
 void drawScrollbar(Canvas& canvas, const LayoutRect& listArea,
-                   int contentH, int scrollY, float uiScale) {
+                   int contentH, int scrollY, float scale) {
     Rect a = toRect(listArea);
     if (a.h <= 0.0f || contentH <= (int)a.h) return;   // everything already visible
 
-    float barW = 6.0f * uiScale;
-    float x    = a.x + a.w - barW - SP_XS * uiScale;
+    float barW = 9.0f * scale;
+    float x    = a.x + a.w - barW - SP_XS * scale;
 
     canvas.rect(x, a.y, barW, a.h, toColor(CLR_SEPARATOR));
 
     // Thumb length is the visible fraction of the content, floored so it stays
     // grabbable-looking on very long lists.
-    float thumbH = std::max(a.h * (a.h / (float)contentH), 24.0f * uiScale);
+    float thumbH = std::max(a.h * (a.h / (float)contentH), 39.0f * scale);
     float maxScroll = (float)contentH - a.h;
     float t = std::clamp((float)scrollY / maxScroll, 0.0f, 1.0f);
 

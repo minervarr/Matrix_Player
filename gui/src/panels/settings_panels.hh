@@ -34,7 +34,7 @@ void drawButton(Canvas& canvas, const LayoutRect& rc, const std::string& label,
 // below the header (what the panel's own drawing should treat as its rect).
 // closeRc receives the close button's hit-test rect (top-right corner).
 LayoutRect drawHeader(Canvas& canvas, const LayoutRect& area, const std::string& title,
-                      float uiScale, float headerTextSize, LayoutRect& closeRc);
+                      float scale, float headerTextSize, LayoutRect& closeRc);
 
 // Overflow indicator for a widgets::drawScrollList viewport: a thin track +
 // proportional thumb docked inside the list's right edge. Draws nothing when
@@ -46,6 +46,6 @@ LayoutRect drawHeader(Canvas& canvas, const LayoutRect& area, const std::string&
 // they exist — a USB DAC sitting in row 7 of a 6-row viewport was invisible
 // and unreachable-looking. Every panel that scrolls should draw this.
 void drawScrollbar(Canvas& canvas, const LayoutRect& listArea,
-                   int contentH, int scrollY, float uiScale);
+                   int contentH, int scrollY, float scale);
 
 } // namespace panels

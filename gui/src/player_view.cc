@@ -1483,12 +1483,6 @@ void PlayerWindow::recalcLayout() {
     // Type roles + geometry factor, both from the window's content height.
     metrics_ = computeUiMetrics((float)H);
 
-    // LEGACY, being retired: reproduce the old factor exactly so that call
-    // sites not yet migrated keep rendering at their current size. 13.0f was
-    // the old "nav" role's calibration size and 661.0f its reference height —
-    // both are gone from the type scale now, so the formula is spelled out
-    // here rather than derived. Deleted once nothing multiplies by uiScale_.
-    uiScale_ = std::max(13.0f / 661.0f * (float)H, kMinReadableTextSizePx) / 13.0f;
 
     if (uiMode_ == UiMode::Essential) {
         // Phone-shaped panel (see computeEssentialWindowRect()): art fills
@@ -2626,9 +2620,9 @@ void PlayerWindow::onManageFolders() {
 }
 
 void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
-    LayoutRect content = panels::drawHeader(canvas, area, "Music Folders", uiScale_, metrics_.text.header, mfCloseRc_);
-    float pad = SP_LG * uiScale_;
-    float btnH = 36.0f * uiScale_;
+    LayoutRect content = panels::drawHeader(canvas, area, "Music Folders", metrics_.scale, metrics_.text.header, mfCloseRc_);
+    float pad = metrics_.space(32.0f);
+    float btnH = metrics_.space(58.0f);
 
     LayoutRect listArea = { content.left, (int)(content.top + pad),
                             content.right, (int)(content.bottom - (btnH + pad * 2)) };
@@ -2636,14 +2630,14 @@ void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
     mfListRows_ = widgets::drawScrollList(canvas, toRect(listArea), mfRoots_,
                                           mfSelectedRow_, (float)mfScrollY_, (float)kPanelRowH,
                                           mfHoverRow_, widgets::kTextFree, matrixListStyle());
-    panels::drawScrollbar(canvas, listArea, (int)mfRoots_.size() * kPanelRowH, mfScrollY_, uiScale_);
+    panels::drawScrollbar(canvas, listArea, (int)mfRoots_.size() * kPanelRowH, mfScrollY_, metrics_.scale);
     if (mfRoots_.empty()) {
         Rect a = toRect(listArea);
-        canvas.textStyled("No music folders added yet.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,
+        canvas.textStyled("No music folders added yet.", a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
                           metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
     }
 
-    float btnW = 170.0f * uiScale_;
+    float btnW = metrics_.space(277.0f);
     int by = (int)(content.bottom - (btnH + pad));
     mfBtnRemove_ = { content.left + (int)pad, by, (int)(content.left + pad + btnW), (int)(by + btnH) };
     mfBtnDone_   = { (int)(content.right - pad - btnW), by, content.right - (int)pad, (int)(by + btnH) };
@@ -2729,15 +2723,15 @@ void PlayerWindow::onAudioSettings() {
 }
 
 void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
-    LayoutRect content = panels::drawHeader(canvas, area, "Audio Output Settings", uiScale_, metrics_.text.header, asCloseRc_);
+    LayoutRect content = panels::drawHeader(canvas, area, "Audio Output Settings", metrics_.scale, metrics_.text.header, asCloseRc_);
     Rect c = toRect(content);
-    float pad = SP_LG * uiScale_;
+    float pad = metrics_.space(32.0f);
     float y = c.y + pad;
 
     canvas.textStyled("Output backend:", c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Roman);
     y += metrics_.text.body * 1.8f;
 
-    float rowH = 34.0f * uiScale_;
+    float rowH = metrics_.space(55.0f);
     asBackendRowRects_.assign(asBackendOptions_.size(), LayoutRect{});
     for (int i = 0; i < (int)asBackendOptions_.size(); i++) {
         LayoutRect rc = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + rowH) };
@@ -2748,7 +2742,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         asBackendRowRects_[i] = toLayoutRect(hit);
         y += rowH;
     }
-    y += 12.0f * uiScale_;
+    y += metrics_.space(19.0f);
 
     AudioBackend sel = asBackendOptions_.empty() ? AudioBackend::Usb : asBackendOptions_[asBackendSelIdx_];
 
@@ -2757,12 +2751,12 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     // With 10+ ALSA devices that fixed height hid everything past row 6 behind
     // a scroll with no affordance — drawScrollList clips silently and draws no
     // scrollbar, so a DAC in row 7 simply looked absent.
-    float btnH = 36.0f * uiScale_;
+    float btnH = metrics_.space(58.0f);
     float listTop = y + metrics_.text.body * 1.6f;   // every branch draws its label first
     float listBottomLimit = (float)content.bottom - pad - btnH - pad;
 #ifdef _WIN32
     if (sel == AudioBackend::Wasapi)             // the Mode radios sit below the list
-        listBottomLimit -= 12.0f * uiScale_ + metrics_.text.body * 1.6f + 2.0f * rowH + 12.0f * uiScale_;
+        listBottomLimit -= metrics_.space(19.0f) + metrics_.text.body * 1.6f + 2.0f * rowH + metrics_.space(19.0f);
 #endif
     // 3-row floor keeps the empty-state messages below readable.
     auto listHeightFor = [&](int rowCount) {
@@ -2782,13 +2776,13 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
                                                     asUsbSel_, (float)asDeviceScrollY_, (float)kPanelRowH,
                                                     asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
         panels::drawScrollbar(canvas, asDeviceListArea_, (int)labels.size() * kPanelRowH,
-                              asDeviceScrollY_, uiScale_);
+                              asDeviceScrollY_, metrics_.scale);
         if (labels.empty()) {
             Rect a = toRect(asDeviceListArea_);
-            canvas.textStyled("No USB audio devices found.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,
+            canvas.textStyled("No USB audio devices found.", a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
                               metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
         }
-        y += listH + 12.0f * uiScale_;
+        y += listH + metrics_.space(19.0f);
     }
 #ifdef _WIN32
     else if (sel == AudioBackend::Wasapi) {
@@ -2803,8 +2797,8 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
                                                     asWasapiSel_, (float)asDeviceScrollY_, (float)kPanelRowH,
                                                     asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
         panels::drawScrollbar(canvas, asDeviceListArea_, (int)labels.size() * kPanelRowH,
-                              asDeviceScrollY_, uiScale_);
-        y += listH + 12.0f * uiScale_;
+                              asDeviceScrollY_, metrics_.scale);
+        y += listH + metrics_.space(19.0f);
 
         canvas.textStyled("Mode:", c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Roman);
         y += metrics_.text.body * 1.6f;
@@ -2819,7 +2813,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
             asModeRows_[i] = toLayoutRect(hit);
             y += rowH;
         }
-        y += 12.0f * uiScale_;
+        y += metrics_.space(19.0f);
     }
 #else
 #ifdef MATRIX_HAVE_ALSA
@@ -2835,8 +2829,8 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
                                                     asAlsaSel_, (float)asDeviceScrollY_, (float)kPanelRowH,
                                                     asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
         panels::drawScrollbar(canvas, asDeviceListArea_, (int)labels.size() * kPanelRowH,
-                              asDeviceScrollY_, uiScale_);
-        y += listH + 12.0f * uiScale_;
+                              asDeviceScrollY_, metrics_.scale);
+        y += listH + metrics_.space(19.0f);
     }
 #endif
 #ifdef MATRIX_HAVE_JACK
@@ -2852,19 +2846,19 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
                                                     asJackSel_, (float)asDeviceScrollY_, (float)kPanelRowH,
                                                     asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
         panels::drawScrollbar(canvas, asDeviceListArea_, (int)labels.size() * kPanelRowH,
-                              asDeviceScrollY_, uiScale_);
+                              asDeviceScrollY_, metrics_.scale);
         if (asJackPorts_.empty()) {
             Rect a = toRect(asDeviceListArea_);
             canvas.textStyled("No running JACK server found (or no physical playback ports).",
-                              a.x + 14.0f * uiScale_, a.y + 60.0f * uiScale_,
+                              a.x + metrics_.space(22.0f), a.y + metrics_.space(98.0f),
                               metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
         }
-        y += listH + 12.0f * uiScale_;
+        y += listH + metrics_.space(19.0f);
     }
 #endif
 #endif
 
-    float btnW = 120.0f * uiScale_;   // btnH declared above — the list is sized against it
+    float btnW = metrics_.space(196.0f);   // btnH declared above — the list is sized against it
     int by = (int)(content.bottom - (btnH + pad));
     asBtnApply_ = { (int)(content.right - pad - btnW), by, content.right - (int)pad, (int)(by + btnH) };
     panels::drawButton(canvas, asBtnApply_, "Apply", asHoverApply_, metrics_.text.body, true);
@@ -2965,9 +2959,9 @@ void PlayerWindow::eqRefilter() {
 }
 
 void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
-    LayoutRect content = panels::drawHeader(canvas, area, "EQ / AutoEQ Profiles", uiScale_, metrics_.text.header, eqCloseRc_);
+    LayoutRect content = panels::drawHeader(canvas, area, "EQ / AutoEQ Profiles", metrics_.scale, metrics_.text.header, eqCloseRc_);
     Rect c = toRect(content);
-    float pad = SP_LG * uiScale_;
+    float pad = metrics_.space(32.0f);
     float y = c.y + pad;
 
     canvas.textStyled("Device: " + eqDeviceKey_, c.x + pad, y, metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Roman);
@@ -2986,12 +2980,12 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
         y += metrics_.text.secondary * 1.6f;
     }
 
-    eqSearchRc_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + 34.0f * uiScale_) };
+    eqSearchRc_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + metrics_.space(55.0f)) };
     drawSearchField(canvas, eqSearchRc_, eqSearch_, eqSearchFocused_, "Search profiles",
                     metrics_.text.body);
-    y += 34.0f * uiScale_ + 10.0f * uiScale_;
+    y += metrics_.space(55.0f) + metrics_.space(16.0f);
 
-    float btnH = 36.0f * uiScale_;
+    float btnH = metrics_.space(58.0f);
     LayoutRect listArea = { content.left, (int)y, content.right, (int)(content.bottom - (btnH + pad * 2)) };
     eqListArea_ = listArea;
 
@@ -3006,18 +3000,18 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     eqListRows_ = widgets::drawScrollList(canvas, toRect(listArea), labels,
                                           eqSelectedRow_, (float)eqScrollY_, (float)kPanelRowH,
                                           eqHoverRow_, widgets::kTextFree, matrixListStyle());
-    panels::drawScrollbar(canvas, listArea, (int)labels.size() * kPanelRowH, eqScrollY_, uiScale_);
+    panels::drawScrollbar(canvas, listArea, (int)labels.size() * kPanelRowH, eqScrollY_, metrics_.scale);
     if (labels.empty()) {
         Rect a = toRect(listArea);
-        canvas.textStyled("No profiles match.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,
+        canvas.textStyled("No profiles match.", a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
                           metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
     }
 
-    float btnW = 170.0f * uiScale_;
+    float btnW = metrics_.space(277.0f);
     int by = (int)(content.bottom - (btnH + pad));
     eqBtnAssign_ = { content.left + (int)pad, by, (int)(content.left + pad + btnW), (int)(by + btnH) };
-    eqBtnClear_  = { (int)(content.left + pad + btnW + 12.0f * uiScale_), by,
-                     (int)(content.left + pad + 2.0f * btnW + 12.0f * uiScale_), (int)(by + btnH) };
+    eqBtnClear_  = { (int)(content.left + pad + btnW + metrics_.space(19.0f)), by,
+                     (int)(content.left + pad + 2.0f * btnW + metrics_.space(19.0f)), (int)(by + btnH) };
     panels::drawButton(canvas, eqBtnAssign_, "Assign to Device", eqHoverAssign_, metrics_.text.body, true);
     panels::drawButton(canvas, eqBtnClear_, "Clear", eqHoverClear_, metrics_.text.body);
 }
@@ -3073,15 +3067,15 @@ void PlayerWindow::onAddFolder() {
 }
 
 void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
-    LayoutRect content = panels::drawHeader(canvas, area, "Select Music Folder", uiScale_, metrics_.text.header, fpCloseRc_);
+    LayoutRect content = panels::drawHeader(canvas, area, "Select Music Folder", metrics_.scale, metrics_.text.header, fpCloseRc_);
     Rect c = toRect(content);
-    float pad = SP_LG * uiScale_;
+    float pad = metrics_.space(32.0f);
 
     canvas.textStyled(truncateToWidth(canvas, fpCurrentDir_, c.w - 2.0f * pad, metrics_.text.secondary, FontStyle::Roman),
                       c.x + pad, c.y + pad, metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Roman);
 
     float listTop = pad * 2.0f + metrics_.text.secondary * 1.4f;
-    float btnH = 36.0f * uiScale_;
+    float btnH = metrics_.space(58.0f);
     LayoutRect listArea = { content.left, (int)(content.top + listTop),
                             content.right, (int)(content.bottom - (btnH + pad * 2.0f)) };
     fpListArea_ = listArea;
@@ -3094,14 +3088,14 @@ void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
     fpListRows_ = widgets::drawScrollList(canvas, toRect(listArea), labels,
                                           -1, (float)fpScrollY_, (float)kPanelRowH,
                                           fpHoverRow_, widgets::kTextFree, matrixListStyle());
-    panels::drawScrollbar(canvas, listArea, (int)labels.size() * kPanelRowH, fpScrollY_, uiScale_);
+    panels::drawScrollbar(canvas, listArea, (int)labels.size() * kPanelRowH, fpScrollY_, metrics_.scale);
     if (labels.empty()) {
         Rect a = toRect(listArea);
-        canvas.textStyled("No subfolders here.", a.x + 14.0f * uiScale_, a.y + 14.0f * uiScale_,
+        canvas.textStyled("No subfolders here.", a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
                           metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
     }
 
-    float btnW = 200.0f * uiScale_;
+    float btnW = metrics_.space(326.0f);
     int by = (int)(content.bottom - (btnH + pad));
     fpBtnCancel_ = { content.left + (int)pad, by, (int)(content.left + pad + btnW), (int)(by + btnH) };
     fpBtnSelect_ = { (int)(content.right - pad - btnW), by, content.right - (int)pad, (int)(by + btnH) };

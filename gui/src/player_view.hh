@@ -347,12 +347,6 @@ private:
     // below — the 1920x1200 "Anaima y" bug).
     //
     int   gridRowGap_ = 64;
-
-    // LEGACY, being retired: the pre-rigor-pass geometry factor. Every
-    // remaining `* uiScale_` in the .cc is a call site not yet migrated to
-    // metrics_.space()/stroke(). Deleted when the last one is gone — see
-    // docs/superpowers/plans/2026-07-28-ui-design-system-rigor-pass.md.
-    float uiScale_    = 1.0f;
     int gridScrollY_     = 0;
     int gridTileSize_    = 180;
     int gridArtSize_     = 150;
