@@ -175,6 +175,16 @@ This is the first automated test in the repository.
 | `40 * uiScale_` | 65.4 px | re-author to `space(65)` |
 | `40` (bare) | 40 px | keep 40, becomes `space(40)` |
 
+**The re-authored value is `trunc(X × 1.63389)`, not `round`.** The original
+code casts with `(int)`, so `(int)(80 * 1.63389)` is **130**, not 131. Rounding
+instead shifts every value up by a pixel and compounds — on the settings rows
+(`rowH` + gap, times five) it reached 8px. This was found by dumping every
+computed `LayoutRect` at 1920x1080 before and after the migration and diffing;
+that check is the only reason the "pixel-identical" claim in this section is
+verified rather than assumed. Three values consumed as accumulated floats
+(`navRowH` 65.3556, `navTop` 166.6568, `gearOffset` 13.0711) keep their
+fraction instead of truncating.
+
 Both then render identically at 1080 and, for the first time, scale correctly
 above it. **Applying x1.634 to the bare literals as well would grow every
 decorative detail by 63% — the distinction is the whole correctness argument of

@@ -14,6 +14,8 @@
 - **`kMinReadableTextSizePx` = 18.2857f** — from `ui_min_text_size.gen.h` (build-generated). Never hardcode the literal; always include the header.
 - **Reference height = 1080.0f**, ratio **1.18f**, `floorScale` **1.0f**.
 - **Legacy factor = 1.63389** (`max(13.0f/661.0f*1080, 18.2857) / 13.0f`). Used only to derive re-authored values; never appears in shipped code.
+- **Re-authoring rule: `trunc(X × 1.63389)`, NOT `round`.** The original code casts with `(int)`, which truncates. Rounding shifts values up by a pixel each and compounded to an 8px drift on the settings rows — caught by the layout-dump verification in Task 3. Earlier drafts of this plan said `round`; every table below has been recomputed with truncation.
+- **Two values keep their fraction:** `navRowH` (65.3556) and `navTop` (166.6568), plus `gearOffset` (13.0711). They are consumed as floats and accumulated across five sidebar rows, so truncating them early drifts the last row by 1px.
 - **Commits:** use `./git_wrapper commit "<msg>"` — **never** plain `git commit`. It runs `git add -A` itself, so do not stage manually. Do **not** push; the user pushes.
 - **Build:** `scripts/linux/build.sh --debug` → `build/linux_debug/`. Release → `build/linux/`.
 - **`core/` rule:** unchanged — this plan touches only `gui/`.
@@ -432,23 +434,23 @@ In `recalcLayout()`, replace each `X * us` with `metrics_.space(Y)` where **Y = 
 
 | line | now | becomes |
 |---|---|---|
-| 1502 | `(int)(80 * us)` | `(int)metrics_.space(131.0f)` |
-| 1508 | `std::max(170, (int)(170.0f * us))` | `(int)metrics_.space(278.0f)` |
-| 1544-45 | `+ 18.0f * us` | `+ metrics_.space(29.0f)` |
+| 1502 | `(int)(80 * us)` | `(int)metrics_.space(130.0f)` |
+| 1508 | `std::max(170, (int)(170.0f * us))` | `(int)metrics_.space(277.0f)` |
+| 1544-45 | `+ 18.0f * us` | `+ metrics_.space(29.41f)` |
 | 1548 | `(int)(40 * us)` | `(int)metrics_.space(65.0f)` |
-| 1556 | `(int)(50 * us)` | `(int)metrics_.space(82.0f)` |
-| 1557 | `(int)(58 * us)`, `(int)(90 * us)` | `(int)metrics_.space(95.0f)`, `(int)metrics_.space(147.0f)` |
-| 1558 | `40.0f * us`, `102.0f * us` | `metrics_.space(65.0f)`, `metrics_.space(167.0f)` |
-| 1563-64 | `8.0f * us` | `metrics_.space(13.0f)` |
-| 1568 | `(int)(12 * us)` | `(int)metrics_.space(SP_MD)` |
-| 1575 | `(int)(28 * us)` | `(int)metrics_.space(46.0f)` |
-| 1581 | `(int)(44 * us)` | `(int)metrics_.space(72.0f)` |
-| 1582 | `(int)(12 * us)` | `(int)metrics_.space(SP_MD)` |
+| 1556 | `(int)(50 * us)` | `(int)metrics_.space(81.0f)` |
+| 1557 | `(int)(58 * us)`, `(int)(90 * us)` | `(int)metrics_.space(94.0f)`, `(int)metrics_.space(147.0f)` |
+| 1558 | `40.0f * us`, `102.0f * us` | `metrics_.space(65.3556f)`, `metrics_.space(166.6568f)` |
+| 1563-64 | `8.0f * us` | `metrics_.space(13.0711f)` |
+| 1568 | `(int)(12 * us)` | `(int)metrics_.space(19.0f)` |
+| 1575 | `(int)(28 * us)` | `(int)metrics_.space(45.0f)` |
+| 1581 | `(int)(44 * us)` | `(int)metrics_.space(71.0f)` |
+| 1582 | `(int)(12 * us)` | `(int)metrics_.space(19.0f)` |
 | 1595 | `(int)(16 * us)` | `(int)metrics_.space(26.0f)` |
 | 1605 | `(int)(90.0f * us)` | `(int)metrics_.space(147.0f)` |
-| 1606 | `(int)(220.0f * us)` | `(int)metrics_.space(360.0f)` |
-| 1607 | `(int)(52.0f * us)` | `(int)metrics_.space(85.0f)` |
-| 1608 | `(int)(14.0f * us)` | `(int)metrics_.space(23.0f)` |
+| 1606 | `(int)(220.0f * us)` | `(int)metrics_.space(359.0f)` |
+| 1607 | `(int)(52.0f * us)` | `(int)metrics_.space(84.0f)` |
+| 1608 | `(int)(14.0f * us)` | `(int)metrics_.space(22.0f)` |
 
 **Write plain float literals in this task, never `SP_*`.** The `SP_*` tokens
 still hold their old values (4/8/12/20/40) until Task 6 re-authors them, so
