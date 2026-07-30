@@ -858,7 +858,7 @@ void PlayerWindow::drawFrame() {
         // first grid column's art because the sidebar width didn't scale
         // with the text (see recalcLayout()). The truncate is a backstop.
         canvas.textStyled(truncateToWidth(canvas, "MATRIX PLAYER",
-                                          sb.w - metrics_.space(32.0f),
+                                          sb.w - metrics_.space(SP_LG),
                                           metrics_.text.body, FontStyle::Bold),
                           metrics_.space(16.0f),
                           rcBrand_.bottom * 0.5f - metrics_.text.body * 0.5f,
@@ -977,7 +977,7 @@ void PlayerWindow::drawFrame() {
                     // larger than the art reads as a border halo once the art
                     // (drawn above the vector layer) covers its center.
                     if (hoverAlbumIdx_ == idx && !nowPlaying && selectedAlbumIdx_ != idx) {
-                        canvas.rect(x - metrics_.space(6.0f), y - metrics_.space(6.0f),
+                        canvas.rect(x - metrics_.space(SP_XS), y - metrics_.space(SP_XS),
                                     a + metrics_.space(12.0f), a + metrics_.space(12.0f),
                                     toColor(CLR_HOVER), UI_CORNER_RADIUS);
                     }
@@ -1135,7 +1135,7 @@ void PlayerWindow::drawFrame() {
             const Album& album = albums_[selectedAlbumIdx_];
             canvas.setClip(tp.x, tp.y, tp.w, tp.h);
 
-            float pad = metrics_.space(65.0f);
+            float pad = metrics_.space(SP_XL);
             float scroll = (float)trackScrollY_;
             float artSize = std::min(tp.w * 0.32f, tp.h * 0.55f);
             float artX = tp.x + pad;
@@ -1147,7 +1147,7 @@ void PlayerWindow::drawFrame() {
             drawArtOrPlaceholder(canvas, trackPanelArtTex_, artX, artY, artSize, artSize);
 
             // Right column: title block + track list.
-            float colX = artX + artSize + metrics_.space(65.0f);
+            float colX = artX + artSize + metrics_.space(SP_XL);
             float colW = tp.x + tp.w - pad - colX;
             float y = artY + metrics_.space(4.0f);
 
@@ -1193,7 +1193,7 @@ void PlayerWindow::drawFrame() {
                                   toColor(CLR_TEXT_DIM), FontStyle::Math);
                 y += metrics_.text.caption * 1.8f;
             }
-            y += metrics_.space(6.0f);
+            y += metrics_.space(SP_XS);
             canvas.rect(colX, y, colW, metrics_.stroke(1.0f), toColor(CLR_SEPARATOR));
             y += metrics_.space(12.0f);
 
@@ -1571,7 +1571,7 @@ void PlayerWindow::recalcLayout() {
                         + metrics_.text.secondary * 1.35f + metrics_.space(29.41f));
 
     // Track rows likewise scale with their text.
-    trackRowHeight_ = (int)metrics_.space(65.0f);
+    trackRowHeight_ = (int)metrics_.space(SP_XL);
 
     int albumRows = ((int)gridIndices_.size() + gridCols_ - 1) / gridCols_;
     gridTotalHeight_ = albumRows * (gridTileSize_ + gridRowGap_) + (int)metrics_.space((float)gridPadY_);
@@ -1594,7 +1594,7 @@ void PlayerWindow::recalcLayout() {
 
     // Transport sub-regions — proportional to the (scaled) bar height.
     int tTop = rcTransport_.top;
-    int tPad = (int)metrics_.space(19.0f);
+    int tPad = (int)metrics_.space(SP_MD);
     int artSide = transportH - 2 * tPad;
     rcTransportArt_  = { tPad, tTop + tPad, tPad + artSide, tTop + tPad + artSide };
 
@@ -1608,7 +1608,7 @@ void PlayerWindow::recalcLayout() {
     // reference window; scaled like everything else). Three of them:
     // prev / play-stop / next (no pause, no separate stop).
     int btnSize = (int)metrics_.space(71.0f);
-    int btnGap = (int)metrics_.space(19.0f);
+    int btnGap = (int)metrics_.space(SP_MD);
     int totalBtnW = btnSize * 3 + btnGap * 2;
     int btnX = W / 2 - totalBtnW / 2;
     int btnY = tTop + (transportH - btnSize) / 2;
@@ -2621,7 +2621,7 @@ void PlayerWindow::onManageFolders() {
 
 void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
     LayoutRect content = panels::drawHeader(canvas, area, "Music Folders", metrics_.scale, metrics_.text.header, mfCloseRc_);
-    float pad = metrics_.space(32.0f);
+    float pad = metrics_.space(SP_LG);
     float btnH = metrics_.space(58.0f);
 
     LayoutRect listArea = { content.left, (int)(content.top + pad),
@@ -2725,7 +2725,7 @@ void PlayerWindow::onAudioSettings() {
 void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     LayoutRect content = panels::drawHeader(canvas, area, "Audio Output Settings", metrics_.scale, metrics_.text.header, asCloseRc_);
     Rect c = toRect(content);
-    float pad = metrics_.space(32.0f);
+    float pad = metrics_.space(SP_LG);
     float y = c.y + pad;
 
     canvas.textStyled("Output backend:", c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Roman);
@@ -2742,7 +2742,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         asBackendRowRects_[i] = toLayoutRect(hit);
         y += rowH;
     }
-    y += metrics_.space(19.0f);
+    y += metrics_.space(SP_MD);
 
     AudioBackend sel = asBackendOptions_.empty() ? AudioBackend::Usb : asBackendOptions_[asBackendSelIdx_];
 
@@ -2756,7 +2756,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     float listBottomLimit = (float)content.bottom - pad - btnH - pad;
 #ifdef _WIN32
     if (sel == AudioBackend::Wasapi)             // the Mode radios sit below the list
-        listBottomLimit -= metrics_.space(19.0f) + metrics_.text.body * 1.6f + 2.0f * rowH + metrics_.space(19.0f);
+        listBottomLimit -= metrics_.space(SP_MD) + metrics_.text.body * 1.6f + 2.0f * rowH + metrics_.space(SP_MD);
 #endif
     // 3-row floor keeps the empty-state messages below readable.
     auto listHeightFor = [&](int rowCount) {
@@ -2782,7 +2782,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
             canvas.textStyled("No USB audio devices found.", a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
                               metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
         }
-        y += listH + metrics_.space(19.0f);
+        y += listH + metrics_.space(SP_MD);
     }
 #ifdef _WIN32
     else if (sel == AudioBackend::Wasapi) {
@@ -2798,7 +2798,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
                                                     asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
         panels::drawScrollbar(canvas, asDeviceListArea_, (int)labels.size() * kPanelRowH,
                               asDeviceScrollY_, metrics_.scale);
-        y += listH + metrics_.space(19.0f);
+        y += listH + metrics_.space(SP_MD);
 
         canvas.textStyled("Mode:", c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Roman);
         y += metrics_.text.body * 1.6f;
@@ -2813,7 +2813,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
             asModeRows_[i] = toLayoutRect(hit);
             y += rowH;
         }
-        y += metrics_.space(19.0f);
+        y += metrics_.space(SP_MD);
     }
 #else
 #ifdef MATRIX_HAVE_ALSA
@@ -2830,7 +2830,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
                                                     asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
         panels::drawScrollbar(canvas, asDeviceListArea_, (int)labels.size() * kPanelRowH,
                               asDeviceScrollY_, metrics_.scale);
-        y += listH + metrics_.space(19.0f);
+        y += listH + metrics_.space(SP_MD);
     }
 #endif
 #ifdef MATRIX_HAVE_JACK
@@ -2853,7 +2853,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
                               a.x + metrics_.space(22.0f), a.y + metrics_.space(98.0f),
                               metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
         }
-        y += listH + metrics_.space(19.0f);
+        y += listH + metrics_.space(SP_MD);
     }
 #endif
 #endif
@@ -2961,7 +2961,7 @@ void PlayerWindow::eqRefilter() {
 void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     LayoutRect content = panels::drawHeader(canvas, area, "EQ / AutoEQ Profiles", metrics_.scale, metrics_.text.header, eqCloseRc_);
     Rect c = toRect(content);
-    float pad = metrics_.space(32.0f);
+    float pad = metrics_.space(SP_LG);
     float y = c.y + pad;
 
     canvas.textStyled("Device: " + eqDeviceKey_, c.x + pad, y, metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Roman);
@@ -3010,8 +3010,8 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     float btnW = metrics_.space(277.0f);
     int by = (int)(content.bottom - (btnH + pad));
     eqBtnAssign_ = { content.left + (int)pad, by, (int)(content.left + pad + btnW), (int)(by + btnH) };
-    eqBtnClear_  = { (int)(content.left + pad + btnW + metrics_.space(19.0f)), by,
-                     (int)(content.left + pad + 2.0f * btnW + metrics_.space(19.0f)), (int)(by + btnH) };
+    eqBtnClear_  = { (int)(content.left + pad + btnW + metrics_.space(SP_MD)), by,
+                     (int)(content.left + pad + 2.0f * btnW + metrics_.space(SP_MD)), (int)(by + btnH) };
     panels::drawButton(canvas, eqBtnAssign_, "Assign to Device", eqHoverAssign_, metrics_.text.body, true);
     panels::drawButton(canvas, eqBtnClear_, "Clear", eqHoverClear_, metrics_.text.body);
 }
@@ -3069,7 +3069,7 @@ void PlayerWindow::onAddFolder() {
 void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
     LayoutRect content = panels::drawHeader(canvas, area, "Select Music Folder", metrics_.scale, metrics_.text.header, fpCloseRc_);
     Rect c = toRect(content);
-    float pad = metrics_.space(32.0f);
+    float pad = metrics_.space(SP_LG);
 
     canvas.textStyled(truncateToWidth(canvas, fpCurrentDir_, c.w - 2.0f * pad, metrics_.text.secondary, FontStyle::Roman),
                       c.x + pad, c.y + pad, metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Roman);

@@ -9,12 +9,20 @@ static constexpr ColorRef CLR_BG_MAIN        = RGB(10, 10, 10);
 static constexpr ColorRef CLR_BG_SIDEBAR     = RGB(18, 18, 18);
 static constexpr ColorRef CLR_BG_TRANSPORT   = RGB(22, 22, 22);
 static constexpr ColorRef CLR_BG_TRACKPANEL  = RGB(14, 14, 14);
+// ── Text-color ladder — ORDERED, and it must stay ordered ──────────────────
+// PRIMARY 242 (17.7:1 on CLR_BG_MAIN) > SECONDARY 170 (8.5:1) > DIM 128 (5.0:1).
+//
+// This was previously INVERTED: DIM sat at 140 and SECONDARY at 128, so badges,
+// hints and placeholders read LOUDER than artist names and durations — the
+// opposite of the intent. The cause was raising DIM 80->140 for WCAG without
+// re-spacing SECONDARY around it. Both values already cleared AA; the bug was
+// purely ordering. Check the whole ladder before changing any one of them.
 static constexpr ColorRef CLR_TEXT_PRIMARY    = RGB(242, 242, 242);
-static constexpr ColorRef CLR_TEXT_SECONDARY  = RGB(128, 128, 128);
-// 140 (was 80): rgb(80) on the rgb(10) background was ~2.4:1 contrast —
-// below WCAG AA's 4.5:1 for the real information it carries (quality badge,
-// REF EQ, hints). 140 ≈ 5.6:1, still clearly de-emphasized vs SECONDARY.
-static constexpr ColorRef CLR_TEXT_DIM        = RGB(140, 140, 140);
+static constexpr ColorRef CLR_TEXT_SECONDARY  = RGB(170, 170, 170);
+// TIGHTEST CONTRAST IN THE APP: the transport bar's DSP badge draws DIM on
+// CLR_BG_TRANSPORT (22), which is 4.58:1 — above WCAG AA (4.5:1) but with
+// almost no margin. Do not lower this without re-checking that pair.
+static constexpr ColorRef CLR_TEXT_DIM        = RGB(128, 128, 128);
 static constexpr ColorRef CLR_ACCENT          = RGB(0, 200, 83);
 static constexpr ColorRef CLR_HOVER           = RGB(38, 38, 38);
 static constexpr ColorRef CLR_SEPARATOR       = RGB(36, 36, 36);
@@ -38,16 +46,20 @@ static constexpr ColorRef CLR_WARNING         = RGB(224, 180, 40);
 static constexpr float UI_CORNER_RADIUS = 0.0f;
 
 // ── Spacing scale ────────────────────────────────────────────────────────────
-// Base pixel rhythm for pads/gaps/margins. Callers pass these through
-// UiMetrics::space() (see ui_metrics.hh) rather than multiplying by hand.
-// Prefer them over ad-hoc literals so the layout keeps a consistent step.
-// (Values are re-authored at the 1080 reference height in a later step of the
-// rigor pass — see docs/UI_DESIGN_SYSTEM.md.)
-static constexpr float SP_XS = 4.0f;
-static constexpr float SP_SM = 8.0f;
-static constexpr float SP_MD = 12.0f;
-static constexpr float SP_LG = 20.0f;
-static constexpr float SP_XL = 40.0f;
+// Base pixel rhythm for pads/gaps/margins, authored at the 1080 reference
+// height. Callers pass these through UiMetrics::space() (see ui_metrics.hh)
+// rather than multiplying by hand. Prefer them over ad-hoc literals so the
+// layout keeps a consistent step. See docs/UI_DESIGN_SYSTEM.md.
+//
+// These are the old 4/8/12/20/40 scale times the pre-rigor-pass factor at
+// 1080 (1.63389), truncated the way the original (int) casts truncated — so
+// every call site renders exactly as it did before, and the numbers now say
+// on the page what they actually draw.
+static constexpr float SP_XS =  6.0f;
+static constexpr float SP_SM = 13.0f;
+static constexpr float SP_MD = 19.0f;
+static constexpr float SP_LG = 32.0f;
+static constexpr float SP_XL = 65.0f;
 
 // Selection tint alpha for the accent-on-state pill (lists, nav, playing row).
 static constexpr float UI_SELECT_TINT_ALPHA = 0.16f;
