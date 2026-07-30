@@ -8,6 +8,7 @@ set(MATRIX_PLAYER_PORTABLE_SOURCES
     src/gui_main.cc
     src/player_view.cc
     src/art_view.cc
+    src/ui_metrics.cc
     src/panels/settings_panels.cc)
 
 if(WIN32)
@@ -138,3 +139,26 @@ add_custom_command(TARGET matrix_player POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/assets/fonts
         $<TARGET_FILE_DIR:matrix_player>/fonts)
+
+# ---------------------------------------------------------------------------
+# ui_metrics_test — the app's only automated test. Pure arithmetic (no Vulkan,
+# no window, no linking against the engine), so it runs anywhere. Debug-only,
+# matching how this repo gates its other dev tooling (MATRIX_BUILD_AB_TEST, see
+# the root CMakeLists.txt). Asserts survive via #undef NDEBUG in the test source
+# itself. Convention matches framework/vk_canvas/core/tests/*.cc.
+#
+# layout.hh lives in framework/vk_canvas/core/ and is header-only for what this
+# test touches (UiScale::factor is inline; canvas.hh/texture.hh pull in no
+# Vulkan), so the include directory alone is enough — no vk_canvas_core link.
+# ---------------------------------------------------------------------------
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_executable(ui_metrics_test src/ui_metrics_test.cc src/ui_metrics.cc)
+    target_include_directories(ui_metrics_test PRIVATE
+        src
+        ${CMAKE_BINARY_DIR}/generated
+        ${CMAKE_SOURCE_DIR}/framework/vk_canvas/core)
+    add_dependencies(ui_metrics_test generate_ui_min_text_size)
+    if(NOT WIN32)
+        target_compile_options(ui_metrics_test PRIVATE -Wall)
+    endif()
+endif()
