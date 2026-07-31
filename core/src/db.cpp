@@ -57,6 +57,25 @@ CREATE TABLE IF NOT EXISTS eq_assignments (
     profile_source TEXT DEFAULT '',
     profile_form   TEXT DEFAULT ''
 );
+-- The headphones actually in use, which is NOT what eq_assignments records.
+-- That table is keyed by device, and a DAC has no frequency response —
+-- headphones do, and several take turns in one jack. So eq_assignments means
+-- "which pair is plugged into this output right now", and this table is the
+-- inventory the quick-switcher lists, shared across every output.
+--
+-- A row is earned, never merely selected: EqManager applies a profile the
+-- instant it is picked, but it only lands here after a minute of real
+-- listening (see kEqCreditMs in gui/src/player_view.cc). That is what keeps a
+-- mis-click from permanently occupying a sidebar row.
+CREATE TABLE IF NOT EXISTS eq_headphones (
+    profile_name   TEXT    NOT NULL,
+    profile_source TEXT    NOT NULL DEFAULT '',
+    profile_form   TEXT    NOT NULL DEFAULT '',
+    last_used      INTEGER NOT NULL DEFAULT 0,   -- unix seconds
+    use_count      INTEGER NOT NULL DEFAULT 0,
+    pinned         INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (profile_name, profile_source, profile_form)
+);
 -- Listening history and per-track counters.
 --
 -- Keyed by file_path, NOT by tracks.id, even though TODO.md said "track_id".
@@ -198,6 +217,20 @@ static void step_backfillTrackKeys(sqlite3* db) {
     sqlite3_exec(db, "UPDATE tracks SET file_mtime = 0;", nullptr, nullptr, nullptr);
 }
 
+// Seeds eq_headphones from whatever was already assigned per device, so an
+// existing install doesn't meet an empty quick-switcher. Pinned, because a
+// profile the listener chose by hand must not age out of the prune below —
+// there is no other record that they ever picked it.
+static void step_seedEqHeadphones(sqlite3* db) {
+    sqlite3_exec(db,
+        "INSERT OR IGNORE INTO eq_headphones "
+        "(profile_name, profile_source, profile_form, last_used, use_count, pinned) "
+        "SELECT profile_name, IFNULL(profile_source,''), IFNULL(profile_form,''), "
+        "       strftime('%s','now'), 1, 1 "
+        "FROM eq_assignments WHERE IFNULL(profile_name,'') <> '';",
+        nullptr, nullptr, nullptr);
+}
+
 struct SchemaStep {
     int   version;
     void (*apply)(sqlite3* db);
@@ -206,8 +239,9 @@ struct SchemaStep {
 static const SchemaStep SCHEMA_STEPS[] = {
     { 2, step_backfillTrackKeys },
     { 3, stats_backfillFromPlayHistory },
+    { 4, step_seedEqHeadphones },
 };
-static const int kSchemaVersion = 3;
+static const int kSchemaVersion = 4;
 
 static int readUserVersion(sqlite3* db) {
     sqlite3_stmt* stmt = nullptr;
@@ -556,6 +590,117 @@ void Db::clearEqAssignment(const std::string& deviceKey) {
     sqlite3_stmt* stmt = nullptr;
     sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr);
     sqlite3_bind_text(stmt, 1, deviceKey.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+// ── Headphone inventory (eq_headphones) ─────────────────────────────────────
+// Pinned first, then most-recently-used. The two orderings are one list on
+// purpose: pinning is how the listener says "this pair is mine regardless of
+// when I last reached for it", and recency handles everything else.
+
+// How many unpinned rows survive a prune. The whole point of the earn-your-row
+// rule is that the list stays short enough to read at a glance; an unbounded
+// table would reintroduce the clutter by the back door, just more slowly.
+static const int kEqHeadphoneKeep = 12;
+
+std::vector<EqHeadphone> Db::loadEqHeadphones(int limit) {
+    std::vector<EqHeadphone> out;
+    if (!impl_->db) return out;
+    const char* sql =
+        "SELECT profile_name, profile_source, profile_form, last_used, use_count, pinned "
+        "FROM eq_headphones ORDER BY pinned DESC, last_used DESC, profile_name ASC LIMIT ?;";
+    sqlite3_stmt* stmt = nullptr;
+    sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr);
+    if (!stmt) return out;
+    sqlite3_bind_int(stmt, 1, limit > 0 ? limit : -1);
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        auto col = [&](int i) -> std::string {
+            auto* s = (const char*)sqlite3_column_text(stmt, i);
+            return s ? s : "";
+        };
+        EqHeadphone h;
+        h.name     = col(0);
+        h.source   = col(1);
+        h.form     = col(2);
+        h.lastUsed = sqlite3_column_int64(stmt, 3);
+        h.useCount = sqlite3_column_int64(stmt, 4);
+        h.pinned   = sqlite3_column_int(stmt, 5) != 0;
+        out.push_back(std::move(h));
+    }
+    sqlite3_finalize(stmt);
+    return out;
+}
+
+// Two statements rather than INSERT OR REPLACE: replacing the row would wipe
+// pinned and reset use_count, silently unpinning a pair every time it played.
+void Db::creditEqHeadphone(const std::string& name, const std::string& source,
+                           const std::string& form, int64_t whenUnixSec) {
+    if (!impl_->db || name.empty()) return;
+
+    sqlite3_stmt* ins = nullptr;
+    sqlite3_prepare_v2(impl_->db,
+        "INSERT OR IGNORE INTO eq_headphones "
+        "(profile_name, profile_source, profile_form) VALUES (?,?,?);",
+        -1, &ins, nullptr);
+    sqlite3_bind_text(ins, 1, name.c_str(),   -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(ins, 2, source.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(ins, 3, form.c_str(),   -1, SQLITE_TRANSIENT);
+    sqlite3_step(ins);
+    sqlite3_finalize(ins);
+
+    sqlite3_stmt* upd = nullptr;
+    sqlite3_prepare_v2(impl_->db,
+        "UPDATE eq_headphones SET last_used = ?, use_count = use_count + 1 "
+        "WHERE profile_name = ? AND profile_source = ? AND profile_form = ?;",
+        -1, &upd, nullptr);
+    sqlite3_bind_int64(upd, 1, whenUnixSec);
+    sqlite3_bind_text (upd, 2, name.c_str(),   -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text (upd, 3, source.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text (upd, 4, form.c_str(),   -1, SQLITE_TRANSIENT);
+    sqlite3_step(upd);
+    sqlite3_finalize(upd);
+
+    // Prune the tail. Pinned rows are exempt and are not counted against the
+    // budget, so pinning a dozen pairs can never evict the one just played.
+    sqlite3_stmt* del = nullptr;
+    sqlite3_prepare_v2(impl_->db,
+        "DELETE FROM eq_headphones WHERE pinned = 0 AND rowid NOT IN "
+        "(SELECT rowid FROM eq_headphones WHERE pinned = 0 "
+        " ORDER BY last_used DESC, use_count DESC LIMIT ?);",
+        -1, &del, nullptr);
+    sqlite3_bind_int(del, 1, kEqHeadphoneKeep);
+    sqlite3_step(del);
+    sqlite3_finalize(del);
+}
+
+void Db::setEqHeadphonePinned(const std::string& name, const std::string& source,
+                              const std::string& form, bool pinned) {
+    if (!impl_->db) return;
+    sqlite3_stmt* stmt = nullptr;
+    sqlite3_prepare_v2(impl_->db,
+        "UPDATE eq_headphones SET pinned = ? "
+        "WHERE profile_name = ? AND profile_source = ? AND profile_form = ?;",
+        -1, &stmt, nullptr);
+    sqlite3_bind_int (stmt, 1, pinned ? 1 : 0);
+    sqlite3_bind_text(stmt, 2, name.c_str(),   -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, source.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, form.c_str(),   -1, SQLITE_TRANSIENT);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+void Db::removeEqHeadphone(const std::string& name, const std::string& source,
+                           const std::string& form) {
+    if (!impl_->db) return;
+    sqlite3_stmt* stmt = nullptr;
+    sqlite3_prepare_v2(impl_->db,
+        "DELETE FROM eq_headphones "
+        "WHERE profile_name = ? AND profile_source = ? AND profile_form = ?;",
+        -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, name.c_str(),   -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, source.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, form.c_str(),   -1, SQLITE_TRANSIENT);
     sqlite3_step(stmt);
     sqlite3_finalize(stmt);
 }

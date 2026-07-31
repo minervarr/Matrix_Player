@@ -10,6 +10,20 @@ struct EqAssignment {
     std::string form;
 };
 
+// One pair of headphones the listener actually uses. Distinct from
+// EqAssignment, which says which pair is on a given OUTPUT right now: a DAC has
+// no frequency response, so "the profile for this device" was never the real
+// relationship — several pairs share one jack. This is the inventory; the
+// assignment is the current state of one output.
+struct EqHeadphone {
+    std::string name;
+    std::string source;
+    std::string form;
+    int64_t     lastUsed = 0;   // unix seconds
+    int64_t     useCount = 0;
+    bool        pinned   = false;
+};
+
 // Per-track counters. No longer a stored table: these are derived from
 // play_events on demand, which is why they can't drift out of step with the
 // log. Keyed by trackKey() (core/variants.h), not by file path and not by
@@ -102,6 +116,20 @@ public:
                           const std::string& form);
     void clearEqAssignment(const std::string& deviceKey);
     bool loadEqAssignment(const std::string& deviceKey, EqAssignment& out);
+
+    // ── Headphone inventory ─────────────────────────────────────────────────
+    // Pinned first, then most recent. creditEqHeadphone() both admits a new
+    // pair and refreshes an existing one's recency — it is called once a
+    // profile has survived a minute of real listening, never on mere
+    // selection, so a mis-click can't take a slot. It also prunes the unpinned
+    // tail, keeping the list short enough to stay readable.
+    std::vector<EqHeadphone> loadEqHeadphones(int limit);
+    void creditEqHeadphone(const std::string& name, const std::string& source,
+                           const std::string& form, int64_t whenUnixSec);
+    void setEqHeadphonePinned(const std::string& name, const std::string& source,
+                              const std::string& form, bool pinned);
+    void removeEqHeadphone(const std::string& name, const std::string& source,
+                           const std::string& form);
 
     ~Db() { close(); }
 

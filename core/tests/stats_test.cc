@@ -449,7 +449,10 @@ int main() {
         // The old log is still on disk as the only checkable record of what
         // was migrated.
         assert(scalar(path, "SELECT COUNT(*) FROM play_history;") == 3);
-        assert(scalar(path, "PRAGMA user_version;") == 3);
+        // Tracks kSchemaVersion in db.cpp deliberately: a stale stamp here is
+        // how you notice you added a step without deciding what re-running it
+        // would do.
+        assert(scalar(path, "PRAGMA user_version;") == 4);
 
         // ── Re-opening must NOT migrate again ──────────────────────────────
         // This is the whole reason user_version exists: a second pass would
@@ -475,7 +478,7 @@ int main() {
             assert(db.open(path));
             assert(db.totals(StatsRange{}).plays == 0);
         }
-        assert(scalar(path, "PRAGMA user_version;") == 3);
+        assert(scalar(path, "PRAGMA user_version;") == 4);
         remove(path.c_str());
         remove((path + "-wal").c_str());
         remove((path + "-shm").c_str());
@@ -556,6 +559,116 @@ int main() {
         assert(db.skipRate(StatsRange{}) == 0.0);
         assert(db.trackTotals("nothing").playCount == 0);
         assert(db.trackTotals("").playCount == 0);
+    }
+
+    // ── An existing install's assigned profile seeds the inventory ─────────
+    // Without step_seedEqHeadphones an upgrading listener meets an empty
+    // switcher and has to re-pick the pair they were already using. Seeded
+    // PINNED, because the prune has no evidence of when they last used it and
+    // must not be free to evict a deliberate choice.
+    {
+        const std::string path = "stats_test_eqseed.db";
+        remove(path.c_str());
+        {
+            // A pre-analytics database: tracks exists (so open() treats it as
+            // pre-existing and runs the steps), user_version 0.
+            sqlite3* raw = nullptr;
+            assert(sqlite3_open(path.c_str(), &raw) == SQLITE_OK);
+            const char* v1 =
+                "CREATE TABLE tracks (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                " file_path TEXT UNIQUE, title TEXT, artist TEXT, album TEXT,"
+                " duration_ms INTEGER, sample_rate INTEGER, bit_depth INTEGER,"
+                " channels INTEGER, format TEXT, file_size INTEGER, disc_number INTEGER);"
+                "CREATE TABLE eq_assignments (device_key TEXT PRIMARY KEY,"
+                " profile_name TEXT NOT NULL, profile_source TEXT DEFAULT '',"
+                " profile_form TEXT DEFAULT '');"
+                "INSERT INTO eq_assignments VALUES ('32BB:0004','HD 650','oratory1990','over-ear');";
+            assert(sqlite3_exec(raw, v1, nullptr, nullptr, nullptr) == SQLITE_OK);
+            sqlite3_close(raw);
+        }
+        {
+            Db db;
+            assert(db.open(path));
+            auto hp = db.loadEqHeadphones(10);
+            assert(hp.size() == 1);
+            assert(hp[0].name   == "HD 650");
+            assert(hp[0].source == "oratory1990");
+            assert(hp[0].form   == "over-ear");
+            assert(hp[0].pinned);
+        }
+        // Re-opening must not duplicate it — the version guard, not the
+        // INSERT OR IGNORE, is what has to be doing the work here.
+        for (int pass = 0; pass < 3; pass++) {
+            Db db;
+            assert(db.open(path));
+        }
+        assert(scalar(path, "SELECT COUNT(*) FROM eq_headphones;") == 1);
+        remove(path.c_str());
+        remove((path + "-wal").c_str());
+        remove((path + "-shm").c_str());
+    }
+
+    // ── Headphone inventory: a credit must never clobber pinned/use_count ──
+    // creditEqHeadphone() is two statements rather than INSERT OR REPLACE for
+    // exactly this reason. A replace would silently unpin a pair every time it
+    // played, and the listener would only notice when the prune ate it.
+    {
+        Db db;
+        openWith(db, {});
+        assert(db.loadEqHeadphones(10).empty());
+
+        db.creditEqHeadphone("HD 600", "oratory1990", "over-ear", kBase);
+        auto hp = db.loadEqHeadphones(10);
+        assert(hp.size() == 1);
+        assert(hp[0].name     == "HD 600");
+        assert(hp[0].useCount == 1);
+        assert(hp[0].lastUsed == kBase);
+        assert(!hp[0].pinned);
+
+        db.setEqHeadphonePinned("HD 600", "oratory1990", "over-ear", true);
+        db.creditEqHeadphone("HD 600", "oratory1990", "over-ear", kBase + kDay);
+        hp = db.loadEqHeadphones(10);
+        assert(hp.size() == 1);               // still one row, not a duplicate
+        assert(hp[0].useCount == 2);
+        assert(hp[0].lastUsed == kBase + kDay);
+        assert(hp[0].pinned);                 // survived the credit
+
+        // Same name, different source/form is a DIFFERENT pair: the primary
+        // key is all three, because two measurements of one model are two
+        // profiles and picking between them is the whole point of the list.
+        db.creditEqHeadphone("HD 600", "crinacle", "over-ear", kBase);
+        assert(db.loadEqHeadphones(10).size() == 2);
+
+        db.removeEqHeadphone("HD 600", "crinacle", "over-ear");
+        assert(db.loadEqHeadphones(10).size() == 1);
+    }
+
+    // ── The prune keeps the list readable, and pinned rows are exempt ──────
+    {
+        Db db;
+        openWith(db, {});
+        // Two pinned pairs plus 20 casual ones. The prune budget is 12
+        // unpinned rows; pinned rows must not be counted against it, or
+        // pinning a set could evict the pair playing right now.
+        db.creditEqHeadphone("Keeper A", "", "", kBase);
+        db.creditEqHeadphone("Keeper B", "", "", kBase);
+        db.setEqHeadphonePinned("Keeper A", "", "", true);
+        db.setEqHeadphonePinned("Keeper B", "", "", true);
+        for (int i = 0; i < 20; i++)
+            db.creditEqHeadphone("Casual " + std::to_string(i), "", "",
+                                 kBase + kDay + i);
+
+        auto hp = db.loadEqHeadphones(100);
+        assert(hp.size() == 14);              // 2 pinned + 12 unpinned survivors
+
+        // Pinned first, then most-recent-first — the sidebar reads this order
+        // straight off the query.
+        assert(hp[0].pinned && hp[1].pinned);
+        assert(hp[2].name == "Casual 19");
+        assert(hp[13].name == "Casual 8");
+
+        // The oldest casual entries are the ones that went.
+        for (const auto& h : hp) assert(h.name != "Casual 0");
     }
 
     printf("stats_test: all assertions passed\n");

@@ -377,6 +377,29 @@ same hover/active visual language; opening it replaces the whole content area
 (§8.6) and closing it returns to whichever filter was active, never
 resetting to Albums.
 
+**Headphone block** (`drawHeadphoneBlock`, `player_view.cc`) — anchored to the
+BOTTOM of the sidebar under a `CLR_SEPARATOR` hairline, in the space the old
+now-playing mini card used to occupy. A `HEADPHONES` header (Bold, `secondary`
+size, `CLR_TEXT_DIM`), up to four saved profiles, and a `Search more…` row that
+opens the EQ panel. Rows reuse the nav's exact selection family — accent-tint
+pill + `stroke(3)` left bar when active, `CLR_HOVER` when merely hovered (§1.4)
+— at `secondary` size, one step down from the nav proper, because this is
+equipment configuration and not navigation. Every label goes through
+`truncateToWidth`: profile names run long and the sidebar is only `space(277)`.
+
+Two states are specific to this block:
+
+- **On trial** — `CLR_TEXT_DIM` + Italic, always the first row. The profile is
+  already audible; what is pending is whether it keeps a row (it needs 60 s of
+  real listening first). Italic-and-dim rather than a badge because the row is
+  temporary, and a badge would imply a durable property.
+- **Hidden in bitperfect mode.** Not greyed — *not drawn at all*, and it gives
+  its space back. There is no EQ to pick a profile for, and a disabled control
+  still asks to be read before it can be dismissed.
+
+If the window is short enough that the block would collide with the Settings
+row, the block yields (browsing the library is the app's primary job).
+
 ### 8.2 Album grid
 Square art tiles (placeholder = flat `CLR_TILE_PLACEHOLDER`) + Bold white title
 (two-line fallback) + italic secondary artist. **Hover** = neutral grey focus
@@ -538,6 +561,14 @@ selection family. Search fields via §8.6's shared field.
 **Shared search field** (`drawSearchField`, `player_view.cc`): `CLR_INPUT_BG`
 fill, `UI_CORNER_RADIUS`, dim placeholder, caret when focused, a bottom underline
 that turns accent on focus. One implementation for the sidebar and EQ searches.
+
+**EQ panel tabs** (`drawEqSettings`): `My Headphones` / `All Profiles`, drawn
+above the search field. Active = accent-tint fill + a `stroke(2)` accent
+underline + accent label; hover = `CLR_HOVER`; otherwise `CLR_TEXT_SECONDARY`.
+They are two views over **one list and one selection**, not two lists — so
+`Pin`/`Remove` can only ever act on the visibly highlighted row. This panel is
+the only place a saved pair is pinned or removed; the sidebar block stays a pure
+switcher, since a per-row `×` at `space(277)` would be too small to hit.
 
 ### 8.7 Bitperfect warning strip
 A **non-modal** full-width strip drawn directly above the transport bar when a

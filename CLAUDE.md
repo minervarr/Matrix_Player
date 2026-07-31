@@ -298,6 +298,36 @@ Three things about it are load-bearing and easy to undo by accident:
    regression case in `stats_test` puts three copies of one track behind one
    key and asserts no ranking totals more than the log holds.
 
+## Headphone profiles (`eq_headphones`)
+
+`eq_assignments` is keyed by **device** — VID:PID, `"alsa"`, `"jack"`. That was
+never the real relationship: a DAC has no frequency response, headphones do, and
+several pairs take turns in one jack. So the two tables split the job:
+
+- **`eq_assignments`** — which pair is on *this output* right now. Read by
+  `applyDeviceEq()` on every track start; unchanged in shape.
+- **`eq_headphones`** — the listener's inventory, global across outputs. What
+  the sidebar quick-switcher lists.
+
+Three things here are load-bearing:
+
+1. **A row is earned, not selected.** `selectEqProfile()` applies a profile
+   immediately, but `creditEqHeadphone()` only runs after `kEqCreditMs` (60 s)
+   of audio that actually reached the DAC. This exists because the list is
+   worthless once a stray click can occupy a row permanently. The gate rides on
+   `statsMsHeard_`, which the listening log already accrues every 250 ms — there
+   is no second timer, and adding one would be the wrong fix.
+2. **`eqCreditBaselineMs_` is not optional.** `statsMsHeard_` counts the
+   *track*, so swapping profiles three minutes in would credit the new pair
+   instantly without a baseline taken at selection time.
+3. **`creditEqHeadphone()` is two statements, never `INSERT OR REPLACE`.**
+   Replacing the row would wipe `pinned` and `use_count`, silently unpinning a
+   pair every time it played — and the prune would then be free to evict it.
+
+The prune keeps 12 unpinned rows; pinned rows are exempt and are not counted
+against that budget. Pinning and removing happen only in the EQ panel's
+`My Headphones` tab — the sidebar block is a switcher and nothing else.
+
 ### Schema versioning
 
 Two mechanisms in `db.cpp`, with a strict division of labour:

@@ -387,6 +387,20 @@ bool PlayerWindow::create() {
 #endif
 #endif
 
+    // Headphone switcher state. Loaded here — after audioBackend_ is settled,
+    // since getActiveDeviceKey() reads it — so the sidebar block shows the
+    // right pair before anything has played. Nothing is applied to EqManager
+    // yet; onPlay() does that through applyDeviceEq() once a rate is known.
+    reloadEqHeadphones();
+    {
+        EqAssignment assign;
+        if (db_.loadEqAssignment(getActiveDeviceKey(), assign) ||
+            db_.loadEqAssignment("global", assign)) {
+            eqCurrent_ = assign;
+            eqCurrentTentative_ = !isKnownHeadphone(assign);
+        }
+    }
+
     if (audioBackend_ == AudioBackend::Usb) {
         auto vidStr = db_.loadSetting("usb_vid");
         auto pidStr = db_.loadSetting("usb_pid");
@@ -957,6 +971,10 @@ void PlayerWindow::drawFrame() {
         // nav items was removed: it duplicated the transport bar's art,
         // title, and artist — the transport bar is the single now-playing
         // readout now, including the format line next to the BITPERFECT badge.)
+
+        // The space it left is where the headphone switcher lives, anchored to
+        // the BOTTOM of the sidebar so it never pushes the nav around.
+        drawHeadphoneBlock(canvas, rcSidebar_);
     }
 
     // ── Main content: album grid, settings page, or (below) the full-page
@@ -2508,6 +2526,11 @@ int PlayerWindow::sidebarHitTest(int x, int y) const {
     if (ptInRect(rcNavSingle_, x, y)) return (int)AlbumTypeFilter::Single;
     if (ptInRect(rcNavRemix_, x, y))  return (int)AlbumTypeFilter::Remix;
     if (ptInRect(rcNavSettings_, x, y)) return kSidebarSettingsHit;
+    // Headphone block. hpRows_/hpMoreRc_ are empty in bitperfect mode (and
+    // whenever the block didn't fit), so this costs nothing when hidden.
+    for (int i = 0; i < (int)hpRows_.size(); i++)
+        if (ptInRect(hpRows_[i].rc, x, y)) return kSidebarHpRowBase + i;
+    if (ptInRect(hpMoreRc_, x, y)) return kSidebarHpMoreHit;
     return -1;
 }
 
@@ -2726,7 +2749,30 @@ void PlayerWindow::onLButtonDown(int x, int y) {
     // Sidebar
     if (ptInRect(rcSidebar_, x, y)) {
         int nav = sidebarHitTest(x, y);
-        if (nav == kSidebarSettingsHit) {
+        // The headphone sentinels MUST be tested before the `nav >= 0` branch
+        // below, which casts whatever it gets into an AlbumTypeFilter.
+        if (nav >= kSidebarHpRowBase) {
+            int i = nav - kSidebarHpRowBase;
+            if (i < (int)hpRows_.size()) {
+                int hp = hpRows_[i].headphoneIdx;
+                // -1 is the on-trial row: already applied, so clicking it is a
+                // no-op rather than a pointless re-assign that would restart
+                // its minute and make the row impossible to ever promote.
+                if (hp >= 0 && hp < (int)eqHeadphones_.size()) {
+                    const auto& h = eqHeadphones_[hp];
+                    selectEqProfile({ h.name, h.source, h.form });
+                }
+            }
+        } else if (nav == kSidebarHpMoreHit) {
+            onEqSettings();            // clears panelFromSidebar_, as openers do
+            // The panel only draws under settingsOpen_, so borrow it — but the
+            // listener never asked to BE in Settings, and closeActivePanel()
+            // has to hand the view back rather than strand them there.
+            // trackPanelOpen_ is left alone on purpose: if they were reading an
+            // album, that is where Escape should return them.
+            settingsOpen_     = true;
+            panelFromSidebar_ = true;
+        } else if (nav == kSidebarSettingsHit) {
             if (!settingsOpen_) { settingsOpen_ = true; invalidate(); }
         } else if (nav >= 0 &&
                    (settingsOpen_ || albumTypeFilter_ != (AlbumTypeFilter)nav)) {
@@ -2957,6 +3003,14 @@ void PlayerWindow::toggleBitperfectMode() {
 
 void PlayerWindow::closeActivePanel() {
     activePanel_ = SettingsPanel::None;
+    // Swapping headphones is a hot action, not a trip into configuration: the
+    // quick-switcher borrows the settings overlay to show the profile list, so
+    // closing has to give the previous view back. Without this, Escape leaves
+    // the listener parked on the Settings page they never asked for.
+    if (panelFromSidebar_) {
+        settingsOpen_     = false;
+        panelFromSidebar_ = false;
+    }
     invalidate();
 }
 
@@ -3021,6 +3075,10 @@ void PlayerWindow::onPanelMouseMove(int x, int y) {
         bool hc = ptInRect(eqCloseRc_, x, y); if (hc != eqHoverClose_) { eqHoverClose_ = hc; changed = true; }
         bool ha = ptInRect(eqBtnAssign_, x, y); if (ha != eqHoverAssign_) { eqHoverAssign_ = ha; changed = true; }
         bool hcl = ptInRect(eqBtnClear_, x, y); if (hcl != eqHoverClear_) { eqHoverClear_ = hcl; changed = true; }
+        bool hp = ptInRect(eqBtnPin_, x, y); if (hp != eqHoverPin_) { eqHoverPin_ = hp; changed = true; }
+        bool hr = ptInRect(eqBtnRemove_, x, y); if (hr != eqHoverRemove_) { eqHoverRemove_ = hr; changed = true; }
+        bool htm = ptInRect(eqTabMine_, x, y); if (htm != eqHoverTabMine_) { eqHoverTabMine_ = htm; changed = true; }
+        bool hta = ptInRect(eqTabAll_, x, y); if (hta != eqHoverTabAll_) { eqHoverTabAll_ = hta; changed = true; }
         int row = hitTestListRows(eqListRows_, x, y);
         if (row != eqHoverRow_) { eqHoverRow_ = row; changed = true; }
         break;
@@ -3104,21 +3162,44 @@ void PlayerWindow::onPanelClick(int x, int y) {
         if (eqSearchFocused_ != wasFocused) invalidate();
         if (eqSearchFocused_) return;
 
+        if (ptInRect(eqTabMine_, x, y) || ptInRect(eqTabAll_, x, y)) {
+            bool mine = ptInRect(eqTabMine_, x, y);
+            if (mine != eqShowMine_) {
+                eqShowMine_ = mine;
+                eqSelectedRow_ = -1;   // the row indices mean something else now
+                eqScrollY_ = 0;
+                eqRefilter();
+                invalidate();
+            }
+            return;
+        }
+        // Selecting a profile goes through the one shared path — see
+        // selectEqProfile(). It writes the assignment, applies the
+        // coefficients live, and restarts the trial clock together.
         if (ptInRect(eqBtnAssign_, x, y)) {
             if (eqSelectedRow_ >= 0 && eqSelectedRow_ < (int)eqFilteredIndices_.size()) {
-                int idx = eqFilteredIndices_[eqSelectedRow_];
-                auto& p = eqProfiles_.getAll()[idx];
-                db_.saveEqAssignment(eqDeviceKey_, p.name, p.source, p.form);
-                if (!eqBitperfectActive_) {
-                    auto* profile = eqProfiles_.findByKey(p.name, p.source, p.form);
-                    int sr = 44100, ch = 2;
-                    if (output_) {
-                        int r = output_->getConfiguredRate(), c2 = output_->getConfiguredChannels();
-                        if (r > 0) sr = r;
-                        if (c2 > 0) ch = c2;
-                    }
-                    if (profile) eqManager_.applyProfile(profile, sr, ch);
-                }
+                auto& p = eqProfiles_.getAll()[eqFilteredIndices_[eqSelectedRow_]];
+                selectEqProfile({ p.name, p.source, p.form });
+            }
+            return;
+        }
+        if (ptInRect(eqBtnPin_, x, y)) {
+            if (const EqHeadphone* sel = eqSelectedHeadphone()) {
+                db_.setEqHeadphonePinned(sel->name, sel->source, sel->form, !sel->pinned);
+                reloadEqHeadphones();   // invalidates sel
+                invalidate();
+            }
+            return;
+        }
+        if (ptInRect(eqBtnRemove_, x, y)) {
+            if (const EqHeadphone* sel = eqSelectedHeadphone()) {
+                db_.removeEqHeadphone(sel->name, sel->source, sel->form);
+                reloadEqHeadphones();
+                // Removing the pair that is currently playing doesn't stop the
+                // EQ — the assignment is untouched, so it drops back to being
+                // on trial and can earn its row again.
+                eqRefilter();
+                eqSelectedRow_ = -1;
                 invalidate();
             }
             return;
@@ -3126,6 +3207,8 @@ void PlayerWindow::onPanelClick(int x, int y) {
         if (ptInRect(eqBtnClear_, x, y)) {
             db_.clearEqAssignment(eqDeviceKey_);
             eqManager_.clear();
+            eqCurrent_ = {};
+            eqCurrentTentative_ = false;
             invalidate();
             return;
         }
@@ -3535,6 +3618,7 @@ void PlayerWindow::applyAudioSettingsPanel() {
 // ── EQ Settings panel ────────────────────────────────────────────────────────
 
 void PlayerWindow::onEqSettings() {
+    panelFromSidebar_ = false;   // the sidebar path re-arms this after calling
     eqDeviceKey_ = getActiveDeviceKey();
     eqBitperfectActive_ = bitperfectMode_.load();
     eqSearch_.clear();
@@ -3543,6 +3627,12 @@ void PlayerWindow::onEqSettings() {
     eqHoverRow_ = -1;
     eqScrollY_ = 0;
     eqHoverClose_ = eqHoverAssign_ = eqHoverClear_ = false;
+    eqHoverTabAll_ = eqHoverTabMine_ = eqHoverPin_ = eqHoverRemove_ = false;
+    // Opens on whichever tab has something to show: jumping a listener with a
+    // saved set straight into 5000 catalogue entries buries the four rows they
+    // actually use.
+    reloadEqHeadphones();
+    eqShowMine_ = !eqHeadphones_.empty();
     eqRefilter();
     activePanel_ = SettingsPanel::EqSettings;
     invalidate();
@@ -3554,12 +3644,31 @@ void PlayerWindow::eqRefilter() {
     for (auto& ch : needle) ch = (char)std::tolower((unsigned char)ch);
     auto& all = eqProfiles_.getAll();
     for (int i = 0; i < (int)all.size(); i++) {
+        // "My headphones" is a filter over the SAME list and the same
+        // selection, not a second list — one selection means Pin/Remove can
+        // never act on a row other than the visibly highlighted one.
+        if (eqShowMine_ &&
+            !isKnownHeadphone({ all[i].name, all[i].source, all[i].form }))
+            continue;
         std::string nameLower = all[i].name;
         for (auto& ch : nameLower) ch = (char)std::tolower((unsigned char)ch);
         if (!needle.empty() && nameLower.find(needle) == std::string::npos) continue;
         eqFilteredIndices_.push_back(i);
     }
     if (eqSelectedRow_ >= (int)eqFilteredIndices_.size()) eqSelectedRow_ = -1;
+}
+
+// The saved row eqSelectedRow_ points at, or nullptr — the bridge between the
+// panel's profile-indexed list and eq_headphones. Pin/Remove need the saved
+// entry (for its pinned flag), not just the profile.
+const EqHeadphone* PlayerWindow::eqSelectedHeadphone() const {
+    if (eqSelectedRow_ < 0 || eqSelectedRow_ >= (int)eqFilteredIndices_.size())
+        return nullptr;
+    const auto& p = eqProfiles_.getAll()[eqFilteredIndices_[eqSelectedRow_]];
+    for (const auto& h : eqHeadphones_)
+        if (h.name == p.name && h.source == p.source && h.form == p.form)
+            return &h;
+    return nullptr;
 }
 
 void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
@@ -3584,6 +3693,38 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
         y += metrics_.text.secondary * 1.6f;
     }
 
+    // Two views over one list: the saved set, or the whole catalogue. This is
+    // also the ONLY place a saved pair is pinned or removed — the sidebar
+    // block stays a pure switcher, with no room for a per-row × at space(277).
+    {
+        float tabH = metrics_.space(52.0f);
+        float tabW = metrics_.space(200.0f);
+        eqTabMine_ = { (int)(c.x + pad), (int)y, (int)(c.x + pad + tabW), (int)(y + tabH) };
+        eqTabAll_  = { (int)(c.x + pad + tabW + metrics_.space(SP_SM)), (int)y,
+                       (int)(c.x + pad + tabW * 2 + metrics_.space(SP_SM)), (int)(y + tabH) };
+        auto tab = [&](const LayoutRect& rc, const char* label, bool active, bool hovered) {
+            Rect r = toRect(rc);
+            // Accent = state, hover = neutral (UI_DESIGN_SYSTEM.md §1.4).
+            if (active)
+                canvas.rect(r.x, r.y, r.w, r.h,
+                            toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
+            else if (hovered)
+                canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+            if (active)
+                canvas.rect(r.x, r.y + r.h - metrics_.stroke(2.0f), r.w,
+                            metrics_.stroke(2.0f), toColor(CLR_ACCENT));
+            float tw = canvas.textWidthStyled(label, metrics_.text.body, FontStyle::Roman);
+            canvas.textStyled(label, r.x + std::max(0.0f, (r.w - tw) * 0.5f),
+                              r.y + r.h * 0.5f - metrics_.text.body * 0.5f,
+                              metrics_.text.body,
+                              toColor(active ? CLR_ACCENT : CLR_TEXT_SECONDARY),
+                              FontStyle::Roman);
+        };
+        tab(eqTabMine_, "My Headphones", eqShowMine_,  eqHoverTabMine_);
+        tab(eqTabAll_,  "All Profiles",  !eqShowMine_, eqHoverTabAll_);
+        y += tabH + metrics_.space(SP_SM);
+    }
+
     eqSearchRc_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + metrics_.space(55.0f)) };
     drawSearchField(canvas, eqSearchRc_, eqSearch_, eqSearchFocused_, "Search profiles",
                     metrics_.text.body);
@@ -3599,6 +3740,17 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     for (int idx : eqFilteredIndices_) {
         std::string label = all[idx].name;
         if (!all[idx].form.empty()) label += "  (" + all[idx].form + ")";
+        // In the saved view, say which rows are pinned — pinned is the one
+        // property that changes what Remove and the prune will do to a row.
+        if (eqShowMine_) {
+            for (const auto& h : eqHeadphones_) {
+                if (h.name == all[idx].name && h.source == all[idx].source &&
+                    h.form == all[idx].form) {
+                    if (h.pinned) label += "  \xE2\x80\x94 pinned";
+                    break;
+                }
+            }
+        }
         labels.push_back(label);
     }
     eqListRows_ = widgets::drawScrollList(canvas, toRect(listArea), labels,
@@ -3607,17 +3759,44 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     panels::drawScrollbar(canvas, listArea, (int)labels.size() * kPanelRowH, eqScrollY_, metrics_.scale);
     if (labels.empty()) {
         Rect a = toRect(listArea);
-        canvas.textStyled("No profiles match.", a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
+        // The saved view's empty state explains the rule rather than just
+        // reporting nothing: "no profiles match" would read as a bug to
+        // someone who has assigned a profile and not yet listened to it.
+        const char* msg = eqShowMine_
+            ? (eqSearch_.empty()
+                 ? "No headphones saved yet \xE2\x80\x94 pick a profile under All Profiles "
+                   "and listen for a minute."
+                 : "No saved headphones match.")
+            : "No profiles match.";
+        canvas.textStyled(msg, a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
                           metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
     }
 
     float btnW = metrics_.space(277.0f);
+    float gap  = metrics_.space(SP_MD);
     int by = (int)(content.bottom - (btnH + pad));
-    eqBtnAssign_ = { content.left + (int)pad, by, (int)(content.left + pad + btnW), (int)(by + btnH) };
-    eqBtnClear_  = { (int)(content.left + pad + btnW + metrics_.space(SP_MD)), by,
-                     (int)(content.left + pad + 2.0f * btnW + metrics_.space(SP_MD)), (int)(by + btnH) };
-    panels::drawButton(canvas, eqBtnAssign_, "Assign to Device", eqHoverAssign_, metrics_.text.body, true);
-    panels::drawButton(canvas, eqBtnClear_, "Clear", eqHoverClear_, metrics_.text.body);
+    auto btnAt = [&](int slot) -> LayoutRect {
+        float x0 = content.left + pad + slot * (btnW + gap);
+        return { (int)x0, by, (int)(x0 + btnW), (int)(by + btnH) };
+    };
+    eqBtnAssign_ = btnAt(0);
+    if (eqShowMine_) {
+        const EqHeadphone* sel = eqSelectedHeadphone();
+        eqBtnPin_    = btnAt(1);
+        eqBtnRemove_ = btnAt(2);
+        eqBtnClear_  = {};   // not offered here; Clear belongs to the device view
+        panels::drawButton(canvas, eqBtnAssign_, "Select", eqHoverAssign_, metrics_.text.body, true);
+        panels::drawButton(canvas, eqBtnPin_,
+                           (sel && sel->pinned) ? "Unpin" : "Pin",
+                           eqHoverPin_, metrics_.text.body);
+        panels::drawButton(canvas, eqBtnRemove_, "Remove", eqHoverRemove_, metrics_.text.body);
+    } else {
+        eqBtnClear_  = btnAt(1);
+        eqBtnPin_    = {};
+        eqBtnRemove_ = {};
+        panels::drawButton(canvas, eqBtnAssign_, "Assign to Device", eqHoverAssign_, metrics_.text.body, true);
+        panels::drawButton(canvas, eqBtnClear_, "Clear", eqHoverClear_, metrics_.text.body);
+    }
 }
 
 // ── Folder picker panel (also reached via "Add Music Folder") ───────────────
@@ -3759,13 +3938,192 @@ void PlayerWindow::applyDeviceEq(int sampleRate, int channels) {
     if (!db_.loadEqAssignment(key, assign) &&
         !db_.loadEqAssignment("global", assign)) {
         eqManager_.clear();
+        eqCurrent_ = {};
+        eqCurrentTentative_ = false;
         return;
     }
     auto* profile = eqProfiles_.findByKey(assign.name, assign.source, assign.form);
-    if (profile)
+    if (profile) {
         eqManager_.applyProfile(profile, sampleRate, channels);
-    else
+        eqCurrent_ = assign;
+        // A profile that survived a restart without ever earning its minute is
+        // still on trial. The ASSIGNMENT persists deliberately — dropping it
+        // would silently kill the listener's EQ if they closed the app 40
+        // seconds in — but the list membership has to be earned all the same.
+        eqCurrentTentative_ = !isKnownHeadphone(assign);
+    } else {
         eqManager_.clear();
+        eqCurrent_ = {};
+        eqCurrentTentative_ = false;
+    }
+}
+
+// ── Headphone quick-switcher ─────────────────────────────────────────────────
+
+void PlayerWindow::reloadEqHeadphones() {
+    eqHeadphones_ = db_.loadEqHeadphones(64);
+    if (!eqCurrent_.name.empty())
+        eqCurrentTentative_ = !isKnownHeadphone(eqCurrent_);
+}
+
+bool PlayerWindow::isKnownHeadphone(const EqAssignment& a) const {
+    for (const auto& h : eqHeadphones_)
+        if (h.name == a.name && h.source == a.source && h.form == a.form)
+            return true;
+    return false;
+}
+
+// Bottom-anchored inside the sidebar: a header, up to kEqHpMaxRows saved pairs
+// (plus the on-trial one, which is extra rather than displacing a saved row),
+// and a link into the full catalogue. Rects are computed here and cached for
+// hit-testing — the same contract eqListRows_ uses — so the block follows the
+// mode toggle and the list contents without anything hanging off
+// recalcLayout().
+void PlayerWindow::drawHeadphoneBlock(Canvas& canvas, const LayoutRect& sidebar) {
+    hpRows_.clear();
+    hpMoreRc_ = {};
+
+    // Nothing to pick a profile FOR in bitperfect mode — the signal path is
+    // untouched by definition, so the block would be a control that does
+    // nothing. Hidden, not greyed: a disabled row still asks to be read.
+    if (bitperfectMode_.load()) return;
+
+    Rect sb = toRect(sidebar);
+    const float pad     = metrics_.space(SP_SM);
+    const float rowH    = metrics_.space(48.0f);
+    const float headerH = metrics_.text.secondary * 2.2f;
+
+    // The on-trial profile takes the first row and does NOT count against the
+    // budget: it is what the listener just picked, so hiding it to preserve a
+    // saved row would hide the one thing they are looking for.
+    const bool showTrial = eqCurrentTentative_ && !eqCurrent_.name.empty();
+    int saved = (int)eqHeadphones_.size();
+    if (saved > kEqHpMaxRows) saved = kEqHpMaxRows;
+    const int totalRows = saved + (showTrial ? 1 : 0);
+    // An empty list still occupies one row ("None yet"), so the height budget
+    // has to count it or the block overflows past the bottom of the sidebar.
+    const int listRows  = totalRows > 0 ? totalRows : 1;
+
+    // Header + rows + the "Search more…" row + padding above and below.
+    const float blockH = headerH + (listRows + 1) * rowH + pad * 2.0f;
+    float y = sb.y + sb.h - blockH;
+
+    // The nav must win if the window is short enough for the two to meet —
+    // browsing the library is the app's primary job, EQ housekeeping is not.
+    if (y < rcNavSettings_.bottom + metrics_.space(SP_MD)) return;
+
+    canvas.rect(sb.x, y, sb.w, metrics_.stroke(1.0f), toColor(CLR_SEPARATOR));
+    y += pad;
+
+    canvas.textStyled("HEADPHONES", sb.x + metrics_.space(20.0f), y,
+                      metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Bold);
+    y += headerH;
+
+    const float textX   = sb.x + metrics_.space(20.0f);
+    const float maxTextW = sb.w - metrics_.space(20.0f) - metrics_.space(SP_SM);
+
+    auto drawRow = [&](const std::string& label, bool active, bool trial,
+                       bool hovered, float ry) {
+        const float pillX = sb.x + metrics_.space(4.0f);
+        const float pillW = sb.w - metrics_.space(8.0f);
+        // Accent = state, hover = neutral grey (UI_DESIGN_SYSTEM.md §1.4) —
+        // the same selection family as the nav rows above.
+        if (active) {
+            canvas.rect(pillX, ry, pillW, rowH,
+                        toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
+            canvas.rect(pillX, ry, metrics_.stroke(3.0f), rowH,
+                        toColor(CLR_ACCENT), UI_CORNER_RADIUS);
+        } else if (hovered) {
+            canvas.rect(pillX, ry, pillW, rowH, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+        }
+        // On trial: dim + italic. The EQ is already audible; what is pending is
+        // only whether this pair keeps a row.
+        const FontStyle style = trial ? FontStyle::Italic : FontStyle::Roman;
+        const ColorRef  clr   = trial   ? CLR_TEXT_DIM
+                              : active  ? CLR_ACCENT
+                                        : CLR_TEXT_SECONDARY;
+        // Profile names run long ("Sennheiser HD 600 (over-ear)") and the
+        // sidebar is only space(277). Without this they paint over the grid.
+        canvas.textStyled(truncateToWidth(canvas, label, maxTextW,
+                                          metrics_.text.secondary, style),
+                          textX, ry + rowH * 0.5f - metrics_.text.secondary * 0.5f,
+                          metrics_.text.secondary, toColor(clr), style);
+    };
+
+    const int rowLeft  = sidebar.left;
+    const int rowRight = sidebar.right;
+
+    int rowIdx = 0;
+    if (showTrial) {
+        const bool hovered = (hoverSidebarItem_ == kSidebarHpRowBase + rowIdx);
+        drawRow(eqCurrent_.name, /*active=*/true, /*trial=*/true, hovered, y);
+        hpRows_.push_back({ { rowLeft, (int)y, rowRight, (int)(y + rowH) }, -1 });
+        y += rowH;
+        rowIdx++;
+    }
+    for (int i = 0; i < saved; i++) {
+        const auto& h = eqHeadphones_[i];
+        const bool active = (h.name   == eqCurrent_.name &&
+                             h.source == eqCurrent_.source &&
+                             h.form   == eqCurrent_.form);
+        const bool hovered = (hoverSidebarItem_ == kSidebarHpRowBase + rowIdx) && !active;
+        drawRow(h.name, active, /*trial=*/false, hovered, y);
+        hpRows_.push_back({ { rowLeft, (int)y, rowRight, (int)(y + rowH) }, i });
+        y += rowH;
+        rowIdx++;
+    }
+
+    if (totalRows == 0) {
+        canvas.textStyled("None yet", textX, y + rowH * 0.5f - metrics_.text.secondary * 0.5f,
+                          metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        y += rowH;
+    }
+
+    // The escape hatch into the full catalogue. Sized as a row so it lines up
+    // with the ones above rather than floating.
+    {
+        const bool hovered = (hoverSidebarItem_ == kSidebarHpMoreHit);
+        if (hovered) {
+            canvas.rect(sb.x + metrics_.space(4.0f), y, sb.w - metrics_.space(8.0f),
+                        rowH, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+        }
+        canvas.textStyled("Search more\xE2\x80\xA6", textX,
+                          y + rowH * 0.5f - metrics_.text.secondary * 0.5f,
+                          metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+        hpMoreRc_ = { rowLeft, (int)y, rowRight, (int)(y + rowH) };
+    }
+}
+
+void PlayerWindow::selectEqProfile(const EqAssignment& a) {
+    const EqProfile* profile = eqProfiles_.findByKey(a.name, a.source, a.form);
+    if (!profile) return;
+
+    db_.saveEqAssignment(getActiveDeviceKey(), a.name, a.source, a.form);
+    eqCurrent_ = a;
+    eqCurrentTentative_ = !isKnownHeadphone(a);
+
+    // The new profile starts its own minute. statsMsHeard_ belongs to the
+    // TRACK and is already well past zero mid-playback, so without this
+    // baseline a swap late in a song would credit the new pair instantly.
+    eqCreditedThisTrack_ = false;
+    eqCreditBaselineMs_  = statsMsHeard_;
+
+    // Bitperfect deliberately leaves the engine alone: the assignment is
+    // recorded and takes effect the moment Reference EQ comes back.
+    if (!bitperfectMode_.load()) {
+        int sr = 44100, ch = 2;
+        if (output_) {
+            int r = output_->getConfiguredRate(), c = output_->getConfiguredChannels();
+            if (r > 0) sr = r;
+            if (c > 0) ch = c;
+        }
+        // EqManager swaps into its back buffer and flips an atomic, so this is
+        // safe with audio running — the change lands on the next chunk, not
+        // the next track (unlike the bitperfect toggle, which cannot be
+        // switched mid-stream).
+        eqManager_.applyProfile(profile, sr, ch);
+    }
+    invalidate();
 }
 
 void PlayerWindow::onPlay(StartCause cause) {
@@ -4343,6 +4701,25 @@ void PlayerWindow::accrueListenTime() {
         if (step > 0 && step <= 2000) statsMsHeard_ += step;
     }
     statsLastPosMs_ = pos;
+
+    // A headphone profile earns its sidebar row here, off the same counter —
+    // there is no second timer and no second thread. The listener's stated
+    // problem was a list polluted by profiles picked once by mistake, and a
+    // minute of audio that actually reached the DAC is the cheapest honest
+    // evidence that a pair is really in use.
+    //
+    // This also fires once per track for a profile already in the list, which
+    // is what keeps the ordering a true most-recently-used list rather than a
+    // frozen record of first contact. One UPDATE per track.
+    if (!eqCreditedThisTrack_ && !eqCurrent_.name.empty() &&
+        statsMsHeard_ - eqCreditBaselineMs_ >= kEqCreditMs &&
+        !bitperfectMode_.load() && eqManager_.isActive()) {
+        db_.creditEqHeadphone(eqCurrent_.name, eqCurrent_.source, eqCurrent_.form,
+                              (int64_t)time(nullptr));
+        eqCreditedThisTrack_ = true;
+        reloadEqHeadphones();      // clears eqCurrentTentative_
+        invalidate();
+    }
 }
 
 void PlayerWindow::beginTrackStats(const Track& t, StartCause cause) {
@@ -4356,6 +4733,10 @@ void PlayerWindow::beginTrackStats(const Track& t, StartCause cause) {
     statsLastPosMs_  = -1;
     statsEventId_    = db_.beginPlayEvent(statsKey_, statsPath_, t.durationMs,
                                           cause, (int64_t)time(nullptr));
+    // Each track buys the active profile one recency refresh, no more; the
+    // baseline goes with statsMsHeard_ back to zero.
+    eqCreditedThisTrack_ = false;
+    eqCreditBaselineMs_  = 0;
 }
 
 void PlayerWindow::flushTrackStats(EndCause cause) {

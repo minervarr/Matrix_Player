@@ -187,6 +187,17 @@ private:
     std::string audioBackendLabel() const;
     void applyDeviceEq(int sampleRate, int channels);
 
+    // The ONE path that changes which headphone profile is in force — the
+    // sidebar block and the EQ panel's Assign button both go through it, so
+    // "write the assignment, apply the coefficients, restart the trial clock"
+    // can't drift apart between the two call sites.
+    void selectEqProfile(const EqAssignment& a);
+    void reloadEqHeadphones();
+    bool isKnownHeadphone(const EqAssignment& a) const;
+    // Bottom-anchored inside the sidebar. Draws nothing in bitperfect mode:
+    // there is no EQ to pick a profile for.
+    void drawHeadphoneBlock(Canvas& canvas, const LayoutRect& sidebar);
+
     // ── Settings panels (Phase 7) — vk_canvas-native replacements for the
     // four native dialogs, identical on both platforms. See
     // panels/settings_panels.hh for the shared row-list/button/header
@@ -206,6 +217,7 @@ private:
 
     void drawEqSettings(Canvas& canvas, const LayoutRect& area);
     void eqRefilter();
+    const EqHeadphone* eqSelectedHeadphone() const;
 
     void drawFolderPicker(Canvas& canvas, const LayoutRect& area);
     void fpLoadDir(const std::string& dir);
@@ -397,6 +409,13 @@ private:
     LayoutRect eqSearchRc_ = {}, eqListArea_ = {}, eqCloseRc_ = {}, eqBtnAssign_ = {}, eqBtnClear_ = {};
     bool eqHoverClose_ = false, eqHoverAssign_ = false, eqHoverClear_ = false;
     std::vector<widgets::ListRow> eqListRows_;  // cached during draw, read by hit-test
+    // Two views over ONE list and ONE selection: the full catalogue, or just
+    // the saved headphones. Pinning and removing live only here — the sidebar
+    // stays a pure switcher, with no room for a per-row × at 277px wide.
+    bool eqShowMine_ = false;
+    LayoutRect eqTabAll_ = {}, eqTabMine_ = {}, eqBtnPin_ = {}, eqBtnRemove_ = {};
+    bool eqHoverTabAll_ = false, eqHoverTabMine_ = false;
+    bool eqHoverPin_ = false, eqHoverRemove_ = false;
 
     // Folder picker (also reached via "Add Music Folder")
     std::string fpCurrentDir_;
@@ -538,7 +557,17 @@ private:
     static_assert((int)AlbumTypeFilter::Remix  == (int)Album::ReleaseType::Remix,  "AlbumTypeFilter/Album::ReleaseType value mismatch");
     AlbumTypeFilter albumTypeFilter_ = AlbumTypeFilter::Album;
     bool            settingsOpen_    = false;
-    static constexpr int kSidebarSettingsHit = 4;  // sidebarHitTest() sentinel for the Settings row
+    // True while a panel is only borrowing the settings overlay to draw in —
+    // opened from the sidebar's headphone switcher, not by walking into
+    // Settings. closeActivePanel() restores the previous view when it is set.
+    bool            panelFromSidebar_ = false;
+    // sidebarHitTest() sentinels. The first four values are AlbumTypeFilter
+    // casts, so everything else starts above them — and onLButtonDown() must
+    // test these BEFORE its `nav >= 0` branch, which would otherwise cast a
+    // sentinel straight into an out-of-range AlbumTypeFilter.
+    static constexpr int kSidebarSettingsHit = 4;  // the Settings row
+    static constexpr int kSidebarHpMoreHit   = 5;  // the headphone block's "Search more…"
+    static constexpr int kSidebarHpRowBase   = 100;  // + row index within hpRows_
 
     // Last-played album (persisted via Db::saveSetting/loadSetting, matched
     // by name+artist rather than index since the list reorders across
@@ -698,6 +727,32 @@ private:
 
     EqProfileStore   eqProfiles_;
     EqManager        eqManager_;
+
+    // ── Headphone quick-switcher ────────────────────────────────────────────
+    // A DAC has no frequency response; headphones do, and several take turns
+    // in one jack — so "one profile per device" was the wrong shape. The
+    // sidebar block is the fast way to swap, and eq_headphones (core/db.h) is
+    // the inventory it lists. EqManager double-buffers its coefficients, so a
+    // swap takes effect on the next audio chunk rather than the next track.
+    //
+    // A profile is applied the instant it is picked but only EARNS a row after
+    // kEqCreditMs of real listening. Until then it shows as "on trial" and
+    // leaves nothing behind — that is what stops a mis-click from permanently
+    // occupying the list. The credit is free: statsMsHeard_ already ticks for
+    // the listening log, so there is no second timer.
+    static constexpr int64_t kEqCreditMs   = 60000;  // 60 s of audio actually heard
+    static constexpr int     kEqHpMaxRows  = 4;      // sidebar rows, excluding the on-trial one
+    std::vector<EqHeadphone> eqHeadphones_;
+    EqAssignment eqCurrent_;                 // name empty = nothing applied
+    bool    eqCurrentTentative_  = false;    // applied, but not yet in eqHeadphones_
+    bool    eqCreditedThisTrack_ = false;
+    // statsMsHeard_ counts the TRACK, not the profile. Without this baseline a
+    // swap 3 minutes into a track would credit the new profile immediately.
+    int64_t eqCreditBaselineMs_  = 0;
+    // Computed during draw, read by hit-test — same contract as eqListRows_.
+    struct HpRow { LayoutRect rc; int headphoneIdx; };  // -1 = the on-trial row
+    std::vector<HpRow> hpRows_;
+    LayoutRect hpMoreRc_ = {};
 
     FolderWatcher        watcher_;
     std::thread          scanThread_;
