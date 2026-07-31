@@ -1,10 +1,9 @@
 #include "core/db.h"
+#include "core/variants.h"      // trackKey() — the identity history is keyed on
+#include "db_schema.h"
 #include "sqlite3.h"
 #include <cstdio>
-
-struct Db::Impl {
-    sqlite3* db = nullptr;
-};
+#include <ctime>
 
 static const char* SCHEMA = R"(
 CREATE TABLE IF NOT EXISTS tracks (
@@ -15,12 +14,19 @@ CREATE TABLE IF NOT EXISTS tracks (
     album         TEXT,
     file_path     TEXT UNIQUE,
     track_number  INTEGER DEFAULT 0,
+    disc_number   INTEGER DEFAULT 0,
     duration_ms   INTEGER,
     sample_rate   INTEGER,
     channels      INTEGER,
     bit_depth     INTEGER,
     file_size     INTEGER,
-    file_mtime    INTEGER DEFAULT 0
+    file_mtime    INTEGER DEFAULT 0,
+    -- Stable listening identity (core/variants.h trackKey()). file_path is
+    -- this table's only stable *storage* key, but it is not a stable identity:
+    -- renaming a folder rewrites every path and would orphan the history.
+    track_key     TEXT    DEFAULT '',
+    genre         TEXT    DEFAULT '',
+    year          INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS albums (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,8 +57,47 @@ CREATE TABLE IF NOT EXISTS eq_assignments (
     profile_source TEXT DEFAULT '',
     profile_form   TEXT DEFAULT ''
 );
+-- Listening history and per-track counters.
+--
+-- Keyed by file_path, NOT by tracks.id, even though TODO.md said "track_id".
+-- saveTracks() writes INSERT OR REPLACE against the file_path UNIQUE index, and
+-- REPLACE deletes the conflicting row before inserting — so a track's
+-- AUTOINCREMENT id changes every time its row is rewritten. History keyed on it
+-- would silently orphan on a rescan. file_path is the schema's only stable
+-- identity, so it is the key; join to tracks on file_path when a query needs
+-- title/artist.
+CREATE TABLE IF NOT EXISTS play_history (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_path TEXT    NOT NULL,
+    played_at INTEGER NOT NULL          -- unix seconds
+);
+CREATE INDEX IF NOT EXISTS idx_play_history_path ON play_history(file_path);
+CREATE TABLE IF NOT EXISTS track_stats (
+    file_path      TEXT PRIMARY KEY,
+    play_count     INTEGER DEFAULT 0,
+    skip_count     INTEGER DEFAULT 0,
+    listen_time_ms INTEGER DEFAULT 0
+);
+-- Resume-on-launch. Exactly one row (the CHECK enforces it), rewritten in
+-- place, so there is no history to prune here — play_history is the log.
+CREATE TABLE IF NOT EXISTS playback_state (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    file_path   TEXT    NOT NULL,
+    position_ms INTEGER DEFAULT 0,
+    volume      REAL    DEFAULT 1.0,
+    saved_at    INTEGER DEFAULT 0
+);
 )";
 
+// ── Column adds ─────────────────────────────────────────────────────────────
+// Fired blind, one statement at a time, errors ignored: a re-run fails with
+// "duplicate column name", which is exactly the "already applied" signal. That
+// is fine for ADDING A COLUMN and for nothing else — it cannot express "do
+// this once", which is what SCHEMA_STEPS below is for.
+//
+// Each statement runs SEPARATELY. Do not fold these into SCHEMA: sqlite3_exec
+// stops a multi-statement string at the first error, so one expected failure
+// here would silently skip everything after it.
 static const char* MIGRATIONS[] = {
     "ALTER TABLE tracks ADD COLUMN album_artist TEXT DEFAULT '';",
     "ALTER TABLE tracks ADD COLUMN track_number INTEGER DEFAULT 0;",
@@ -64,12 +109,145 @@ static const char* MIGRATIONS[] = {
     "ALTER TABLE albums ADD COLUMN release_type INTEGER DEFAULT 0;",
     "ALTER TABLE albums ADD COLUMN avg_sample_rate INTEGER DEFAULT 0;",
     "ALTER TABLE albums ADD COLUMN has_dsd INTEGER DEFAULT 0;",
+    // Listening analytics. The index has to live here rather than in SCHEMA
+    // for the same reason: on a pre-existing database the column does not
+    // exist until the ALTER above it has run.
+    "ALTER TABLE tracks ADD COLUMN track_key TEXT DEFAULT '';",
+    "ALTER TABLE tracks ADD COLUMN genre TEXT DEFAULT '';",
+    "ALTER TABLE tracks ADD COLUMN year INTEGER DEFAULT 0;",
+    "CREATE INDEX IF NOT EXISTS idx_tracks_key ON tracks(track_key);",
 };
 
 static void runMigrations(sqlite3* db) {
     for (const char* sql : MIGRATIONS) {
         sqlite3_exec(db, sql, nullptr, nullptr, nullptr);
     }
+
+    // disc_number is the one migration that can't just default: the
+    // incremental scan skips any file whose (size, mtime) still matches its
+    // cached row (see scanLibraryIncremental), so an existing library would
+    // keep disc_number = 0 forever and multi-disc albums would stay
+    // interleaved. The ALTER only returns SQLITE_OK the one time the column is
+    // actually created — on a database that already has it (migrated earlier,
+    // or created fresh from SCHEMA above) it fails with "duplicate column
+    // name". So a successful ALTER is exactly the signal "the tag has never
+    // been read on this machine": zero the cached mtimes to force one full
+    // re-parse on the next scan, after which everything is incremental again.
+    if (sqlite3_exec(db, "ALTER TABLE tracks ADD COLUMN disc_number INTEGER DEFAULT 0;",
+                     nullptr, nullptr, nullptr) == SQLITE_OK) {
+        sqlite3_exec(db, "UPDATE tracks SET file_mtime = 0;", nullptr, nullptr, nullptr);
+    }
+}
+
+// ── Versioned schema steps ──────────────────────────────────────────────────
+// The division of labour with MIGRATIONS above: that array ADDS COLUMNS and is
+// safe to re-run; these steps do ONE-SHOT DATA WORK and are not. Re-running
+// the play_history backfill would duplicate the whole listening log on every
+// launch, so "has this already happened" has to be recorded somewhere —
+// PRAGMA user_version, checked once and stamped once.
+//
+// Version 1 is the baseline: everything the schema was before listening
+// analytics. New work appends a step and bumps kSchemaVersion. A step never
+// runs twice, and it runs inside a transaction, so a crash halfway leaves the
+// database at the previous version rather than half-migrated.
+
+// Fills tracks.track_key for rows written before the column existed. Every
+// input trackKey() needs — title, artist, album_artist, album, disc, track,
+// path — is already in the row, so this reads no files and needs no rescan.
+// It must run BEFORE the play_history backfill, which joins on this column.
+static void step_backfillTrackKeys(sqlite3* db) {
+    std::vector<Track> tracks;
+    sqlite3_stmt* sel = nullptr;
+    sqlite3_prepare_v2(db,
+        "SELECT title, artist, album_artist, album, file_path, "
+        "track_number, disc_number FROM tracks WHERE IFNULL(track_key,'') = '';",
+        -1, &sel, nullptr);
+    while (sel && sqlite3_step(sel) == SQLITE_ROW) {
+        auto col = [&](int i) -> std::string {
+            auto* s = (const char*)sqlite3_column_text(sel, i);
+            return s ? s : "";
+        };
+        Track t;
+        t.title       = col(0);
+        t.artist      = col(1);
+        t.albumArtist = col(2);
+        t.album       = col(3);
+        t.filePath    = col(4);
+        t.trackNumber = sqlite3_column_int(sel, 5);
+        t.discNumber  = sqlite3_column_int(sel, 6);
+        tracks.push_back(std::move(t));
+    }
+    sqlite3_finalize(sel);
+
+    sqlite3_stmt* upd = nullptr;
+    sqlite3_prepare_v2(db, "UPDATE tracks SET track_key = ? WHERE file_path = ?;",
+                       -1, &upd, nullptr);
+    for (const Track& t : tracks) {
+        const std::string key = trackKey(t);
+        sqlite3_bind_text(upd, 1, key.c_str(),        -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(upd, 2, t.filePath.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_step(upd);
+        sqlite3_reset(upd);
+    }
+    sqlite3_finalize(upd);
+
+    // GENRE and DATE arrived with the same release, and the incremental scan
+    // skips any file whose (size, mtime) still matches its cached row — so an
+    // existing library would keep an empty genre forever. Same fix as
+    // disc_number above: zero the cached mtimes to buy one full re-parse.
+    sqlite3_exec(db, "UPDATE tracks SET file_mtime = 0;", nullptr, nullptr, nullptr);
+}
+
+struct SchemaStep {
+    int   version;
+    void (*apply)(sqlite3* db);
+};
+
+static const SchemaStep SCHEMA_STEPS[] = {
+    { 2, step_backfillTrackKeys },
+    { 3, stats_backfillFromPlayHistory },
+};
+static const int kSchemaVersion = 3;
+
+static int readUserVersion(sqlite3* db) {
+    sqlite3_stmt* stmt = nullptr;
+    sqlite3_prepare_v2(db, "PRAGMA user_version;", -1, &stmt, nullptr);
+    int v = 0;
+    if (stmt && sqlite3_step(stmt) == SQLITE_ROW) v = sqlite3_column_int(stmt, 0);
+    sqlite3_finalize(stmt);
+    return v;
+}
+
+static void writeUserVersion(sqlite3* db, int v) {
+    char sql[64];
+    snprintf(sql, sizeof(sql), "PRAGMA user_version = %d;", v);
+    sqlite3_exec(db, sql, nullptr, nullptr, nullptr);
+}
+
+static void runSchemaSteps(sqlite3* db) {
+    int from = readUserVersion(db);
+    if (from >= kSchemaVersion) return;
+    for (const SchemaStep& s : SCHEMA_STEPS) {
+        if (s.version <= from) continue;
+        sqlite3_exec(db, "BEGIN;", nullptr, nullptr, nullptr);
+        s.apply(db);
+        writeUserVersion(db, s.version);
+        sqlite3_exec(db, "COMMIT;", nullptr, nullptr, nullptr);
+    }
+}
+
+// True if `table` already exists. Asked BEFORE the schema is created, to tell
+// a brand-new database from one being upgraded.
+static bool tableExists(sqlite3* db, const char* table) {
+    sqlite3_stmt* stmt = nullptr;
+    sqlite3_prepare_v2(db,
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?;",
+        -1, &stmt, nullptr);
+    if (!stmt) return false;
+    sqlite3_bind_text(stmt, 1, table, -1, SQLITE_TRANSIENT);
+    bool found = sqlite3_step(stmt) == SQLITE_ROW;
+    sqlite3_finalize(stmt);
+    return found;
 }
 
 bool Db::open(const std::string& dbPath) {
@@ -78,8 +256,26 @@ bool Db::open(const std::string& dbPath) {
         fprintf(stderr, "[DB][ERROR] open failed: %s\n", sqlite3_errmsg(impl_->db));
         return false;
     }
+    // Asked first: SCHEMA is about to create this table if it is missing, and
+    // after that a fresh database is indistinguishable from an upgraded one.
+    const bool preExisting = tableExists(impl_->db, "tracks");
+
     sqlite3_exec(impl_->db, SCHEMA, nullptr, nullptr, nullptr);
+    stats_createSchema(impl_->db);
     runMigrations(impl_->db);
+
+    if (preExisting) {
+        runSchemaSteps(impl_->db);
+    } else {
+        // Nothing to migrate — SCHEMA just built the current shape, and every
+        // step above would be a no-op over zero rows. Stamp it and skip them.
+        writeUserVersion(impl_->db, kSchemaVersion);
+    }
+
+    // Any event still open belongs to a session that never closed cleanly.
+    // Closed here, before a single query can read a half-written log.
+    stats_closeOpenEvents(impl_->db);
+
     sqlite3_exec(impl_->db, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
     sqlite3_exec(impl_->db,
         "DELETE FROM albums WHERE rowid NOT IN "
@@ -102,8 +298,9 @@ void Db::saveTracks(const std::vector<Track>& tracks) {
     const char* sql =
         "INSERT OR REPLACE INTO tracks "
         "(title, artist, album_artist, album, file_path, track_number, "
-        "duration_ms, sample_rate, channels, bit_depth, file_size, file_mtime) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?);";
+        "duration_ms, sample_rate, channels, bit_depth, file_size, file_mtime, "
+        "disc_number, track_key, genre, year) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);";
     sqlite3_stmt* stmt = nullptr;
     sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr);
     for (auto& t : tracks) {
@@ -119,6 +316,10 @@ void Db::saveTracks(const std::vector<Track>& tracks) {
         sqlite3_bind_int  (stmt, 10, t.bitDepth);
         sqlite3_bind_int64(stmt, 11, t.fileSize);
         sqlite3_bind_int64(stmt, 12, t.fileMtime);
+        sqlite3_bind_int  (stmt, 13, t.discNumber);
+        sqlite3_bind_text (stmt, 14, t.trackKey.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text (stmt, 15, t.genre.c_str(),    -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int  (stmt, 16, t.year);
         sqlite3_step(stmt);
         sqlite3_reset(stmt);
     }
@@ -131,7 +332,8 @@ std::vector<Track> Db::loadTracks() {
     if (!impl_->db) return out;
     const char* sql =
         "SELECT id, title, artist, album_artist, album, file_path, track_number, "
-        "duration_ms, sample_rate, channels, bit_depth, file_size, file_mtime FROM tracks;";
+        "duration_ms, sample_rate, channels, bit_depth, file_size, file_mtime, "
+        "disc_number, track_key, genre, year FROM tracks;";
     sqlite3_stmt* stmt = nullptr;
     sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr);
     while (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -153,6 +355,10 @@ std::vector<Track> Db::loadTracks() {
         t.bitDepth    = sqlite3_column_int(stmt, 10);
         t.fileSize    = sqlite3_column_int64(stmt, 11);
         t.fileMtime   = sqlite3_column_int64(stmt, 12);
+        t.discNumber  = sqlite3_column_int  (stmt, 13);
+        t.trackKey    = col(14);
+        t.genre       = col(15);
+        t.year        = sqlite3_column_int  (stmt, 16);
         out.push_back(std::move(t));
     }
     sqlite3_finalize(stmt);
@@ -352,6 +558,42 @@ void Db::clearEqAssignment(const std::string& deviceKey) {
     sqlite3_bind_text(stmt, 1, deviceKey.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_step(stmt);
     sqlite3_finalize(stmt);
+}
+
+// The listening log (play_events) and every query derived from it live in
+// db_stats.cpp — see core/src/db_schema.h for the seam between the two.
+
+void Db::savePlaybackState(const PlaybackState& st) {
+    if (!impl_->db || st.filePath.empty()) return;
+    const char* sql =
+        "INSERT OR REPLACE INTO playback_state "
+        "(id, file_path, position_ms, volume, saved_at) "
+        "VALUES (1, ?, ?, ?, strftime('%s','now'));";
+    sqlite3_stmt* stmt = nullptr;
+    sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr);
+    sqlite3_bind_text  (stmt, 1, st.filePath.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int   (stmt, 2, st.positionMs);
+    sqlite3_bind_double(stmt, 3, (double)st.volume);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+bool Db::loadPlaybackState(PlaybackState& out) {
+    if (!impl_->db) return false;
+    const char* sql =
+        "SELECT file_path, position_ms, volume FROM playback_state WHERE id = 1;";
+    sqlite3_stmt* stmt = nullptr;
+    sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr);
+    bool found = false;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        auto* s = (const char*)sqlite3_column_text(stmt, 0);
+        out.filePath   = s ? s : "";
+        out.positionMs = sqlite3_column_int(stmt, 1);
+        out.volume     = (float)sqlite3_column_double(stmt, 2);
+        found = !out.filePath.empty();
+    }
+    sqlite3_finalize(stmt);
+    return found;
 }
 
 bool Db::loadEqAssignment(const std::string& deviceKey, EqAssignment& out) {

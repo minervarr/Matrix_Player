@@ -13,7 +13,8 @@
 static bool nearlyEqual(float a, float b) { return std::fabs(a - b) < 0.001f; }
 
 static const UiIcon kAll[] = { UiIcon::Play, UiIcon::Stop, UiIcon::Prev,
-                               UiIcon::Next, UiIcon::Settings, UiIcon::Warning };
+                               UiIcon::Next, UiIcon::Settings, UiIcon::Warning,
+                               UiIcon::Quality };
 
 int main() {
     // ── Codepoints are unique and inside the Private Use Area ──────────────

@@ -16,6 +16,7 @@ unsigned uiIconCodepoint(UiIcon icon) {
     case UiIcon::Next:     return kIconCpNext;
     case UiIcon::Settings: return kIconCpSettings;
     case UiIcon::Warning:  return kIconCpWarning;
+    case UiIcon::Quality:  return kIconCpQuality;
     }
     return 0;
 }
@@ -28,6 +29,7 @@ float uiIconBoxEm(UiIcon icon) {
     case UiIcon::Next:     return kIconBoxNext;
     case UiIcon::Settings: return kIconBoxSettings;
     case UiIcon::Warning:  return kIconBoxWarning;
+    case UiIcon::Quality:  return kIconBoxQuality;
     }
     return 0.0f;
 }

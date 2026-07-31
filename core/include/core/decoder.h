@@ -4,17 +4,19 @@
 #include <atomic>
 #include <thread>
 
-// TODO(FFmpeg): Swap this interface implementation for FFmpeg when formats beyond
-// FLAC are needed (DSF/DFF containers, MP3, WAV, etc.). The interface stays the same.
+// Decoding runs through audio_engine's backends (libFLAC, libmpg123, the
+// DFF/DSF parsers) — see core/src/decoder.cpp. Format is chosen by magic
+// bytes, never by extension. WAV is the one exception, still on vendored
+// dr_wav, because the engine has no WAV decoder.
 
 // Called from the decode thread with interleaved float32 PCM samples.
 // numSamples = total samples across all channels (frames * channels).
 using PcmCallback = std::function<void(const float* data, int numSamples)>;
 
 // Bit-perfect variant: interleaved signed 32-bit PCM, left-justified to the full
-// 32-bit range (dr_flac/dr_wav s32 output shifts each sample left by 32-bitsPerSample,
-// a lossless upscale of any 16/24-bit source). Feed straight to a UAC2 DAC's int32
-// write path for a mathematically lossless wire — no float, no rounding.
+// 32-bit range (each sample shifted left by 32-bitsPerSample, a lossless upscale
+// of any 16/24-bit source). Feed straight to a UAC2 DAC's int32 write path for a
+// mathematically lossless wire — no float, no rounding.
 using PcmS32Callback = std::function<void(const int32_t* data, int numSamples)>;
 
 class Decoder {

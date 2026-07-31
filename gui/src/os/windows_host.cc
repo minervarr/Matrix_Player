@@ -250,6 +250,31 @@ public:
         InvalidateRect(hwnd_, nullptr, FALSE);
     }
 
+    void setCursor(CursorShape shape) override {
+        LPCWSTR id = IDC_ARROW;
+        switch (shape) {
+        case CursorShape::Hand: id = IDC_HAND; break;
+        case CursorShape::Text: id = IDC_IBEAM; break;
+        case CursorShape::Arrow: break;
+        }
+        if (id == cursorId_) return;               // already showing
+        cursorId_ = id;
+        cursor_   = LoadCursorW(nullptr, id);
+        // Win32 re-asserts the class cursor on every mouse move via
+        // WM_SETCURSOR, so setting it here only holds until the next one —
+        // wndProc answers that message from cursor_ (see WM_SETCURSOR).
+        // Set it now too, or the change waits for the pointer to move.
+        SetCursor(cursor_);
+    }
+
+    void setKeepAwake(bool on) override {
+        // ES_CONTINUOUS makes the state sticky until the next call; without
+        // it the request would apply to this one instant and lapse. Passing
+        // ES_CONTINUOUS alone is how the flag is cleared.
+        SetThreadExecutionState(on ? (ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED)
+                                   : ES_CONTINUOUS);
+    }
+
     void postAppEvent(AppEvent id, intptr_t p1, intptr_t p2) override {
         PostMessageW(hwnd_, WM_APP + (int)id, (WPARAM)p1, (LPARAM)p2);
     }
@@ -343,6 +368,17 @@ private:
         case WM_ERASEBKGND:
             return 1;
 
+        case WM_SETCURSOR:
+            // Windows re-asks on every move over the client area, and the
+            // window class's own hCursor would win otherwise — answering here
+            // is what makes setCursor() stick. Only the client area: the
+            // frame's resize arrows are DefWindowProc's to draw.
+            if (LOWORD(lParam) == HTCLIENT) {
+                SetCursor(cursor_ ? cursor_ : LoadCursorW(nullptr, IDC_ARROW));
+                return TRUE;
+            }
+            break;
+
         case WM_PAINT: {
             // Vulkan (drawFrame(), driven from PlayerWindow::run() while a
             // frame is pending) owns presentation — just validate the update
@@ -426,6 +462,11 @@ private:
     HINSTANCE hInst_ = nullptr;
     HMONITOR  lastMonitor_ = nullptr;
     bool      quit_ = false;
+    // Current pointer image, re-asserted from WM_SETCURSOR. cursorId_ is kept
+    // only to collapse repeat calls — LoadCursorW's shared handles are not
+    // owned, so neither field needs releasing.
+    HCURSOR   cursor_   = nullptr;
+    LPCWSTR   cursorId_ = nullptr;
 
     std::unique_ptr<Win32SurfaceProvider> vkSurface_;
     FileAssetReader                       assets_;

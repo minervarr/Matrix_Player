@@ -62,6 +62,7 @@ const IconEntry kIcons[] = {
     { UiIcon::Next,     "next"     },
     { UiIcon::Settings, "settings" },
     { UiIcon::Warning,  "warning"  },
+    { UiIcon::Quality,  "quality"  },
 };
 
 // The sizes the app actually draws icons at, authored at the 1080 reference

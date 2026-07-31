@@ -30,6 +30,9 @@ static constexpr float    kIconBoxSettings = 1.0f;
 // warning: 1 em box -> 96px cell, ink 0.778 x 0.778 em
 static constexpr unsigned kIconCpWarning  = 0xE005;
 static constexpr float    kIconBoxWarning = 1.0f;
+// quality: 0.5 em box -> 48.0px cell, ink 0.444 x 0.444 em
+static constexpr unsigned kIconCpQuality  = 0xE006;
+static constexpr float    kIconBoxQuality = 0.5f;
 
 // Every icon codepoint, for bake + tests.
 static constexpr unsigned kIconCodepoints[] = {
@@ -39,15 +42,16 @@ static constexpr unsigned kIconCodepoints[] = {
     kIconCpNext,
     kIconCpSettings,
     kIconCpWarning,
+    kIconCpQuality,
 };
 
 // Smallest box any icon uses. ui_icons_test asserts every box is at
 // least this, guarding against an icon being authored at a density
 // so low it softens at the sizes the app draws it.
-static constexpr float kIconBoxEmMin = 1.0f;
+static constexpr float kIconBoxEmMin = 0.5f;
 
 // Fingerprint of the baked icon geometry — see build_icon_font.py.
 // Part of the atlas cache filename (ui_fonts.hh), so changing any
 // icon invalidates the cache automatically instead of silently
 // reusing glyphs baked at the old size.
-static constexpr char kIconSetFingerprint[] = "7421b309";
+static constexpr char kIconSetFingerprint[] = "72d43165";

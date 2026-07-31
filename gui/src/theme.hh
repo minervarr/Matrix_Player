@@ -29,6 +29,17 @@ static constexpr ColorRef CLR_SEPARATOR       = RGB(36, 36, 36);
 static constexpr ColorRef CLR_INPUT_BG        = RGB(24, 24, 24);   // search / text-field fill
 static constexpr ColorRef CLR_TILE_PLACEHOLDER = RGB(28, 28, 28);
 static constexpr ColorRef CLR_TEXT_ALBUM_TITLE = RGB(255, 255, 255);
+// The mosaic tile's "and more" quadrant (§8.2): a remix group with more than
+// four members fades its last quadrant from the tile background into this
+// green instead of showing a fifth cover.
+//
+// DELIBERATELY NOT CLR_ACCENT. This says "there is more here" — information,
+// not state — and design principle #4 reserves the accent green for state
+// alone. A deeper, less saturated green reads unmistakably as green against
+// the near-black tile while never being mistaken for "this is playing". Keep
+// the two far enough apart that a glance can tell them apart; if you retune
+// this, check it beside a now-playing tile, which is where they meet.
+static constexpr ColorRef CLR_TILE_MORE_GREEN  = RGB(30, 104, 62);
 static constexpr ColorRef CLR_ERROR           = RGB(220, 70, 70);  // reserved (error UI)
 // Amber/yellow, distinct from CLR_ERROR (reserved for hard/fatal failures,
 // unused today) and CLR_ACCENT green (reserved for state/selection). For
@@ -84,6 +95,12 @@ struct QualityColor {
 // sampleRate in Hz (e.g. 44100, not 44.1). isDsd wins over sampleRate tiers.
 // Below 44.1kHz there's no tier — this deliberately mirrors the Android
 // reference's TRANSPARENT ("no border") case, not an error.
+//
+// ONE consumer: the per-track quality mark in the album view's track list
+// (UiIcon::Quality). The album grid used to carry a tier-colored frame per
+// tile as well; it was dropped — a color per tile said nothing worth the noise
+// on a grid already dense with artwork, and it gets less meaningful still once
+// a tile stands for a set of quality/edition variants (see TODO.md).
 inline QualityColor qualityColorFor(int sampleRate, bool isDsd) {
     if (isDsd)                return { true, CLR_QUALITY_DSD };
     if (sampleRate >= 352800) return { true, CLR_QUALITY_DXD };

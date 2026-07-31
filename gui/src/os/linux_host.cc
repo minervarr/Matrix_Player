@@ -121,6 +121,25 @@ public:
         // on its own next iteration; nothing platform-level to poke.
     }
 
+    void setCursor(CursorShape shape) override {
+        if (!window_) return;
+        // Two enums on purpose: host.hh's is the portable one, WaylandDisplay's
+        // belongs to the backend. This is the only place they meet.
+        using WlShape = WaylandDisplay::CursorShape;
+        WlShape want = WlShape::Arrow;
+        switch (shape) {
+        case CursorShape::Hand: want = WlShape::Hand; break;
+        case CursorShape::Text: want = WlShape::Text; break;
+        case CursorShape::Arrow: break;
+        }
+        display_->set_cursor_shape(window_->surface(), want);
+    }
+
+    void setKeepAwake(bool on) override {
+        if (!window_) return;
+        display_->set_idle_inhibited(window_->surface(), on);
+    }
+
     void postAppEvent(AppEvent id, intptr_t p1, intptr_t p2) override {
         {
             std::lock_guard<std::mutex> lk(eventsMu_);

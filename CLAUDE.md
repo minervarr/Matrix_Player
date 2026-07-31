@@ -24,12 +24,48 @@ touching anything inside them.
 ```
 matrix_player/
   core/                       — pure C++17 app logic, zero OS headers (one exception, see below)
-    include/core/             — public headers: library.h, decoder.h, db.h, eq_manager.h, eq_profiles.h
-    src/                      — library.cpp, decoder.cpp, db.cpp, eq_manager.cpp, eq_profiles.cpp
+    include/core/             — public headers: library.h, variants.h, decoder.h, db.h,
+                                 stats.h, eq_manager.h, eq_profiles.h
+    src/                      — library.cpp, variants.cpp, decoder.cpp, db.cpp,
+                                 db_stats.cpp, eq_manager.cpp, eq_profiles.cpp
+    src/variants.cpp           — album-variant grouping: one release held twice (another
+                                 edition, another quality, or another remix set) becomes
+                                 ONE grid tile, the rest listed in the album view. Also
+                                 holds two things moved here to be testable —
+                                 splitNameModifier() (out of player_view.cc: grouping and
+                                 drawing must split names identically) and
+                                 classifyReleaseType() (out of library.cpp), plus the
+                                 multilingual edition/remix term tables classifyModifier()
+                                 reads. Also trackKey() — the stable identity the
+                                 LISTENING LOG is recorded against, folded from
+                                 albumArtist ⨯ album ⨯ title ⨯ disc ⨯ track with
+                                 Edition modifiers stripped, so renaming a folder or
+                                 re-ripping at a higher rate never orphans history.
+                                 PURE: no OS, no Canvas, no sqlite — variants_test
+                                 links it alone. Keep it that way
+    include/core/stats.h       — listening-analytics vocabulary: StartCause/EndCause
+                                 and the aggregate result types (Totals, TopEntry,
+                                 HourBucket, DayBucket, PlayEvent). No sqlite, no OS
+    src/db_stats.cpp           — the play_events log and EVERY query derived from it.
+                                 Split out of db.cpp, which was already carrying the
+                                 library/settings/roots/EQ halves. Both define methods
+                                 on the same Db over one connection; the seam is the
+                                 src-private db_schema.h. The rule this file enforces:
+                                 play_events is the ONLY stored truth about listening,
+                                 so no derived counter is written anywhere and nothing
+                                 can drift out of step with the log
     src/os/                   — the ONE platform split in core/: FolderWatcher's backend
                                  (windows_folder_watch.cpp: ReadDirectoryChangesW;
                                   linux_folder_watch.cpp: inotify) behind a PIMPL'd
                                  FolderWatcher::Impl — library.h itself has no OS types.
+    tests/variants_test.cc     — assert-based, Debug-only, same convention as gui/'s two
+    tests/stats_test.cc        — the listening log + its queries, over an in-memory DB.
+                                 Links db.cpp + db_stats.cpp + variants.cpp + sqlite3
+                                 and DELIBERATELY nothing else — no matrix_core, no
+                                 ae_core, no library.cpp. The data layer must not need
+                                 a decoder or a filesystem walk to answer a question
+                                 about history; if this target ever needs another
+                                 source, something leaked in
     CMakeLists.txt             — builds matrix_core (STATIC), links ae_core + sqlite3
   gui/
     src/
@@ -83,7 +119,10 @@ matrix_player/
                                   platform/windows/ (Win32SurfaceProvider) +
                                   platform/linux/ (WaylandDisplay/WaylandWindow — real, not a stub)
   third_party/
-    dr_flac.h, dr_wav.h         — single-header decoders (mackron/dr_libs), vendored
+    dr_wav.h                    — single-header WAV decoder (mackron/dr_libs), vendored
+    dr_flac.h                   — no longer used by the player (decoding moved to
+                                  audio_engine's libFLAC); still included by
+                                  tools/ab_test.cpp, which is Windows-only and opt-in
     sqlite3.c/.h                — SQLite amalgamation, vendored
     soxr/                       — git submodule (resampler)
     libjpeg-turbo/              — git submodule (JPEG art decode, built via ExternalProject_Add)
@@ -175,17 +214,19 @@ Output: `build\matrix_player.exe` (Release) or `build_debug\matrix_player.exe` (
 **Both platforms**: submodules first if empty —
 `git submodule update --init --recursive`.
 
-**Tests**: there is no ctest/gtest framework, but there are two assert-based
+**Tests**: there is no ctest/gtest framework, but there are four assert-based
 pure-logic test executables, built **Debug-only** (see the bottom of
-`gui/CMakeLists.txt`) and run directly. Convention matches
-`framework/vk_canvas/core/tests/*.cc`: plain `assert()`, `#undef NDEBUG` in the
-test source so asserts survive an optimized build, no framework or linkage
-against the engine.
+`gui/CMakeLists.txt` and of `core/CMakeLists.txt`) and run directly. Convention
+matches `framework/vk_canvas/core/tests/*.cc`: plain `assert()`, `#undef NDEBUG`
+in the test source so asserts survive an optimized build, no framework or
+linkage against the engine.
 
 ```bash
 scripts/linux/build.sh --debug
 ./build/linux_debug/gui/ui_metrics_test    # type scale + spacing/stroke math
 ./build/linux_debug/gui/ui_icons_test      # icon codepoints + placement math
+./build/linux_debug/core/variants_test     # album-variant grouping, edition terms, trackKey()
+./build/linux_debug/core/stats_test        # listening log, aggregate queries, schema migration
 ```
 
 Keep them pure. `ui_icons.cc` is deliberately split from `ui_icons_draw.cc`
@@ -221,6 +262,73 @@ opt-in via `-DMATRIX_BUILD_AB_TEST=ON` or the Debug build presets above) is an
 A/B listening-comparison tool for EQ changes, not an automated check. Validate
 audio/DSP changes by building and listening; validate GUI changes by building
 and running `matrix_player`, then exercising the affected panel directly.
+
+---
+
+## Listening analytics (`core/src/db_stats.cpp`, `core/include/core/stats.h`)
+
+`play_events` is the **only stored truth** about listening — one row per
+listen, opened when a track reaches the transport and closed when it leaves.
+Nothing writes a derived counter anywhere, so no aggregate can drift out of
+step with the log. Play counts, rankings and histograms are all computed on
+demand from it.
+
+Three things about it are load-bearing and easy to undo by accident:
+
+1. **Keyed on `trackKey()`, never on `file_path`.** A path is rewritten
+   whenever a folder is renamed, and history keyed on it orphans silently and
+   unrecoverably. `file_path` rides along as *provenance* — which copy of the
+   track actually played — but it is not the identity.
+2. **`utc_offset_min` is stored per event, not derived at query time.** "What
+   hour do you listen at" is a question about local clocks; deriving it later
+   smears every answer across a daylight-saving change or a move between
+   timezones. `stats_test` pins this with two events at one UTC instant and
+   two offsets.
+3. **`start_cause` cannot be recovered after the fact.** A track the listener
+   *chose* says far more about taste than one that merely played next, which
+   is why it is recorded rather than inferred — and why `onNext()`'s seamless
+   path has to bank its own outgoing event before handing off to the gapless
+   coordinator (otherwise a listener's skip logs as an ordinary advance).
+4. **Every join to `tracks` goes through `TRACK_REP`, never straight on
+   `track_key`.** Because `trackKey()` merges editions and qualities on
+   purpose, `tracks` holds several rows per key — so a plain
+   `JOIN tracks ON track_key` fans out and counts one listen once per copy on
+   disk. This is not hypothetical: on the test library it read 52 plays where
+   the log held 43, and 27 of 518 track rows shared a key with another. The
+   regression case in `stats_test` puts three copies of one track behind one
+   key and asserts no ranking totals more than the log holds.
+
+### Schema versioning
+
+Two mechanisms in `db.cpp`, with a strict division of labour:
+
+- **`MIGRATIONS[]`** — blind `ALTER TABLE ... ADD COLUMN`, fired one statement
+  at a time with errors ignored, because a re-run failing with "duplicate
+  column name" *is* the "already applied" signal. Right for adding a column
+  and nothing else. **Never fold these into `SCHEMA`**: `sqlite3_exec` stops a
+  multi-statement string at the first error, so one expected failure would
+  silently skip everything after it.
+- **`SCHEMA_STEPS[]`** — one-shot data work, gated on `PRAGMA user_version`,
+  each step in its own transaction. Re-running the `play_history` backfill
+  would duplicate the entire listening log on every launch, which is exactly
+  what the version guard exists to prevent. Version 1 is the baseline (the
+  schema before analytics); a fresh database is stamped current and skips
+  every step.
+
+### Documented gaps
+
+- Only Vorbis comments are read, so **MP3s carry no genre and no year** —
+  nothing parses ID3 yet. `topGenres()` excludes empty genres rather than
+  bucketing them as "Unknown", which would otherwise top the chart meaning
+  nothing.
+- `topAlbums`/`topArtists`/`topGenres` need the join to `tracks`, so a track
+  deleted from the library drops out of *those* rankings. Its plays survive
+  everywhere else, including `topTracks` — that is the one place a deletion
+  costs history, and it is asserted in `stats_test`.
+- `play_history` and `track_stats` are left on disk untouched, with no
+  writers. They are the only remaining copy of the pre-migration aggregates,
+  and a migration nothing can be checked against is one nobody can trust.
+- `StartCause::Shuffle` has no producer yet — the app has no shuffle.
 
 ---
 
@@ -364,8 +472,8 @@ whenever the look changes, not left to drift.
 |---|---|---|
 | GUI | vk_canvas (Vulkan) | Custom-rendered, no OS control chrome anywhere — "squeeze the most of every platform," not generic dialogs bolted onto custom UI |
 | Platforms | Windows + Linux, equal peers | Both build and run the real GUI from this tree; no platform is "the" project |
-| FLAC decoder | dr_flac (single-header) | Zero deps, SIMD fast |
-| Other formats | TODO via FFmpeg | dr_flac first, FFmpeg when DSF/WAV/MP3 needed |
+| Decoding | `audio_engine`'s own backends: libFLAC, libmpg123, DFF/DSF | First-party and already written for Android — one implementation decodes identically on every platform. Chosen by magic bytes, never by extension. Not FFmpeg |
+| WAV | vendored dr_wav (single-header) | The one format the engine has no decoder for |
 | DB | SQLite (embedded) | Single file, same model as the Android sibling player |
 | USB driver | libusb/libusbK | Best isochronous support cross-platform; libusbK (Zadig) only needed on Windows |
 | Audio stack | Bypassed entirely for the primary path | No WASAPI/PulseAudio mixer — raw USB isochronous to DAC |

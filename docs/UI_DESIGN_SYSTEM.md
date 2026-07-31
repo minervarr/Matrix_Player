@@ -25,8 +25,11 @@ the look, update both the code and this doc.
    (`CLR_ACCENT` `rgb(0,200,83)`).
 3. **Square throughout.** Artwork, structural surfaces, and interactive chrome
    (buttons, hover/selection highlights, search fields) all use square corners
-   (`UI_CORNER_RADIUS = 0`). The only rounded shapes are the circular radio dot
-   and the decorative tile glows. Selection/hover highlights fill the full row
+   (`UI_CORNER_RADIUS = 0`). **The circular radio dot is the only rounded shape
+   left.** The album tiles' state rings used to be the other exception — a
+   three-layer rounded glow — and they were squared: curves and a soft falloff
+   read as another UI's vocabulary next to this one's hard edges, and the fade
+   said nothing the solid band doesn't. Selection/hover highlights fill the full row
    height (matching the action-button height) and, in lists/radios, hug their
    text.
 4. **Accent = state, hover = neutral.** Green *only* signals state — focus,
@@ -62,11 +65,19 @@ converted to the engine's float `Color` via `toColor(ref, alpha=1)`.
 | `CLR_SEPARATOR` | 36 | 1px hairline separators, unfocused input underline |
 | `CLR_INPUT_BG` | 24 | Search / text-field fill |
 | `CLR_TILE_PLACEHOLDER` | 28 | Album-art placeholder fill |
+| `CLR_TILE_MORE_GREEN` | 30,104,62 | The mosaic tile's "and more" quadrant (§8.2) |
 | `CLR_WARNING` | 224,180,40 | Non-blocking warnings (bitperfect mismatch strip, §8.8) |
 | `CLR_ERROR` | 220,70,70 | Reserved for hard/fatal failures (not yet drawn) |
 
-**Quality-color tier (a second, scoped palette).** Album art borders and
-track-list "auras" (§8.2/§8.4) are colored by objective audio quality, not
+**`CLR_TILE_MORE_GREEN` is deliberately not the accent.** It marks *"there are
+more than four here"* — information, not state — and principle #4 keeps the
+accent green for state alone. A deeper, less saturated green still reads
+unmistakably as green on the near-black tile without ever being read as "this
+is playing". The two meet on screen whenever a now-playing remix group is
+visible, which is the pairing to check if either is ever retuned.
+
+**Quality-color tier (a second, scoped palette).** Album art borders (§8.2) and
+the track-list quality mark (§8.4) are colored by objective audio quality, not
 UI state — this is the one deliberate exception to "one palette":
 
 | Token | RGB | Tier |
@@ -78,6 +89,21 @@ UI state — this is the one deliberate exception to "one palette":
 
 Below 44.1kHz, no border is drawn. `qualityColorFor(sampleRate, isDsd)`
 (`gui/src/theme.hh`) is the single place this mapping lives.
+
+**This palette appears in exactly one place: the per-track quality mark in the
+album view (§8.4).** The album grid used to carry a tier-colored frame per tile
+too. It was removed, and the reason is worth keeping: a tier color per tile
+described nothing worth its noise on a grid already dense with artwork, and it
+gets less meaningful still once one tile is meant to stand for a whole set of
+quality and edition variants (see `TODO.md`). Scoping the second palette to one
+small mark is what keeps it a second palette rather than a competing one.
+
+Two lessons from that frame, both worth not relearning. **Never layer a state
+ring over a tier frame:** the tile's state halos are rounded (§1.3) while the
+frame was square, so the tier color showed through at the four corners and read
+as a rendering defect rather than as two signals. And **state outranks
+metadata** (principle #4) — where both want the same pixels, resolve to one
+color *before* drawing rather than painting one over the other.
 
 **The text ladder is ORDERED — 242 > 170 > 128 — and must stay that way.** It
 was previously inverted: `CLR_TEXT_DIM` had been raised 80→140 for WCAG without
@@ -194,8 +220,6 @@ literals.
 |---|---|---|---|---|
 | hairline separators, field underlines | 1 | 1 | 1 | 2 |
 | accent selection bar | 3 | 3 | 4 | 6 |
-| quality frame (grid) / aura (track list) | 3 | 3 | 4 | 6 |
-| quality per-row border (mixed tiers) | 2 | 2 | 3 | 4 |
 | last-played bar, settings row outline | 2 | 2 | 3 | 4 |
 
 **A single call can carry both classes.** The last-played marker
@@ -275,7 +299,7 @@ into the atlas at Private Use Area codepoints; `drawUiIconGlyph`
 | Stop | one rounded square (radius `2/36`) |
 | Prev | left bar + left-pointing triangle |
 | Next | right-pointing triangle + right bar |
-| Settings | 5-tooth gear: circular hub unioned with 5 teeth 72° apart |
+| Settings | 5-tooth gear: circular hub unioned with 5 teeth 72° apart — **baked but no longer drawn by the app**, see below |
 | Warning | triangle with the `!` **cut out as holes** — used only by the warning strip (§8.8) |
 
 Each icon is authored inside a square **design box** measured in ems, whose
@@ -285,8 +309,9 @@ bottom edge sits on the baseline. Two consequences worth knowing:
   their relative sizes, exactly as the old shared 36-unit grid gave them.
 - The box size is the **resolution knob**, and it is set *per icon*: atlas cell
   size derives from the outline's own bounds, so an N-em glyph is baked at
-  N × 96px. Transport icons use 2 em (192px, drawn 71–284px); the sidebar gear
-  and warning use 1 em (96px, drawn 30–148px). Total ~3.3 MB of atlas.
+  N × 96px. Transport icons use 2 em (192px, drawn 71–284px); the warning and
+  the gear use 1 em (96px; the warning is drawn 30–148px). Total ~3.3 MB of
+  atlas.
 
 Denser is **not** automatically better. A bake far above the drawn size means
 heavy minification, and the shader's single bilinear tap smears it — a flat
@@ -309,8 +334,15 @@ composite invisibly.
 
 Color is passed per button — normally `CLR_TEXT_PRIMARY`; the idle **Play** is
 `CLR_ACCENT` (a call to action). The transport bar and Essential mode share
-the Play/Stop/Prev/Next bank; the Settings gear is its own single-use icon in
-the sidebar (§8.1).
+the Play/Stop/Prev/Next bank.
+
+The **Settings gear has no draw site left**: the sidebar's settings entry is
+the word *Settings* (§8.1), because the four rows above it are words and a lone
+icon among them read as a different kind of control than it is. The glyph stays
+in the set — still baked, still bounded by `ui_icons_test`, still on
+`icon_preview`'s ladder — so restoring it is a one-line change, and the icon
+pipeline (and the atlas-cache fingerprint that keys off it) doesn't churn for a
+layout decision.
 
 ---
 
@@ -335,24 +367,58 @@ Brand "MATRIX PLAYER" (Bold, accent, truncated). Shared **search field** (§8.6)
 Four content-type filters — *Albums* / *EPs* / *Singles* / *Remixes*, each
 filtering the grid by `Album::releaseType` — hover = grey pill; active =
 accent-tint pill + left bar + accent label (same family as before, just four
-rows instead of one). Below a hairline separator, a single **Settings gear**
-icon is spatially isolated at the bottom of the sidebar: the app reads as
-albums-and-music first, configuration second. It shares the same
-hover/active visual language; opening it replaces the whole content area
+rows instead of one). Below a hairline separator sits a fifth row, **Settings**
+— spatially isolated from the filters because the app reads as
+albums-and-music first, configuration second. It is a *word*, set exactly like
+the four filter labels (same `space(20)` inset, same `body` size, same
+accent-when-active rule), so all five read as one family; the gear glyph it
+replaced is still in the icon set but is no longer drawn (§7). It shares the
+same hover/active visual language; opening it replaces the whole content area
 (§8.6) and closing it returns to whichever filter was active, never
 resetting to Albums.
 
 ### 8.2 Album grid
 Square art tiles (placeholder = flat `CLR_TILE_PLACEHOLDER`) + Bold white title
 (two-line fallback) + italic secondary artist. **Hover** = neutral grey focus
-frame. **Selected** = accent ring (0.80). **Now-playing** = three-layer accent
-glow (0.20/0.45/1.0 at radii 12/10/8). A thin accent bottom bar marks
-**last-played only** (now-playing is already unmistakable from the glow — no
-double-marking). A **quality-color frame** (see the color-tokens section
-above) hugs the art's own bounds when the album's tracks resolve to a color
-tier — sits inside the state rings above, never competing with them.
+frame. **State ring** = one solid `space(3)` accent band hugging the art, square
+(§1.3): full alpha for **now-playing**, 0.80 for **selected** — the two differ by
+weight, never by shape. A thin accent bottom bar marks
+**last-played only** (now-playing is already unmistakable — no
+double-marking). **No quality-tier frame** — the grid speaks artwork and state
+(green) and nothing else; quality is read per track in §8.4. See the
+color-tokens section for why the frame that used to be here was dropped.
 Empty states (italic `CLR_TEXT_DIM`, measured-centered): "No albums yet…" / a per-filter "No EPs yet"-style message when
 a type filter has no matches / "No matches for …" when a search does.
+
+**One tile per release, not per folder.** An album held twice — another edition
+(Deluxe, Edición Especial) or the same edition at another quality — contributes
+a single tile, showing the group's best member (`core/variants.h` ranks them:
+DSD, then sample rate, then bit depth, then track count). The rest are reachable
+from that album's page, under `OTHER VERSIONS` / `MORE REMIXES` (§8.4). Search still matches on
+*any* member, so grouping tightens the grid without ever hiding a result. A
+group never straddles two tabs — release type is part of its key.
+
+**Remix groups wear a 2×2 mosaic instead of one cover.** An edition group can
+show one member's art honestly: a deluxe is the same record with more on it.
+A remix set is not — it is different music by different hands — so a single
+cover would misrepresent what sits behind the tile. Its quadrants carry the
+group's covers in ranked order, left-to-right, top-to-bottom:
+
+| Members | Quadrants |
+|---|---|
+| 2 | two covers, then two flat `CLR_TILE_PLACEHOLDER` |
+| 3 | three covers, one flat |
+| 4 | four covers |
+| 5+ | **three** covers, then a vertical fade from `CLR_TILE_PLACEHOLDER` into `CLR_TILE_MORE_GREEN` |
+
+An empty quadrant is the tile's own background, so it reads as absence rather
+than as a broken image. The overflow quadrant replaces a cover rather than
+being added beside them: an arbitrary fourth cover would claim to be the whole
+set, and the fade says plainly that it is not. Mosaics are **Remix-tab only**;
+albums, EPs and singles keep the single cover. Quadrant art is decoded at half
+the tile's edge and cached separately from the full-size tile
+(`getGridArtTexture`'s `sizeClass`) — there are no mip chains here, so serving
+a 2:1 minification of the big texture would alias.
 
 ### 8.3 Transport bar
 Left: art thumb + Bold title + italic artist. Center: Prev / Play-Stop / Next
@@ -364,10 +430,98 @@ badge (BITPERFECT accent / REF EQ dim) that expands to the signal path on hover.
 Full-page (replaces grid). Large scrolling art + wrapped title/artist + quality
 badge + separator, then track rows: track # (Mono) · title · duration (Mono).
 Row hover = grey pill; **playing row** = accent-tint pill + left bar + accent
-Bold text (the shared selection family). A **quality-color aura**: if every
-track shares one color tier, a single square-cornered border wraps the whole
-track list; if tracks differ, each row instead gets its own tier-colored
-border. Mutually exclusive — never both, never neither when a tier exists.
+Bold text (the shared selection family).
+
+**Quality is a mark, not a border.** Each row carries one small `UiIcon::Quality`
+glyph — a four-point spark — in its own column immediately left of the duration,
+tinted by the track's tier. Identical shape and size on every row, always: the
+tier lives in the color alone, so the mark can never read as comparative. It
+keeps its tier color on the playing row too, since it is the only reading of
+quality left in the list and the duration beside it is already neutral there.
+Below 44.1kHz nothing is drawn.
+
+This replaced per-row tier *borders*. One outlined rectangle per row is
+defensible on paper and unusable in practice: an album of mixed tiers (*Bad
+Ideas* — one cyan row, four yellow, six cyan) became eleven stacked frames in two
+colors over a list whose whole character was restraint. A mark says the same
+thing in a tenth of the ink.
+
+**One rectangle governs the row.** `rowX`/`rowW` (the text column plus a
+`space(7)` overhang on each side) is the single source for every layer: the
+hover/playing fill, the playing bar at `rowX`, the disc-separator rules, and the
+hit-test rectangle. The mark's column is anchored to the duration's *reserved*
+width (measured once on `"88:88"`), never to each stamp's actual width, or it
+would shuffle between `3:52` and `10:05` instead of forming a column.
+
+**Disc separators.** When an album's tracks span more than one tagged disc, a
+`DISC n` row precedes each disc's first track: the label (caption, Bold,
+`CLR_TEXT_DIM`) centered, with a hairline rule reaching out to either side.
+Both rules stop `space(SP_MD)` short of the row box, and the row is deliberately
+taller than the label needs so the separator carries its own breathing room
+rather than crowding the tracks around it. Separators occupy
+layout space but never a track index; row tops are recorded per track for
+hit-testing rather than derived from a fixed row pitch.
+
+**The sidecar block reads as a printed page.** Below the track list sit "ABOUT
+THIS ALBUM", the artist photo and the artist bio. **Nothing in it takes a hover
+treatment** — a background that lights up under the cursor is the wrong
+vocabulary for a page of prose. The photo is the one clickable thing (it opens
+full-window, Escape or a click to dismiss); its only intended affordance is a
+cursor change, not a highlight.
+
+Two traps live here, both already paid for. **Cull by cropping, not by
+skipping:** the photo draws through `imageFg`, which composites above the vector
+layer, so an overflowing photo would paint over the transport bar — and
+`setClip` is a tile-granular (~16px) safety net, not an exact mask. Gating the
+draw on the photo fitting *entirely* inside the panel was the cheap fix and it
+cost a bug: the photo's height still counted toward layout while nothing was
+drawn, so scrolling hit a long dead gap and then the photo snapped in. Draw the
+visible slice via `imageFg`'s UV sub-rect instead. And **decode at draw size
+with `mips=false`** — a mip chain softens anything drawn even slightly below
+1:1 (`art_texture.hh`), which is what made the photo look washed out.
+
+**The variant strip closes the page.** When the album belongs to a variant
+group — the same release also held as another edition, at another quality, or
+as another remix set (see `core/include/core/variants.h`) — a strip of tiles
+sits below the bio, one per *other* member. The album you are looking at is
+never in its own strip.
+
+Its caption follows what the group actually is: **`OTHER VERSIONS`** for
+albums, EPs and singles, **`MORE REMIXES`** on a remix page. "Other versions"
+is empty words there — a remix already *is* a version, so the phrase adds
+nothing; what is below is simply more of them.
+
+They are **full-size grid tiles** — `gridArtSize_` art over the same centered
+Bold title / italic dim modifier / italic secondary artist stack as §8.2,
+wrapping to a second row when the panel is too narrow. A variant *is* an album,
+so it is drawn as one; a shrunken tile would say it were a lesser thing. Drawing
+at grid size also puts the art at 1:1 with the density `getGridArtTexture()`
+decoded it for. One subtraction and one addition against §8.2:
+
+- **No shrink-to-fit and no truncation.** The page scrolls as one, so a second
+  row costs only height — and dropping a version defeats the whole strip.
+- **A format line**, below the artist. **Not** a quality readout: sample rate
+  and bit depth do not tell you which version you want (in a FLAC library every
+  tile would repeat much the same figure), so the §8.4 tier mark and the
+  `24/96` badge are deliberately absent here. Only a format that changes what
+  those numbers *mean* is named — `MP3`, because its 16/44.1 is reconstructed
+  and lossy, and `DSD`, because it is a different representation entirely.
+  FLAC and WAV are the baseline and stay silent. Mono, `CLR_TEXT_DIM`, and the
+  slot is reserved whether or not it is filled so tiles in a row keep one
+  height. See `variantFormatLabel()`.
+
+The **modifier line carries the weight** here that it does not on the main
+grid: `(Deluxe)`, `- Edición Especial`, a remix tag. It is what tells one
+version from another at a glance. The artist line is printed rather than
+assumed, because a group shares a base name but not necessarily a credit — a
+collaboration is its own version.
+
+Hover is the grid's neutral grey frame, drawn *before* the art so it reads as a
+halo — never accent (§1.4: accent is state). Clicking a tile **opens that
+version in the same panel**, and the strip recomputes to list the one you just
+left, so moving between versions is one click each way. The tiles are `imageFg`
+like the artist photo above, so they are cropped to the visible band by the same
+UV sub-rect trick, for the same reason.
 
 ### 8.5 Essential / mini mode
 A separate compact layout: centered large art + Bold title + three big centered

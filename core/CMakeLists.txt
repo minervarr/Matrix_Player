@@ -7,7 +7,9 @@
 
 add_library(matrix_core STATIC
     src/library.cpp
+    src/variants.cpp
     src/db.cpp
+    src/db_stats.cpp
     src/streamer_db.cpp
     src/eq_manager.cpp
     src/eq_profiles.cpp
@@ -22,6 +24,20 @@ target_include_directories(matrix_core PUBLIC
 
 target_link_libraries(matrix_core PUBLIC ae_core sqlite3)
 
+# Decode goes through audio_engine's backends (see src/decoder.cpp). Each is
+# optional at the engine's end — libFLAC is a submodule and libmpg123 is a
+# download — so link and advertise only what this build actually produced,
+# and let decoder.cpp compile the matching branches out.
+foreach(_codec flac mp3 dsd)
+    string(TOUPPER ${_codec} _CODEC)
+    if(TARGET ae_${_codec})
+        target_link_libraries(matrix_core PRIVATE ae_${_codec})
+        target_compile_definitions(matrix_core PRIVATE MATRIX_HAVE_${_CODEC}=1)
+    else()
+        message(WARNING "ae_${_codec} not built — matrix_player will not decode ${_CODEC}.")
+    endif()
+endforeach()
+
 if(MSVC)
     target_compile_options(matrix_core PRIVATE /W3)
 else()
@@ -34,4 +50,45 @@ if(WIN32)
 else()
     find_package(Threads REQUIRED)
     target_link_libraries(matrix_core PRIVATE Threads::Threads)
+endif()
+
+# ---------------------------------------------------------------------------
+# Assert-based pure-logic test, same convention as gui/'s ui_metrics_test and
+# ui_icons_test (plain assert(), #undef NDEBUG in the source, no framework).
+# Debug-only, run directly:  ./build/linux_debug/core/variants_test
+#
+# It links the REAL src/variants.cpp and nothing else — no matrix_core, no
+# ae_core, no sqlite3. That is only possible because variants.cpp touches
+# nothing outside <string>/<vector>, which is the property to protect: if this
+# target ever needs another source to link, the grouping logic has picked up a
+# dependency it should not have.
+# ---------------------------------------------------------------------------
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_executable(variants_test tests/variants_test.cc src/variants.cpp)
+    target_include_directories(variants_test PRIVATE include)
+    if(MSVC)
+        target_compile_options(variants_test PRIVATE /W3 /utf-8)
+    else()
+        target_compile_options(variants_test PRIVATE -Wall)
+    endif()
+
+    # ── stats_test ─────────────────────────────────────────────────────────
+    # The listening log and its aggregate queries, over an in-memory database.
+    # Links the REAL db.cpp / db_stats.cpp / variants.cpp plus sqlite3 — and
+    # deliberately NOT matrix_core, ae_core or library.cpp. That restriction is
+    # the property worth protecting: the data layer must not need a decoder, an
+    # audio engine or a filesystem walk to answer a question about history. If
+    # this target ever needs another source to link, something leaked into it.
+    add_executable(stats_test
+        tests/stats_test.cc
+        src/db.cpp
+        src/db_stats.cpp
+        src/variants.cpp)
+    target_include_directories(stats_test PRIVATE include src ${CMAKE_SOURCE_DIR}/third_party)
+    target_link_libraries(stats_test PRIVATE sqlite3)
+    if(MSVC)
+        target_compile_options(stats_test PRIVATE /W3 /utf-8)
+    else()
+        target_compile_options(stats_test PRIVATE -Wall)
+    endif()
 endif()

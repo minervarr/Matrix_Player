@@ -8,6 +8,7 @@
 #include "utf8.hh"
 #include <cstdio>
 #include <cstdlib>
+#include <climits>
 #include <cmath>
 #include <chrono>
 #include <vector>
@@ -166,83 +167,10 @@ static void drawSearchField(Canvas& canvas, const LayoutRect& rc, const std::str
 // truncateToWidth / splitTwoLines / wrapText / stripHtmlToPlain moved into
 // vk_canvas (core/text_util.hh) so other apps can reuse them.
 
-// Album/track names in this library carry a trailing parenthesized
-// "modifier" — "(Are You Coming)" deluxe-style reissue tags, "(Deluxe)",
-// "(PA)", "(from the Netflix Series ...)". The base name is what the user
-// actually scans for; the modifier is secondary. Split them so callers can
-// give the base name layout priority (own line / never ellipsized ahead of
-// the modifier). Returns true and fills base/mod (mod without its parens)
-// only for a well-formed trailing " (...)" that isn't the whole string;
-// otherwise base = s, mod empty.
-// Strips ONE trailing bracketed group off `s`, honoring nesting: for
-// "Tears (feat. Sleepnet & Joker)" or "Mixed Signals [VIP (Extended)]" it
-// returns the group's opener index and its inner text. Both () and [] count
-// — Skrillex-style feat. credits use square brackets. Returns npos if the
-// string doesn't end in a well-formed group preceded by a space.
-static size_t trailingGroup(const std::string& s, std::string& inner) {
-    if (s.size() < 4) return std::string::npos;
-    char close = s.back();
-    if (close != ')' && close != ']') return std::string::npos;
-    char open = (close == ')') ? '(' : '[';
-    int depth = 0;
-    for (size_t i = s.size(); i-- > 0; ) {
-        if (s[i] == close) depth++;
-        else if (s[i] == open) {
-            depth--;
-            if (depth == 0) {
-                // Must be a *suffix* group, not the whole string
-                // ("(What's The Story) Morning Glory?" keeps its parens).
-                if (i == 0) return std::string::npos;
-                inner = s.substr(i + 1, s.size() - i - 2);
-                if (s[i - 1] != ' ') {
-                    // No space before the bracket: only accept groups that
-                    // are unmistakably credits ("Name(feat. X)" happens in
-                    // sloppy tags), never bare ones — "R(A)W" stays whole.
-                    std::string low = inner.substr(0, 5);
-                    for (auto& ch : low) ch = (char)tolower((unsigned char)ch);
-                    bool credit = low.rfind("feat", 0) == 0 || low.rfind("ft.", 0) == 0 ||
-                                  low.rfind("ft ", 0) == 0  || low.rfind("with ", 0) == 0;
-                    if (!credit) { inner.clear(); return std::string::npos; }
-                }
-                return i;
-            }
-        }
-    }
-    return std::string::npos;
-}
-
-// Album/track names in this library carry trailing bracketed "modifiers" —
-// "(Are You Coming)" deluxe-style reissue tags, "(Deluxe)", "(PA)",
-// "[feat. Sleepnet & Joker]", "(from the Netflix Series ...)". The base name
-// is what the user scans for; modifiers are secondary. Peels up to three
-// stacked groups ("Tears (with X) [feat. Y]" → mod "with X · feat. Y") so
-// callers can give the base name layout priority. Returns true only when
-// something was split; otherwise base = s, mod empty.
-static bool splitNameModifier(const std::string& s, std::string& base, std::string& mod) {
-    base = s;
-    mod.clear();
-    // Metadata strings often carry invisible trailing whitespace
-    // ("... (feat. X) " / a stray \r) — without this trim the last char
-    // isn't ')' and the group detection misses entirely, so the whole
-    // title renders as the base name (the "Tears (feat. Sleepnet &
-    // Joker) rendered all-white" bug).
-    while (!base.empty() && (base.back() == ' ' || base.back() == '\t' ||
-                             base.back() == '\r' || base.back() == '\n'))
-        base.pop_back();
-    for (int pass = 0; pass < 3; pass++) {
-        std::string inner;
-        size_t at = trailingGroup(base, inner);
-        if (at == std::string::npos || inner.empty()) break;
-        std::string rest = base.substr(0, at);
-        while (!rest.empty() && rest.back() == ' ') rest.pop_back();
-        if (rest.empty()) break;
-        base = rest;
-        // '·' (U+00B7) is in the baked Latin-1 range.
-        mod = mod.empty() ? inner : inner + " \xC2\xB7 " + mod;
-    }
-    // No group found: keep the (whitespace-trimmed) name as the base.
-    return !mod.empty();
-}
+// splitNameModifier() and its two helpers used to live here, file-static.
+// They moved to core/src/variants.cpp when album-variant grouping arrived:
+// the grouping and this file MUST split names identically, or a group's key
+// disagrees with the tile that represents it. See core/include/core/variants.h.
 
 // ── Window creation ──────────────────────────────────────────────────────────
 // MAIN_CLASS, kFixedWindowStyle/kFixedWindowExStyle, and the window-creation/
@@ -328,6 +256,7 @@ bool PlayerWindow::create() {
                 parseAlbumFolder(folder, root, a);
             }
         }
+        rebuildAlbumGroups();   // must precede rebuildGridIndices — it feeds it
         rebuildGridIndices();
     }
 
@@ -403,6 +332,17 @@ bool PlayerWindow::create() {
         if (sep != std::string::npos) {
             lastPlayedAlbumName_  = lastPlayed.substr(0, sep);
             lastPlayedArtistName_ = lastPlayed.substr(sep + 1);
+        }
+    }
+
+    // Resume point from the previous session. Only the position is carried
+    // here; the track it belongs to is matched by path inside onPlay(), so a
+    // resume can never fire against a different file.
+    {
+        PlaybackState st;
+        if (db_.loadPlaybackState(st) && st.positionMs > 0) {
+            pendingResumePath_ = st.filePath;
+            pendingResumeMs_   = st.positionMs;
         }
     }
 
@@ -687,6 +627,16 @@ void PlayerWindow::run() {
         // ArtWindow is a second window on this same thread with its own
         // Renderer — no second message pump, so drive its frame here too.
         if (artWin_.isVisible()) artWin_.renderIfDirty();
+
+        // Hold the display awake exactly while the fullscreen art is up.
+        // Synced here rather than at each show()/hide() call site because the
+        // window also closes itself (Escape inside ArtWindow) — a release
+        // missed that way would pin the screen on for the rest of the session.
+        bool wantAwake = artWin_.isVisible();
+        if (wantAwake != keepAwake_) {
+            keepAwake_ = wantAwake;
+            host_->setKeepAwake(wantAwake);
+        }
     }
 }
 
@@ -972,31 +922,35 @@ void PlayerWindow::drawFrame() {
                        metrics_.text.body, toColor(active ? CLR_ACCENT : CLR_TEXT_SECONDARY));
         }
 
-        // Settings gear — spatially separated below a hairline, never mixed
-        // into the content-type list above (the user's explicit ask: a
-        // music player should read as albums-and-music first, configuration
-        // second).
-        canvas.rect((float)rcNavGear_.left, rcNavGear_.top - metrics_.space(7.0f),
+        // Settings — spatially separated below a hairline, never mixed into
+        // the content-type list above (the user's explicit ask: a music
+        // player should read as albums-and-music first, configuration
+        // second). A WORD, not the gear glyph: the four rows above it are
+        // words, and a lone icon among them read as a different kind of
+        // control than it is. The gear survives in the icon set (it is still
+        // baked and still exercised by icon_preview/ui_icons_test) — it just
+        // has no draw site in the app.
+        canvas.rect((float)rcNavSettings_.left, rcNavSettings_.top - metrics_.space(7.0f),
                     sb.w, metrics_.stroke(1.0f), toColor(CLR_SEPARATOR));
         {
-            bool hovered = (hoverSidebarItem_ == kSidebarGearHit && !settingsOpen_);
-            Rect r = toRect(rcNavGear_);
-            const float gearPillX = r.x + metrics_.space(4.0f);
-            const float gearPillW = r.w - metrics_.space(8.0f);
+            bool hovered = (hoverSidebarItem_ == kSidebarSettingsHit && !settingsOpen_);
+            Rect r = toRect(rcNavSettings_);
+            const float settPillX = r.x + metrics_.space(4.0f);
+            const float settPillW = r.w - metrics_.space(8.0f);
             if (settingsOpen_) {
-                canvas.rect(gearPillX, r.y, gearPillW, r.h,
+                canvas.rect(settPillX, r.y, settPillW, r.h,
                             toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
-                canvas.rect(gearPillX, r.y, metrics_.stroke(3.0f), r.h,
+                canvas.rect(settPillX, r.y, metrics_.stroke(3.0f), r.h,
                             toColor(CLR_ACCENT), UI_CORNER_RADIUS);
             } else if (hovered) {
-                canvas.rect(gearPillX, r.y, gearPillW, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+                canvas.rect(settPillX, r.y, settPillW, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
             }
-            float iconHalf = metrics_.space(15.0f);
-            float gearIconX = rcNavGear_.left + metrics_.space(26.0f);
-            LayoutRect gearIconRc = { (int)gearIconX,                (int)(r.y + r.h * 0.5f - iconHalf),
-                                      (int)(gearIconX + iconHalf * 2), (int)(r.y + r.h * 0.5f + iconHalf) };
-            drawUiIcon(canvas, gearIconRc, UiIcon::Settings,
-                      toColor(settingsOpen_ ? CLR_ACCENT : CLR_TEXT_SECONDARY));
+            // Same inset, size and active-color rule as the nav rows above —
+            // five rows, one family.
+            canvas.text("Settings", r.x + metrics_.space(20.0f),
+                        r.y + r.h * 0.5f - metrics_.text.body * 0.5f,
+                        metrics_.text.body,
+                        toColor(settingsOpen_ ? CLR_ACCENT : CLR_TEXT_SECONDARY));
         }
 
         // (The now-playing mini card that used to fill the space below the
@@ -1066,36 +1020,51 @@ void PlayerWindow::drawFrame() {
                                     a + metrics_.space(12.0f), a + metrics_.space(12.0f),
                                     toColor(CLR_HOVER), UI_CORNER_RADIUS);
                     }
-                    // Now-playing: unmistakable green glow border (stronger
-                    // than hover, stronger than selection).
+                    // No quality-tier frame here, deliberately. A colour per
+                    // tile described nothing worth the noise on a grid that is
+                    // already busy with the artwork itself — and it will make
+                    // even less sense once one tile stands for a whole set of
+                    // quality/edition variants (see TODO.md). Quality is read
+                    // in one place now: the per-track mark in the album view.
+
+                    // Now-playing ring: one solid square band hugging the art.
+                    // This used to be a three-layer rounded glow (0.20/0.45/1.0
+                    // at radii 12/10/8) — the last real exception to "square
+                    // throughout" (§1.3). Curves and a soft falloff read as a
+                    // different UI's vocabulary next to this one's hard edges,
+                    // and the fade bought nothing the solid band doesn't say
+                    // outright.
+                    //
+                    // NOW-PLAYING ONLY — not selection. Selection is the user
+                    // saying "show me this"; this band is the app saying "this
+                    // is what you are hearing". They were briefly the same
+                    // ring at two alphas, and it lied: open any album, press
+                    // Escape, and that album wore the playing colour. A state
+                    // the user can point at is not a state.
+                    //
+                    // The four bands are laid out NOT to overlap — horizontals
+                    // full width, verticals only the art's own height. Full
+                    // height on both would paint each corner twice, and at any
+                    // alpha under 1 the second pass composites over the first,
+                    // so the corners came out brighter than the edges.
                     if (nowPlaying) {
-                        auto glow = [&](float inset, float radius, float alpha) {
-                            const float d = metrics_.space(inset);
-                            canvas.rect(x - d, y - d, a + d * 2, a + d * 2,
-                                        toColor(CLR_ACCENT, alpha), metrics_.space(radius));
-                        };
-                        glow(9.0f, 12.0f, 0.20f);
-                        glow(6.0f, 10.0f, 0.45f);
-                        glow(3.0f,  8.0f, 1.00f);
-                    } else if (selectedAlbumIdx_ == idx) {
                         const float d = metrics_.space(3.0f);
-                        canvas.rect(x - d, y - d, a + d * 2, a + d * 2,
-                                    toColor(CLR_ACCENT, 0.8f), metrics_.space(8.0f));
+                        const Color c = toColor(CLR_ACCENT);
+                        canvas.rect(x - d, y - d, a + d * 2, d, c);   // top
+                        canvas.rect(x - d, y + a, a + d * 2, d, c);   // bottom
+                        canvas.rect(x - d, y,     d,         a, c);   // left
+                        canvas.rect(x + a, y,     d,         a, c);   // right
                     }
 
-                    // Quality-color frame — objective audio-quality metadata,
-                    // hugging the art's own bounds (not the outer state rings
-                    // above, which sit further out and never overlap this).
-                    QualityColor qc = qualityColorFor(alb.avgSampleRate, alb.hasDsd);
-                    if (qc.hasColor) {
-                        float bw = metrics_.stroke(3.0f);
-                        canvas.rect(x - bw, y - bw, a + bw * 2, bw, toColor(qc.color));
-                        canvas.rect(x - bw, y + a, a + bw * 2, bw, toColor(qc.color));
-                        canvas.rect(x - bw, y - bw, bw, a + bw * 2, toColor(qc.color));
-                        canvas.rect(x + a, y - bw, bw, a + bw * 2, toColor(qc.color));
-                    }
-
-                    drawArtOrPlaceholder(canvas, getGridArtTexture(idx), x, y, a, a);
+                    // A REMIX GROUP gets a 2x2 mosaic of its members' covers
+                    // instead of the best member's alone. An edition group can
+                    // wear one cover honestly — a deluxe is the same record
+                    // with more on it — but a remix set is different music by
+                    // different hands, so showing only one would misrepresent
+                    // what is behind the tile. Albums/EPs/singles keep the
+                    // single cover (see drawVariantMosaic).
+                    if (!drawVariantMosaic(canvas, idx, x, y, a))
+                        drawArtOrPlaceholder(canvas, getGridArtTexture(idx), x, y, a, a);
 
                     // Last-played / now-playing marker: a thin accent bar
                     // hugging the art's bottom edge, exactly the art's width
@@ -1282,103 +1251,164 @@ void PlayerWindow::drawFrame() {
             canvas.rect(colX, y, colW, metrics_.stroke(1.0f), toColor(CLR_SEPARATOR));
             y += metrics_.space(12.0f);
 
-            // Hit-test anchors for trackPanelHitTest() (scroll-0 baseline).
-            trackListTop_   = (int)(y + scroll);
-            trackListLeft_  = (int)colX;
-            trackListRight_ = (int)(colX + colW);
+            // ── One rectangle governs the row ────────────────────────────
+            // Every layer of a row — the hover/playing fill, the now-playing
+            // bar, the columns — derives from rowX/rowW, so nothing can drift
+            // out of alignment with anything else.
+            const float rowOverhang = metrics_.space(7.0f);
+            const float rowX = colX - rowOverhang;
+            const float rowW = colW + rowOverhang * 2.0f;
+            const float durRight = rowX + rowW - metrics_.space(10.0f);
+            // Number column (right-aligned) and title column, hoisted out of
+            // the row loop because the disc separators are measured against
+            // the same box.
+            const float numColW = metrics_.space(49.0f), titleX = metrics_.space(75.0f);
+            // The quality mark sits in a column of its own, immediately left
+            // of the duration. It is anchored to the duration's RESERVED width
+            // (durColW below, measured once on "88:88") rather than to each
+            // stamp's actual width, or it would shuffle between "3:52" and
+            // "10:05" instead of forming a column.
+            const float markSize = metrics_.text.caption;
+
+            // Hit-test anchors for trackPanelHitTest(). Left/right match the
+            // row box that's actually drawn, not the narrower text column —
+            // clicking the overhang used to miss. (Row tops go into
+            // trackRowTop_ below, once disc separators are known.)
+            trackListLeft_  = (int)rowX;
+            trackListRight_ = (int)(rowX + rowW);
 
             // Duration column width measured once (widest realistic stamp),
             // so titles reserve real space instead of a guessed constant.
             float durColW = canvas.textWidthStyled("88:88", metrics_.text.secondary, FontStyle::Math);
+            const float markX = durRight - durColW - metrics_.space(SP_SM) - markSize;
 
-            // Quality-color "aura": if every track shares the same tier, the
-            // whole list gets one border below; otherwise each row gets its
-            // own (drawn per-row in the loop). Recomputed live each time the
-            // album view opens — cheap (O(track count), already in RAM),
-            // exactly like the Android reference does (it doesn't cache
-            // this check either — only the per-album inputs are cached).
-            bool qualityMixed = false;
-            QualityColor unifiedQuality{};
-            bool unifiedSet = false;
-            for (auto& t : album.tracks) {
-                QualityColor tc = qualityColorFor(t.sampleRate, false);
-                if (!unifiedSet) { unifiedQuality = tc; unifiedSet = true; }
-                else if (tc.hasColor != unifiedQuality.hasColor || tc.color != unifiedQuality.color) {
-                    qualityMixed = true;
-                    break;
+            // Disc grouping: a "DISC n" separator only appears when the album
+            // actually spans more than one tagged disc. Files with no
+            // DISCNUMBER carry 0 (see core/library.h) — that's every file of a
+            // single-disc release, so those lists lay out exactly as before.
+            bool multiDisc = false;
+            {
+                int firstDisc = 0;
+                for (auto& t : album.tracks) {
+                    if (t.discNumber <= 0) continue;
+                    if (firstDisc == 0) firstDisc = t.discNumber;
+                    else if (t.discNumber != firstDisc) { multiDisc = true; break; }
                 }
             }
+            // Taller than the label needs, so the separator carries its own
+            // breathing room rather than crowding the rows around it. Its
+            // rules stop short of the row box on both sides.
+            const float discHeaderH = multiDisc ? metrics_.space(SP_LG + SP_SM) : 0.0f;
+            const float discRuleL   = rowX + metrics_.space(SP_MD);
+            const float discRuleR   = rowX + rowW - metrics_.space(SP_MD);
 
+            // Rows no longer sit on a fixed i*rowHeight grid — a disc header
+            // pushes everything below it down — so their scroll-0 tops are
+            // recorded here for trackPanelHitTest() to read back. Indices stay
+            // indices into album.tracks; headers never consume one.
+            trackRowTop_.assign(album.tracks.size(), 0);
+
+            float rowY = y;
+            int   headedDisc = -1;   // disc whose separator has already been emitted
             for (int i = 0; i < (int)album.tracks.size(); i++) {
-                float rowY = y + i * trackRowHeight_;
-                if (rowY + trackRowHeight_ < tp.y) continue;
-                if (rowY > tp.y + tp.h) break;
+                const Track& tr = album.tracks[i];
+
+                if (multiDisc && tr.discNumber != headedDisc) {
+                    headedDisc = tr.discNumber;
+                    // Culling is draw-only: rowY must keep accumulating even
+                    // off-screen or every row below would be misplaced.
+                    if (rowY + discHeaderH >= tp.y && rowY <= tp.y + tp.h) {
+                        char lbl[24];
+                        snprintf(lbl, sizeof(lbl), "DISC %d", headedDisc);
+                        float lblW  = canvas.textWidthStyled(lbl, metrics_.text.caption, FontStyle::Bold);
+                        float midY  = rowY + discHeaderH * 0.5f;
+                        // Centered label with a rule reaching out to either
+                        // side: the separator reads as one symmetric object
+                        // rather than as a left-anchored heading.
+                        float labelX = (discRuleL + discRuleR - lblW) * 0.5f;
+                        canvas.textStyled(lbl, labelX, midY - metrics_.text.caption * 0.5f,
+                                          metrics_.text.caption, toColor(CLR_TEXT_DIM), FontStyle::Bold);
+                        float gap   = metrics_.space(SP_MD);
+                        float rule  = metrics_.stroke(1.0f);
+                        float ruleY = midY - rule * 0.5f;
+                        // Each side is drawn only if it still has width — a
+                        // long label in a narrow window must not produce a
+                        // negative-width rect.
+                        if (labelX - gap > discRuleL)
+                            canvas.rect(discRuleL, ruleY, (labelX - gap) - discRuleL, rule,
+                                        toColor(CLR_SEPARATOR));
+                        if (discRuleR > labelX + lblW + gap)
+                            canvas.rect(labelX + lblW + gap, ruleY,
+                                        discRuleR - (labelX + lblW + gap), rule,
+                                        toColor(CLR_SEPARATOR));
+                    }
+                    rowY += discHeaderH;
+                }
+
+                trackRowTop_[i] = (int)(rowY + scroll);
+                bool visible = (rowY + trackRowHeight_ >= tp.y) && (rowY <= tp.y + tp.h);
+                if (!visible) { rowY += trackRowHeight_; continue; }
 
                 bool isPlayingRow = (displayAlbum_ == selectedAlbumIdx_ && displayTrack_ == i && isPlaying_);
-                float rpx = colX - metrics_.space(12.0f), rpw = colW + metrics_.space(24.0f);
                 if (isPlayingRow) {
                     // Playing row: accent-tint pill + left bar (one selection family) —
                     // full height + square, matching the hover highlight exactly.
-                    canvas.rect(rpx, rowY, rpw, (float)trackRowHeight_,
+                    canvas.rect(rowX, rowY, rowW, (float)trackRowHeight_,
                                 toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
-                    canvas.rect(rpx, rowY, metrics_.stroke(3.0f), (float)trackRowHeight_,
+                    canvas.rect(rowX, rowY, metrics_.stroke(3.0f), (float)trackRowHeight_,
                                 toColor(CLR_ACCENT), UI_CORNER_RADIUS);
                 } else if (hoverTrackIdx_ == i) {
-                    canvas.rect(rpx, rowY, rpw, (float)trackRowHeight_, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+                    canvas.rect(rowX, rowY, rowW, (float)trackRowHeight_, toColor(CLR_HOVER), UI_CORNER_RADIUS);
                 }
 
-                if (qualityMixed) {
-                    QualityColor tc = qualityColorFor(album.tracks[i].sampleRate, false);
-                    if (tc.hasColor) {
-                        float bw = metrics_.stroke(2.0f);
-                        canvas.rect(rpx, rowY, rpw, bw, toColor(tc.color));
-                        canvas.rect(rpx, rowY + trackRowHeight_ - bw, rpw, bw, toColor(tc.color));
-                        canvas.rect(rpx, rowY, bw, (float)trackRowHeight_, toColor(tc.color));
-                        canvas.rect(rpx + rpw - bw, rowY, bw, (float)trackRowHeight_, toColor(tc.color));
-                    }
+                // Quality tier, as one small mark in its own column. It keeps
+                // its tier colour on the playing row too: this is the only
+                // reading of quality left in the list, and the duration beside
+                // it already stays neutral there.
+                QualityColor tc = qualityColorFor(tr.sampleRate, false);
+                if (tc.hasColor) {
+                    LayoutRect markRc{ (int)markX,
+                                       (int)(rowY + (trackRowHeight_ - markSize) * 0.5f),
+                                       (int)(markX + markSize),
+                                       (int)(rowY + (trackRowHeight_ + markSize) * 0.5f) };
+                    drawUiIconGlyph(canvas, markRc, UiIcon::Quality, toColor(tc.color));
                 }
 
                 // Track number / duration are numeric readouts: Mono (repurposed
                 // Math style slot) keeps digits from jittering column-to-column.
-                int trackNum = album.tracks[i].trackNumber > 0 ? album.tracks[i].trackNumber : i + 1;
+                int trackNum = tr.trackNumber > 0 ? tr.trackNumber : i + 1;
                 std::string trackNumStr = std::to_string(trackNum);
                 // Baselines centered by the actual text size (the old "-6"
                 // magic offset drifted across resolutions), columns scaled.
-                float numColW = metrics_.space(49.0f), titleX = metrics_.space(75.0f);
                 float trackNumW = canvas.textWidthStyled(trackNumStr, metrics_.text.body, FontStyle::Math);
                 canvas.textStyled(trackNumStr, colX + numColW - trackNumW,
                                 rowY + trackRowHeight_ * 0.5f - metrics_.text.body * 0.5f,
                                 metrics_.text.body, toColor(isPlayingRow ? CLR_ACCENT : CLR_TEXT_SECONDARY), FontStyle::Math);
                 // Base-name priority: only the trailing "(from the Netflix
                 // Series...)" modifier ever gets truncated, never the name.
-                float titleMaxW = colW - titleX - durColW - metrics_.space(26.0f);
+                // Measured back from the mark column, which is the leftmost
+                // thing on the right-hand side of the row.
+                float titleMaxW = markX - metrics_.space(SP_MD) - (colX + titleX);
                 FontStyle rowStyle = isPlayingRow ? FontStyle::Bold : FontStyle::Roman;
-                drawNameWithModifier(canvas, album.tracks[i].title,
+                drawNameWithModifier(canvas, tr.title,
                                      colX + titleX,
                                      rowY + trackRowHeight_ * 0.5f - metrics_.text.body * 0.5f,
                                      titleMaxW, metrics_.text.body,
                                      isPlayingRow ? CLR_ACCENT : CLR_TEXT_PRIMARY, rowStyle);
 
-                int durMs = album.tracks[i].durationMs;
+                int durMs = tr.durationMs;
                 if (durMs > 0) {
                     char durBuf[16];
                     snprintf(durBuf, sizeof(durBuf), "%d:%02d", durMs / 60000, (durMs % 60000) / 1000);
                     float durW = canvas.textWidthStyled(durBuf, metrics_.text.secondary, FontStyle::Math);
-                    canvas.textStyled(durBuf, colX + colW - durW,
+                    canvas.textStyled(durBuf, durRight - durW,
                                     rowY + trackRowHeight_ * 0.5f - metrics_.text.secondary * 0.5f,
                                     metrics_.text.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Math);
                 }
-            }
-            float tracksBottom = y + (float)album.tracks.size() * trackRowHeight_;
 
-            if (!qualityMixed && unifiedQuality.hasColor) {
-                float lb = metrics_.stroke(3.0f);
-                float lx = (float)trackListLeft_, rx = (float)trackListRight_;
-                canvas.rect(lx - lb, y - lb, (rx - lx) + lb * 2, lb, toColor(unifiedQuality.color));
-                canvas.rect(lx - lb, tracksBottom, (rx - lx) + lb * 2, lb, toColor(unifiedQuality.color));
-                canvas.rect(lx - lb, y - lb, lb, (tracksBottom - y) + lb * 2, toColor(unifiedQuality.color));
-                canvas.rect(rx, y - lb, lb, (tracksBottom - y) + lb * 2, toColor(unifiedQuality.color));
+                rowY += trackRowHeight_;
             }
+            float tracksBottom = rowY;
 
             // ── Sidecar text sections (album description, artist bio) ──
             float sectY = std::max(tracksBottom, artY + artSize) + metrics_.space(36.0f);
@@ -1410,19 +1440,178 @@ void PlayerWindow::drawFrame() {
                 }
                 yy += metrics_.space(28.0f);
             };
+            const float textTop = sectY;
             drawSection("ABOUT THIS ALBUM", albumDescLines_, sectY);
             if (!artistBioLines_.empty()) {
-                // Artist image above the bio (only when it fits above the
-                // panel's bottom edge — imageFg composites over the
-                // transport bar otherwise).
+                // Artist image above the bio. It is CROPPED to the panel by
+                // hand, via imageFg's UV sub-rect, rather than gated on fitting
+                // whole: imageFg composites above the vector layer, so an
+                // overflowing photo would paint over the transport bar, and
+                // setClip is explicitly a tile-granular (~16px) safety net, not
+                // an exact mask. Requiring it to fit entirely was the cheap
+                // way out and it cost a bug — the photo's height still counted
+                // toward the layout while nothing was drawn, so scrolling down
+                // hit a long dead gap and then the photo snapped into view.
+                // Cropping draws exactly the visible slice, to the pixel.
                 if (artistImgTex_ != kInvalidTexture) {
                     float imgSize = metrics_.space(196.0f);
-                    if (sectY + imgSize <= tp.y + tp.h && sectY + imgSize > tp.y)
-                        canvas.imageFg(artistImgTex_, tp.x + pad, sectY, imgSize, imgSize);
+                    float top     = std::max(sectY, tp.y);
+                    float bottom  = std::min(sectY + imgSize, tp.y + tp.h);
+                    if (bottom > top) {
+                        float v0 = (top - sectY) / imgSize;
+                        float v1 = (bottom - sectY) / imgSize;
+                        rcArtistImg_ = LayoutRect{ (int)(tp.x + pad), (int)top,
+                                                   (int)(tp.x + pad + imgSize), (int)bottom };
+                        canvas.imageFg(artistImgTex_, tp.x + pad, top, imgSize, bottom - top,
+                                       0.0f, v0, 1.0f, v1);
+                    } else {
+                        rcArtistImg_ = LayoutRect{ 0, 0, 0, 0 };
+                    }
                     sectY += imgSize + metrics_.space(16.0f);
                 }
                 drawSection(album.artist.empty() ? std::string("ABOUT THE ARTIST")
                                                  : album.artist, artistBioLines_, sectY);
+            }
+            // The prose column, clipped to what's on screen — read only by the
+            // cursor logic (see cursorForPoint). This block deliberately has
+            // no hover background: it reads as a printed page, so the cursor
+            // is its only affordance.
+            {
+                float top = std::max(textTop, tp.y);
+                float bot = std::min(sectY, tp.y + tp.h);
+                rcAlbumText_ = (bot > top)
+                    ? LayoutRect{ (int)(tp.x + pad), (int)top,
+                                  (int)(tp.x + pad + textW), (int)bot }
+                    : LayoutRect{ 0, 0, 0, 0 };
+            }
+
+            // ── OTHER VERSIONS — the rest of this album's group ──────────
+            // The same release held more than once: another edition (Deluxe,
+            // Edición Especial) or the same edition at another quality. The
+            // grid shows only the group's best member, so this strip is the
+            // ONLY way to reach the others — see core/variants.h.
+            //
+            // These are FULL-SIZE grid tiles — the same gridArtSize_ art over
+            // the same centered title / modifier / artist stack the main grid
+            // draws. A variant is an album, so it is shown as one; shrinking it
+            // would say it were a lesser thing. It also means the art comes out
+            // of getGridArtTexture() at 1:1, the density it was decoded for.
+            //
+            // NO quality figure and no tier mark. Sample rate and bit depth do
+            // not tell you which version you want — every FLAC in this library
+            // reads much the same, and the numbers were just noise repeated
+            // under every tile. Only a format that changes what those numbers
+            // MEAN is called out: MP3 (lossy — its 16/44.1 is reconstructed)
+            // and DSD. FLAC is the baseline and stays unlabelled.
+            rcVariantTiles_.clear();
+            {
+                std::vector<int> others = otherVariantsOf(selectedAlbumIdx_);
+                if (!others.empty()) {
+                    // "OTHER VERSIONS" is wrong on a remix page: a remix
+                    // already IS a version, so the caption says nothing. What
+                    // is actually below is simply more of them.
+                    const char* stripCaption =
+                        album.releaseType == Album::ReleaseType::Remix
+                            ? "MORE REMIXES" : "OTHER VERSIONS";
+                    canvas.textStyled(stripCaption, tp.x + pad, sectY,
+                                      metrics_.text.caption, toColor(CLR_TEXT_DIM),
+                                      FontStyle::Bold);
+                    sectY += metrics_.text.caption * 2.2f;
+
+                    const float artW  = (float)gridArtSize_;
+                    const float gapX  = metrics_.space(SP_LG);
+                    const float stepX = artW + gapX;
+                    const float adv   = titleArtistAdvance(metrics_.text.body);
+                    // art + gap + title + modifier + artist + the format line.
+                    // The format line's slot is reserved whether or not it is
+                    // used, so tiles in a row stay the same height.
+                    const float tileH = artW + metrics_.space(16.0f) + adv * 3.0f +
+                                        metrics_.text.caption * 1.6f;
+                    const float stepY = tileH + metrics_.space(SP_LG);
+                    // Wrap to a second row rather than shrink or truncate: the
+                    // page already scrolls as one, so extra rows cost nothing
+                    // but height, and hiding a version defeats the strip.
+                    int perRow = std::max(1, (int)((textW + gapX) / stepX));
+                    int rows   = ((int)others.size() + perRow - 1) / perRow;
+
+                    for (size_t i = 0; i < others.size(); i++) {
+                        int vIdx = others[i];
+                        const Album& v = albums_[vIdx];
+                        float tx = tp.x + pad + (float)((int)i % perRow) * stepX;
+                        float ty = sectY + (float)((int)i / perRow) * stepY;
+
+                        // Hover frame FIRST, so the art covers its middle and
+                        // it reads as a halo — the order the grid tiles use.
+                        // Grey, never accent: accent means state.
+                        if (hoverVariantIdx_ == vIdx)
+                            canvas.rect(tx - metrics_.space(SP_XS), ty - metrics_.space(SP_XS),
+                                        artW + metrics_.space(12.0f), artW + metrics_.space(12.0f),
+                                        toColor(CLR_HOVER), UI_CORNER_RADIUS);
+
+                        // The art is imageFg — composited ABOVE the vector
+                        // layer, so setClip does not contain it and a
+                        // scrolled-past tile would paint over the transport
+                        // bar. Crop it by hand to the visible band, exactly as
+                        // the artist photo above does. The placeholder is a
+                        // plain rect, which setClip DOES clip, so it needs
+                        // none of this.
+                        TextureHandle tex = getGridArtTexture(vIdx);
+                        if (tex != kInvalidTexture) {
+                            float top = std::max(ty, tp.y);
+                            float bot = std::min(ty + artW, tp.y + tp.h);
+                            if (bot > top)
+                                canvas.imageFg(tex, tx, top, artW, bot - top,
+                                               0.0f, (top - ty) / artW,
+                                               1.0f, (bot - ty) / artW);
+                        } else {
+                            canvas.rect(tx, ty, artW, artW, toColor(CLR_TILE_PLACEHOLDER));
+                        }
+
+                        // Text centered under the art and confined to exactly
+                        // the art's width — the grid's rule, and these are
+                        // grid tiles.
+                        auto vCentered = [&](const std::string& s, float yy, float sz,
+                                             ColorRef clr, FontStyle st) {
+                            if (s.empty()) return;
+                            float w = canvas.textWidthStyled(s, sz, st);
+                            canvas.textStyled(s, tx + std::max(0.0f, (artW - w) * 0.5f),
+                                              yy, sz, toColor(clr), st);
+                        };
+
+                        float ly = ty + artW + metrics_.space(16.0f);
+                        // Title, then its edition on its own dim italic line —
+                        // "(Deluxe)", "- Edición Especial", a remix tag. That
+                        // second line is the whole point of the strip: it is
+                        // what tells one version from another at a glance.
+                        std::string vBase, vMod;
+                        splitNameModifier(v.displayName, vBase, vMod);
+                        vCentered(truncateToWidth(canvas, vBase, artW, metrics_.text.body, FontStyle::Bold),
+                                  ly, metrics_.text.body, CLR_TEXT_ALBUM_TITLE, FontStyle::Bold);
+                        vCentered(truncateToWidth(canvas, vMod, artW, metrics_.text.secondary, FontStyle::Italic),
+                                  ly + adv, metrics_.text.secondary, CLR_TEXT_DIM, FontStyle::Italic);
+                        // Artist in a fixed slot, so it aligns across tiles
+                        // whether or not a version carried an edition line. A
+                        // group shares a base name but NOT necessarily an
+                        // artist credit — a collaboration is its own version —
+                        // which is why this is printed rather than assumed.
+                        vCentered(truncateToWidth(canvas, v.artist, artW, metrics_.text.secondary, FontStyle::Italic),
+                                  ly + adv * 2.0f, metrics_.text.secondary,
+                                  CLR_TEXT_SECONDARY, FontStyle::Italic);
+                        // MP3 / DSD only — see variantFormatLabel().
+                        vCentered(variantFormatLabel(v), ly + adv * 3.0f,
+                                  metrics_.text.caption, CLR_TEXT_DIM, FontStyle::Math);
+
+                        // Hit rect: the whole tile, clipped to what is on
+                        // screen — you can only click what you can see.
+                        float hTop = std::max(ty, tp.y);
+                        float hBot = std::min(ty + tileH, tp.y + tp.h);
+                        if (hBot > hTop)
+                            rcVariantTiles_.emplace_back(
+                                LayoutRect{ (int)tx, (int)hTop,
+                                            (int)(tx + artW), (int)hBot }, vIdx);
+                    }
+                    sectY += (float)rows * stepY;
+                }
             }
             albumViewContentH_ = (int)(sectY + scroll - tp.y + pad);
 
@@ -1653,7 +1842,7 @@ void PlayerWindow::recalcLayout() {
     // 1080: TRUNCATED, not rounded, because the original code cast with (int).
     // Rounding instead shifts these by a pixel each and compounds to ~8px on the
     // settings rows. Values consumed as floats and accumulated (navRowH, navTop,
-    // gearOffset) keep their fraction. Values that were bare kept their number.
+    // settOffset) keep their fraction. Values that were bare kept their number.
     int transportH = (int)metrics_.space(130.0f);  // scales with the text it contains
 
     // Sidebar width scales the same way — fixed pixel widths with
@@ -1724,9 +1913,9 @@ void PlayerWindow::recalcLayout() {
     rcNavEp_     = { 0, (int)(navTop + navRowH),     sidebarW, (int)(navTop + navRowH * 2) };
     rcNavSingle_ = { 0, (int)(navTop + navRowH * 2), sidebarW, (int)(navTop + navRowH * 3) };
     rcNavRemix_  = { 0, (int)(navTop + navRowH * 3), sidebarW, (int)(navTop + navRowH * 4) };
-    const float gearOffset = metrics_.space(13.0711f);
-    rcNavGear_   = { 0, (int)(navTop + navRowH * 4 + gearOffset),
-                        sidebarW, (int)(navTop + navRowH * 5 + gearOffset) };
+    const float settOffset = metrics_.space(13.0711f);
+    rcNavSettings_ = { 0, (int)(navTop + navRowH * 4 + settOffset),
+                          sidebarW, (int)(navTop + navRowH * 5 + settOffset) };
 
     // Transport sub-regions — proportional to the (scaled) bar height.
     int tTop = rcTransport_.top;
@@ -1818,23 +2007,30 @@ void PlayerWindow::snapToEdge(int hotkeyId) {
 
 // ── Art cache (Vulkan textures) ──────────────────────────────────────────────
 
-TextureHandle PlayerWindow::getGridArtTexture(int albumIdx) {
-    auto it = gridArtTexCache_.find(albumIdx);
+TextureHandle PlayerWindow::getGridArtTexture(int albumIdx, int sizeClass) {
+    const int key = artKey(albumIdx, sizeClass);
+    auto it = gridArtTexCache_.find(key);
     if (it != gridArtTexCache_.end()) {
-        gridArtLastUse_[albumIdx] = ++artUseTick_;
+        gridArtLastUse_[key] = ++artUseTick_;
         return it->second;
     }
     if (albumIdx < 0 || albumIdx >= (int)albums_.size()) return kInvalidTexture;
 
+    // Decode at the size it will be DRAWN at. A mosaic quadrant is half the
+    // tile's edge, and there is no mip chain to fall back on (see
+    // onArtDecoded), so handing back the full-size texture would alias.
+    const int target = (sizeClass == ArtHalf) ? std::max(1, gridArtSize_ / 2)
+                                              : gridArtSize_;
+
     // Not cached: queue an async decode (once) and show the placeholder this
     // frame — onArtDecoded() invalidates when the texture is ready.
-    if (artDecodePending_.emplace(albumIdx, 1).second) {
+    if (artDecodePending_.emplace(key, 1).second) {
         if (!artDecodeThread_.joinable())
             artDecodeThread_ = std::thread([this]{ artDecodeWorker(); });
         {
             std::lock_guard<std::mutex> lk(artDecodeMu_);
-            artDecodeQueue_.push_back({albumIdx, albums_[albumIdx].artPath,
-                                       gridArtSize_, artCacheGen_.load()});
+            artDecodeQueue_.push_back({key, albums_[albumIdx].artPath,
+                                       target, artCacheGen_.load()});
         }
         artDecodeCv_.notify_one();
     }
@@ -1855,7 +2051,7 @@ void PlayerWindow::artDecodeWorker() {
         // Stale job from before a rescan: skip the decode entirely, but still
         // report back so the main thread clears its pending mark.
         ArtDecodeResult res;
-        res.albumIdx = job.albumIdx;
+        res.key = job.key;
         res.gen = job.gen;
         if (job.gen == artCacheGen_.load() && !job.path.empty()) {
             std::vector<uint8_t> bytes;
@@ -1882,9 +2078,9 @@ void PlayerWindow::onArtDecoded() {
     }
     bool anyNew = false;
     for (auto& r : done) {
-        artDecodePending_.erase(r.albumIdx);
+        artDecodePending_.erase(r.key);
         if (r.gen != artCacheGen_.load()) continue;  // rescan invalidated it
-        if (gridArtTexCache_.count(r.albumIdx)) continue;  // duplicate job — keep the existing texture
+        if (gridArtTexCache_.count(r.key)) continue;  // duplicate job — keep the existing texture
         // Failed decodes cache kInvalidTexture so the tile keeps its
         // placeholder without re-queuing a doomed decode every frame —
         // same behavior the old synchronous path had.
@@ -1894,8 +2090,8 @@ void PlayerWindow::onArtDecoded() {
             // skip the mip chain: −33% VRAM per tile, no blit pass.
             tex = renderer_->create_texture(r.rgba.data(), (uint32_t)r.w, (uint32_t)r.h,
                                             /*mips=*/false);
-        gridArtTexCache_[r.albumIdx] = tex;
-        gridArtLastUse_[r.albumIdx] = ++artUseTick_;
+        gridArtTexCache_[r.key] = tex;
+        gridArtLastUse_[r.key] = ++artUseTick_;
         anyNew = true;
     }
 
@@ -1903,18 +2099,18 @@ void PlayerWindow::onArtDecoded() {
     // cap. Only entries not drawn recently get dropped, so everything visible
     // (stamped this frame via getGridArtTexture) always survives.
     while (gridArtTexCache_.size() > kMaxGridArtTextures) {
-        int oldestIdx = -1;
+        int oldestKey = INT_MIN;
         uint64_t oldestTick = UINT64_MAX;
-        for (auto& [idx, tex] : gridArtTexCache_) {
-            auto u = gridArtLastUse_.find(idx);
+        for (auto& [key, tex] : gridArtTexCache_) {
+            auto u = gridArtLastUse_.find(key);
             uint64_t tick = (u != gridArtLastUse_.end()) ? u->second : 0;
-            if (tick < oldestTick) { oldestTick = tick; oldestIdx = idx; }
+            if (tick < oldestTick) { oldestTick = tick; oldestKey = key; }
         }
-        if (oldestIdx < 0) break;
-        auto e = gridArtTexCache_.find(oldestIdx);
+        if (oldestKey == INT_MIN) break;
+        auto e = gridArtTexCache_.find(oldestKey);
         if (e->second != kInvalidTexture) renderer_->destroy_texture(e->second);
         gridArtTexCache_.erase(e);
-        gridArtLastUse_.erase(oldestIdx);
+        gridArtLastUse_.erase(oldestKey);
     }
 
     if (anyNew) invalidate();
@@ -1970,6 +2166,48 @@ void PlayerWindow::openAlbumView(int albumIdx) {
     invalidate();
 }
 
+std::string PlayerWindow::artistImagePathFor(int albumIdx) const {
+    if (albumIdx < 0 || albumIdx >= (int)albums_.size()) return {};
+    const Album& a = albums_[albumIdx];
+    fsys::path albumDir;
+    if (!a.tracks.empty())       albumDir = fsys::u8path(a.tracks[0].filePath).parent_path();
+    else if (!a.artPath.empty()) albumDir = fsys::u8path(a.artPath).parent_path();
+    if (albumDir.empty()) return {};
+
+    // Same two sources, in the same order, as loadAlbumViewContent().
+    std::string root = rootForPath(albumDir.u8string());
+    if (!root.empty()) {
+        auto it = streamerDbs_.find(root);
+        if (it != streamerDbs_.end() && it->second.isOpen())
+            if (auto info = it->second.artistInfoForAlbum(a.name))
+                if (!info->imagePath.empty()) return info->imagePath;
+    }
+    fsys::path artistDir = albumDir.parent_path();
+    if (artistDir.filename().u8string() == "Singles")
+        artistDir = artistDir.parent_path();
+    if (artistDir.empty()) return {};
+    return resolveArtPath(artistDir.u8string());
+}
+
+TextureHandle PlayerWindow::loadArtistImageTexture(const std::string& path) {
+    artistImgPath_ = path;   // remembered so ArtWindow can show the original
+    // Decode at the size it is actually drawn, and WITHOUT mips.
+    //
+    // Both matter, and the second one is what made the photo look washed out
+    // even at 1080. art_texture.hh spells out the trap: the sampler picks its
+    // LOD from the on-screen ratio, so a mip chain "softens anything drawn
+    // even slightly below 1:1". This was decoded at a fixed 256 and drawn at
+    // space(196) — a ratio of 0.77, just under 1:1, which is enough to pull in
+    // a blurrier level. The fixed 256 was the other half: space() scales with
+    // resolution, so on a 4x display the photo was drawn at 784 from a 256px
+    // source. loadTrackPanelArtTexture() already does it this way.
+    const int target = std::max(64, (int)metrics_.space(196.0f));
+    FileByteReader reader;
+    return createTextureFromImageFile(*renderer_, reader, path.c_str(),
+                                      target, target,
+                                      nullptr, nullptr, /*mips=*/false);
+}
+
 void PlayerWindow::loadAlbumViewContent(int albumIdx) {
     albumDescText_.clear();
     artistBioText_.clear();
@@ -1980,6 +2218,12 @@ void PlayerWindow::loadAlbumViewContent(int albumIdx) {
         renderer_->destroy_texture(artistImgTex_);
         artistImgTex_ = kInvalidTexture;
     }
+    artistImgPath_.clear();
+    rcArtistImg_ = {};
+    // The strip belongs to the album being left; clearing the hover too keeps
+    // a stale highlight from landing on whichever tile inherits that slot.
+    rcVariantTiles_.clear();
+    hoverVariantIdx_ = -1;
     if (albumIdx < 0 || albumIdx >= (int)albums_.size()) return;
     const Album& a = albums_[albumIdx];
 
@@ -2006,11 +2250,8 @@ void PlayerWindow::loadAlbumViewContent(int albumIdx) {
                     bool looksHtml = info->bioText.find('<') != std::string::npos;
                     artistBioText_ = looksHtml ? stripHtmlToPlain(info->bioText) : info->bioText;
                 }
-                if (!info->imagePath.empty()) {
-                    FileByteReader reader;
-                    artistImgTex_ = createTextureFromImageFile(*renderer_, reader,
-                                                               info->imagePath.c_str(), 256, 256);
-                }
+                if (!info->imagePath.empty())
+                    artistImgTex_ = loadArtistImageTexture(info->imagePath);
                 gotFromStreamer = !info->bioText.empty() || artistImgTex_ != kInvalidTexture;
             }
         }
@@ -2025,11 +2266,8 @@ void PlayerWindow::loadAlbumViewContent(int albumIdx) {
         if (!artistDir.empty()) {
             artistBioText_ = loadSidecarText(artistDir, { "bio" });
             std::string artistImg = resolveArtPath(artistDir.u8string());
-            if (!artistImg.empty()) {
-                FileByteReader reader;
-                artistImgTex_ = createTextureFromImageFile(*renderer_, reader,
-                                                           artistImg.c_str(), 256, 256);
-            }
+            if (!artistImg.empty())
+                artistImgTex_ = loadArtistImageTexture(artistImg);
         }
     }
 }
@@ -2047,8 +2285,15 @@ void PlayerWindow::loadTransportArtTexture(const std::string& artPath) {
     transportArtTexPath_ = artPath;
     // Single choke point for "the now-playing art changed" (onPlay, gapless
     // boundary flips via applyTrackMetadata) — keep the fullscreen art
-    // window in sync while it's open.
-    if (artWin_.isVisible()) artWin_.updateImage(artPath);
+    // window in sync while it's open. Which picture it wants depends on what
+    // it was opened to show: the album cover, or the ARTIST behind the track
+    // now playing (resolved live, since the playing album may not be the one
+    // whose page is open).
+    if (artWin_.isVisible()) {
+        std::string img = artWinShowsArtist_ ? artistImagePathFor(displayAlbum_)
+                                             : artPath;
+        if (!img.empty()) artWin_.updateImage(img);
+    }
     if (!artPath.empty()) {
         // This one texture is shown in two different-sized contexts without a
         // reload between them (Complete mode's small rcTransportArt_ and
@@ -2087,17 +2332,102 @@ static bool containsNoCase(const std::string& hay, const std::string& needle) {
     return false;
 }
 
+void PlayerWindow::rebuildAlbumGroups() {
+    albumGroups_ = groupAlbumVariants(albums_);
+    albumGroupOf_.assign(albums_.size(), -1);
+    for (int g = 0; g < (int)albumGroups_.size(); g++)
+        for (int m : albumGroups_[g].members)
+            albumGroupOf_[m] = g;
+}
+
+// The 2x2 mosaic a REMIX group's tile wears instead of one cover. Returns
+// false when this album is not the primary of a multi-member remix group, so
+// the caller falls back to the normal single-cover draw.
+//
+// Quadrant order is the group's own ranking (best first), reading left-to-
+// right, top-to-bottom. Fewer than four members leave the remaining quadrants
+// flat CLR_TILE_PLACEHOLDER — the tile's own background, so an empty quadrant
+// reads as absence rather than as a broken image. MORE than four replaces the
+// LAST quadrant with a fade into CLR_TILE_MORE_GREEN: three covers plus "and
+// there is more", rather than an arbitrary fourth cover pretending to be the
+// whole set.
+bool PlayerWindow::drawVariantMosaic(Canvas& canvas, int albumIdx,
+                                     float x, float y, float a) {
+    if (albumIdx < 0 || albumIdx >= (int)albums_.size()) return false;
+    if (albums_[albumIdx].releaseType != Album::ReleaseType::Remix) return false;
+    if (albumIdx >= (int)albumGroupOf_.size()) return false;
+    int g = albumGroupOf_[albumIdx];
+    if (g < 0 || g >= (int)albumGroups_.size()) return false;
+    const AlbumGroup& grp = albumGroups_[g];
+    if (grp.members.size() < 2) return false;      // nothing to mosaic
+    if (grp.primary != albumIdx) return false;     // only the tile draws it
+
+    const int   n    = (int)grp.members.size();
+    const float half = a * 0.5f;
+    // The last quadrant becomes the "and more" fade once the group outgrows
+    // the four slots. At exactly four, all four are covers.
+    const bool  overflow = n > 4;
+    const int   covers   = overflow ? 3 : std::min(n, 4);
+
+    for (int q = 0; q < 4; q++) {
+        float qx = x + (q % 2) * half;
+        float qy = y + (q / 2) * half;
+        if (q < covers) {
+            // Half-size decode, not the full tile texture scaled down: there
+            // is no mip chain here (see onArtDecoded), so a 2:1 minification
+            // would alias. See getGridArtTexture's sizeClass.
+            TextureHandle tex = getGridArtTexture(grp.members[q], ArtHalf);
+            if (tex != kInvalidTexture) {
+                canvas.imageFg(tex, qx, qy, half, half);
+                continue;
+            }
+            // Not decoded yet (or no cover at all): the placeholder below.
+        }
+        if (q == 3 && overflow) {
+            canvas.rectGradient(qx, qy, half, half,
+                                toColor(CLR_TILE_PLACEHOLDER),
+                                toColor(CLR_TILE_MORE_GREEN),
+                                Canvas::GradientDir::Vertical);
+        } else {
+            canvas.rect(qx, qy, half, half, toColor(CLR_TILE_PLACEHOLDER));
+        }
+    }
+    return true;
+}
+
+std::vector<int> PlayerWindow::otherVariantsOf(int albumIdx) const {
+    std::vector<int> out;
+    if (albumIdx < 0 || albumIdx >= (int)albumGroupOf_.size()) return out;
+    int g = albumGroupOf_[albumIdx];
+    if (g < 0 || g >= (int)albumGroups_.size()) return out;
+    for (int m : albumGroups_[g].members)
+        if (m != albumIdx) out.push_back(m);
+    return out;
+}
+
 void PlayerWindow::rebuildGridIndices() {
     gridIndices_.clear();
-    gridIndices_.reserve(albums_.size());
-    for (int i = 0; i < (int)albums_.size(); i++) {
+    gridIndices_.reserve(albumGroups_.size());
+    // One tile per GROUP, not per album — the group's best member represents
+    // it (see rebuildAlbumGroups). The filter reads that member, since it is
+    // what gets drawn.
+    for (const AlbumGroup& grp : albumGroups_) {
+        int i = grp.primary;
+        if (i < 0 || i >= (int)albums_.size()) continue;
         const Album& a = albums_[i];
         if ((int)a.releaseType != (int)albumTypeFilter_) continue;
         if (!searchQuery_.empty()) {
-            bool hit = containsNoCase(a.displayName, searchQuery_) ||
-                       containsNoCase(a.artist, searchQuery_);
-            for (size_t t = 0; !hit && t < a.tracks.size(); t++)
-                hit = containsNoCase(a.tracks[t].title, searchQuery_);
+            // Search matches on ANY member. Without this, grouping would
+            // HIDE results: a track title that only exists on the variant
+            // sitting behind the tile would stop finding its own album.
+            bool hit = false;
+            for (size_t mi = 0; !hit && mi < grp.members.size(); mi++) {
+                const Album& m = albums_[grp.members[mi]];
+                hit = containsNoCase(m.displayName, searchQuery_) ||
+                      containsNoCase(m.artist, searchQuery_);
+                for (size_t t = 0; !hit && t < m.tracks.size(); t++)
+                    hit = containsNoCase(m.tracks[t].title, searchQuery_);
+            }
             if (!hit) continue;
         }
         gridIndices_.push_back(i);
@@ -2149,14 +2479,27 @@ int PlayerWindow::trackPanelHitTest(int x, int y) const {
     if (!trackPanelOpen_ || settingsOpen_) return -1;
     if (x < trackListLeft_ || x >= trackListRight_) return -1;
     if (y < rcTrackPanel_.top || y >= rcTrackPanel_.bottom) return -1;
-    // trackListTop_ is the scroll-0 window Y of row 0 (written by the album
-    // view draw block); rows scroll with the page.
-    int listTopNow = trackListTop_ - trackScrollY_;
-    if (y < listTopNow) return -1;
-    int row = (y - listTopNow) / trackRowHeight_;
     if (selectedAlbumIdx_ < 0 || selectedAlbumIdx_ >= (int)albums_.size()) return -1;
-    if (row < 0 || row >= (int)albums_[selectedAlbumIdx_].tracks.size()) return -1;
-    return row;
+    if (trackRowTop_.size() != albums_[selectedAlbumIdx_].tracks.size()) return -1;
+    // trackRowTop_ holds each row's scroll-0 window Y (written by the album
+    // view draw block); rows scroll with the page. A linear scan — album track
+    // counts are in the dozens, and this runs once per mouse event.
+    for (int i = 0; i < (int)trackRowTop_.size(); i++) {
+        int top = trackRowTop_[i] - trackScrollY_;
+        if (y >= top && y < top + trackRowHeight_) return i;
+    }
+    return -1;
+}
+
+// Album index of the "OTHER VERSIONS" thumbnail at (x,y), or -1. The rects
+// were recorded by the album view's draw block, already clipped to the
+// visible band and already scroll-adjusted — unlike trackRowTop_, which
+// stores scroll-0 positions — so this is a plain containment test.
+int PlayerWindow::variantTileHitTest(int x, int y) const {
+    if (!trackPanelOpen_ || settingsOpen_) return -1;
+    for (const auto& [rc, albumIdx] : rcVariantTiles_)
+        if (ptInRect(rc, x, y)) return albumIdx;
+    return -1;
 }
 
 int PlayerWindow::sidebarHitTest(int x, int y) const {
@@ -2164,7 +2507,7 @@ int PlayerWindow::sidebarHitTest(int x, int y) const {
     if (ptInRect(rcNavEp_, x, y))     return (int)AlbumTypeFilter::Ep;
     if (ptInRect(rcNavSingle_, x, y)) return (int)AlbumTypeFilter::Single;
     if (ptInRect(rcNavRemix_, x, y))  return (int)AlbumTypeFilter::Remix;
-    if (ptInRect(rcNavGear_, x, y))   return kSidebarGearHit;
+    if (ptInRect(rcNavSettings_, x, y)) return kSidebarSettingsHit;
     return -1;
 }
 
@@ -2209,6 +2552,7 @@ void PlayerWindow::onMouseMove(int x, int y) {
 
     int oldHoverAlbum = hoverAlbumIdx_;
     int oldHoverTrack = hoverTrackIdx_;
+    int oldHoverVariant = hoverVariantIdx_;
     int oldHoverSidebar = hoverSidebarItem_;
     int oldHoverTransBtn = hoverTransportBtn_;
     int oldHoverSettings = hoverSettingsItem_;
@@ -2216,6 +2560,7 @@ void PlayerWindow::onMouseMove(int x, int y) {
 
     hoverAlbumIdx_ = -1;
     hoverTrackIdx_ = -1;
+    hoverVariantIdx_ = -1;
     hoverSidebarItem_ = -1;
     hoverTransportBtn_ = -1;
     hoverSettingsItem_ = -1;
@@ -2228,7 +2573,11 @@ void PlayerWindow::onMouseMove(int x, int y) {
         hoverTransportBtn_ = transportBtnHitTest(x, y);
         hoverDspBadge_ = ptInRect(rcDspBadge_, x, y) != 0;
     } else if (trackPanelOpen_ && !settingsOpen_ && ptInRect(rcTrackPanel_, x, y)) {
-        hoverTrackIdx_ = trackPanelHitTest(x, y);
+        hoverVariantIdx_ = variantTileHitTest(x, y);
+        // The strip lives below the track list, but a wide panel puts later
+        // columns inside the list's x span — so the more specific rect wins,
+        // the same way rcSearch_ beats the sidebar rows in cursorForPoint().
+        hoverTrackIdx_   = hoverVariantIdx_ >= 0 ? -1 : trackPanelHitTest(x, y);
     } else if (ptInRect(rcGrid_, x, y)) {
         if (!settingsOpen_)
             hoverAlbumIdx_ = gridHitTest(x, y);
@@ -2238,18 +2587,62 @@ void PlayerWindow::onMouseMove(int x, int y) {
 
     bool changed = (hoverAlbumIdx_ != oldHoverAlbum ||
                     hoverTrackIdx_ != oldHoverTrack ||
+                    hoverVariantIdx_ != oldHoverVariant ||
                     hoverSidebarItem_ != oldHoverSidebar ||
                     hoverTransportBtn_ != oldHoverTransBtn ||
                     hoverSettingsItem_ != oldHoverSettings ||
                     hoverDspBadge_ != oldHoverDsp);
     if (changed)
         invalidate();
+
+    applyCursorFor(x, y);
+}
+
+// Runs off the hover state onMouseMove just computed plus the few rects that
+// are clickable without one (search box, artwork, prose column).
+CursorShape PlayerWindow::cursorForPoint(int x, int y) const {
+    if (uiMode_ == UiMode::Essential)
+        return essentialHitTest(x, y) >= 0 ? CursorShape::Hand : CursorShape::Arrow;
+
+    // Typing surface first: it sits inside the sidebar, whose own rows are
+    // hands, so the more specific rect has to win.
+    if (ptInRect(rcSearch_, x, y)) return CursorShape::Text;
+
+    if (hoverSidebarItem_   >= 0) return CursorShape::Hand;
+    if (hoverTransportBtn_  >= 0) return CursorShape::Hand;
+    if (hoverDspBadge_)           return CursorShape::Hand;
+    if (hoverTrackIdx_      >= 0) return CursorShape::Hand;
+    if (hoverVariantIdx_    >= 0) return CursorShape::Hand;
+    if (hoverAlbumIdx_      >= 0) return CursorShape::Hand;
+    if (hoverSettingsItem_  >= 0) return CursorShape::Hand;
+
+    // Artwork opens the fullscreen view; the artist photo does too.
+    if (transportArtTex_ != kInvalidTexture && ptInRect(rcTransportArt_, x, y))
+        return CursorShape::Hand;
+    if (rcArtistImg_.right > rcArtistImg_.left && ptInRect(rcArtistImg_, x, y))
+        return CursorShape::Hand;
+
+    // The prose column: not clickable, so NOT a hand — the text cursor says
+    // "this is a page" without promising anything happens on click.
+    if (trackPanelOpen_ && !settingsOpen_ &&
+        rcAlbumText_.right > rcAlbumText_.left && ptInRect(rcAlbumText_, x, y))
+        return CursorShape::Text;
+
+    return CursorShape::Arrow;
+}
+
+void PlayerWindow::applyCursorFor(int x, int y) {
+    CursorShape want = cursorForPoint(x, y);
+    if (want == lastCursor_) return;    // both hosts collapse repeats too
+    lastCursor_ = want;
+    host_->setCursor(want);
 }
 
 void PlayerWindow::onMouseLeave() {
     mouseTracking_ = false;
     hoverAlbumIdx_ = -1;
     hoverTrackIdx_ = -1;
+    hoverVariantIdx_ = -1;
     hoverSidebarItem_ = -1;
     hoverTransportBtn_ = -1;
     hoverSettingsItem_ = -1;
@@ -2298,10 +2691,42 @@ void PlayerWindow::onLButtonDown(int x, int y) {
         return;
     }
 
+    // Artist photo -> fullscreen. Tested before the track list because the
+    // photo sits inside the album view's own scroll area. The photo is the
+    // ONLY clickable thing in the sidecar block, and it carries no hover
+    // treatment: that block reads as a printed page, and a background that
+    // lights up under the cursor is the wrong vocabulary for it.
+    if (trackPanelOpen_ && !artistImgPath_.empty() &&
+        rcArtistImg_.right > rcArtistImg_.left && ptInRect(rcArtistImg_, x, y)) {
+        // Straight into the real fullscreen window — the same one the
+        // transport thumbnail opens. The first attempt drew the photo as a
+        // page overlay inside this window, and it could not work: MSDF text
+        // composites in one pass AFTER all geometry (see canvas.hh), so the
+        // track list and the bio printed straight through the photo, and they
+        // scrolled while it sat still. ArtWindow is a real second surface with
+        // its own renderer, so nothing from this window can reach it.
+        artWinShowsArtist_ = true;
+        artWin_.show(artistImgPath_);
+        return;
+    }
+
+    // "OTHER VERSIONS" thumbnail -> open that variant in this same panel.
+    // Tested before the track list for the reason onMouseMove states: on a
+    // wide panel the strip's later columns fall inside the list's x span.
+    // openAlbumView() already reloads art, sidecar content and scroll, so
+    // navigating between variants needs nothing of its own.
+    if (trackPanelOpen_ && !settingsOpen_) {
+        int variant = variantTileHitTest(x, y);
+        if (variant >= 0) {
+            openAlbumView(variant);
+            return;
+        }
+    }
+
     // Sidebar
     if (ptInRect(rcSidebar_, x, y)) {
         int nav = sidebarHitTest(x, y);
-        if (nav == kSidebarGearHit) {
+        if (nav == kSidebarSettingsHit) {
             if (!settingsOpen_) { settingsOpen_ = true; invalidate(); }
         } else if (nav >= 0 &&
                    (settingsOpen_ || albumTypeFilter_ != (AlbumTypeFilter)nav)) {
@@ -2419,24 +2844,48 @@ void PlayerWindow::onMouseWheel(int x, int y, int delta) {
 
 void PlayerWindow::onNext() {
     if (currentAlbum_ < 0) return;
-    int wanted = currentTrack_ + 1;
-    if (wanted >= (int)albums_[currentAlbum_].tracks.size()) return;
+    // Where "next" lands, computed the same way auto-advance computes it: past
+    // the last track we continue into the next album OF THIS SECTION. Skipping
+    // that step used to dead-end the button at every album's end — and in
+    // Singles, where every album holds one track, that meant Next did nothing
+    // at all. Resolved under the lock, then released: onPlay() takes it too.
+    int wantedAlbum, wantedTrack;
+    {
+        std::lock_guard<std::mutex> lk(albumsMu_);
+        if (currentAlbum_ >= (int)albums_.size()) return;
+        wantedAlbum = currentAlbum_;
+        wantedTrack = currentTrack_ + 1;
+        if (wantedTrack >= (int)albums_[wantedAlbum].tracks.size()) {
+            wantedAlbum = nextAlbumInSection(wantedAlbum);
+            wantedTrack = 0;
+        }
+    }
+    if (wantedAlbum < 0) return;   // end of the section
 
     // Seamless path: if we're playing, the prepared nextDecoder_ matches the
     // requested track, and its (sampleRate, channels) match the running USB
     // output, hand off via the gapless coordinator. The output stream stays
     // alive — no stop()/configure()/start() cycle, no working-set re-lock
-    // dance, no cold-start transient.
+    // dance, no cold-start transient. prepareNextTrack() precomputes exactly
+    // this pair, so the handoff now also covers a jump across an album
+    // boundary — single to single included.
     //
     // Decoder::stop() does not fire the done callback (only natural EOF
     // does), so we signal gaplessSignal_ ourselves after stopping the
     // current decoder. flush() drops the ~3 s of stale tail still queued in
     // the ring so the user actually hears the next track promptly.
     if (isPlaying_ && active_ && output_ &&
-        nextAlbum_ == currentAlbum_ && nextTrack_ == wanted) {
+        nextAlbum_ == wantedAlbum && nextTrack_ == wantedTrack) {
         Decoder* incoming = (active_ == &decoder_) ? &nextDecoder_ : &decoder_;
         if (incoming->sampleRate() == output_->getConfiguredRate() &&
             incoming->channels()   == output_->getConfiguredChannels()) {
+            // Banked HERE, before the handoff, because this path never
+            // returns to the code below: the coordinator picks it up and
+            // applyTrackMetadata() does the rest. Without this the listener's
+            // skip would be logged as an ordinary gapless advance — and
+            // "tracks you bail out of" is exactly what that would hide.
+            flushTrackStats(EndCause::Next);
+            gaplessStartCause_ = StartCause::Manual;
             active_->stop();
             output_->flush();
             {
@@ -2448,7 +2897,9 @@ void PlayerWindow::onNext() {
         }
     }
 
-    currentTrack_ = wanted;
+    flushTrackStats(EndCause::Next);
+    currentAlbum_ = wantedAlbum;
+    currentTrack_ = wantedTrack;
     onPlay();
 }
 
@@ -2456,12 +2907,29 @@ void PlayerWindow::onPrev() {
     if (currentAlbum_ < 0 || currentTrack_ < 0) return;
     if (seekPosMs_ > 3000) {
         onSeek(0);   // rebases playedFrames_ to the current track's start
-        return;
+        return;      // same track restarted — not a track change, nothing to bank
     }
+    // Past this point every path changes track, so the outgoing one is banked
+    // once here rather than at each of the two exits below.
+    flushTrackStats(EndCause::Prev);
     if (currentTrack_ > 0) {
         currentTrack_--;
         onPlay();
+        return;
     }
+    // At an album's first track, step back into the previous album of this
+    // section, landing on its LAST track — the mirror of onNext(). Same
+    // lock-then-release shape, for the same reason.
+    int prevAlbum, prevTrack;
+    {
+        std::lock_guard<std::mutex> lk(albumsMu_);
+        prevAlbum = prevAlbumInSection(currentAlbum_);
+        if (prevAlbum < 0) return;   // start of the section
+        prevTrack = (int)albums_[prevAlbum].tracks.size() - 1;
+    }
+    currentAlbum_ = prevAlbum;
+    currentTrack_ = prevTrack;
+    onPlay();
 }
 
 // ── Bitperfect / DSP mode toggle ─────────────────────────────────────────────
@@ -3300,7 +3768,7 @@ void PlayerWindow::applyDeviceEq(int sampleRate, int channels) {
         eqManager_.clear();
 }
 
-void PlayerWindow::onPlay() {
+void PlayerWindow::onPlay(StartCause cause) {
     // A fresh play attempt always dismisses a stale bitperfect warning,
     // including the stale-selection early-return path just below.
     bitperfectWarning_.clear();
@@ -3343,6 +3811,25 @@ void PlayerWindow::onPlay() {
     active_ = &decoder_;
 
     if (!decoder_.open(t.filePath)) return;
+
+    // Stats before the UI state: beginTrackStats() banks the OUTGOING track,
+    // and that needs seekPosMs_ as it stands now — it is zeroed a few lines
+    // below for the new stream.
+    //
+    // Two paths reach here that are not the listener choosing a track, and
+    // both have to say so or the log records a decision nobody made:
+    if (playFromGapless_.exchange(false)) {
+        // The previous track ran out and the next one needs a different device
+        // format, so the coordinator bounced the restart through here. The
+        // outgoing track finished; it was not replaced.
+        flushTrackStats(EndCause::Natural);
+        cause = StartCause::Gapless;
+    } else if (pendingResumeMs_ > 0 && t.filePath == pendingResumePath_) {
+        // Restored from last session — see the seek applied at the end of
+        // this function, which is what clears the pending fields.
+        cause = StartCause::Resume;
+    }
+    beginTrackStats(t, cause);
 
     // Update UI state. Fresh stream: display cursor == decode cursor, and the
     // played-frames timeline restarts from zero.
@@ -3635,9 +4122,23 @@ void PlayerWindow::onPlay() {
 
     startGaplessCoordinator(callbackI32, capturedOutSr, capturedDacCh);
     host_->startTimer(TimerId::SeekUpdate, 250);
+
+    // Resume from the previous session, once, and only into the very file the
+    // position was saved for — matched by path so picking any other track
+    // starts at zero as usual. Fires here rather than earlier because onSeek()
+    // needs the decode thread and the output already running.
+    if (pendingResumeMs_ > 0 && t.filePath == pendingResumePath_) {
+        int resumeMs = pendingResumeMs_;
+        pendingResumeMs_ = 0;
+        pendingResumePath_.clear();
+        onSeek(resumeMs);
+    }
 }
 
 void PlayerWindow::onStop() {
+    // Before anything resets the clock: both of these read seekPosMs_.
+    savePlaybackStateNow();
+    flushTrackStats(EndCause::Stop);
     {
         std::lock_guard<std::mutex> lk(gaplessMu_);
         stopGapless_.store(true);
@@ -3667,6 +4168,24 @@ void PlayerWindow::onStop() {
     invalidate();
 }
 
+// Section walks. See the declarations in player_view.hh for why the playing
+// album's own releaseType is the anchor rather than albumTypeFilter_.
+int PlayerWindow::nextAlbumInSection(int album) const {
+    if (album < 0 || album >= (int)albums_.size()) return -1;
+    const auto type = albums_[album].releaseType;
+    for (int i = album + 1; i < (int)albums_.size(); i++)
+        if (albums_[i].releaseType == type && !albums_[i].tracks.empty()) return i;
+    return -1;
+}
+
+int PlayerWindow::prevAlbumInSection(int album) const {
+    if (album < 0 || album >= (int)albums_.size()) return -1;
+    const auto type = albums_[album].releaseType;
+    for (int i = album - 1; i >= 0; i--)
+        if (albums_[i].releaseType == type && !albums_[i].tracks.empty()) return i;
+    return -1;
+}
+
 void PlayerWindow::prepareNextTrack() {
     int album = currentAlbum_;
     int track = currentTrack_ + 1;
@@ -3681,12 +4200,15 @@ void PlayerWindow::prepareNextTrack() {
             nextAlbum_ = nextTrack_ = -1;
             return;
         }
-        // Advance to next album if we've exhausted this one
+        // Exhausted this album — continue with the next one IN THE SAME
+        // SECTION. A bare album++ walked albums_, which is the global list
+        // (alphabetical, all four release types interleaved), so the queue
+        // wandered into whatever sorted next library-wide.
         if (track >= (int)albums_[album].tracks.size()) {
-            album++;
+            album = nextAlbumInSection(album);
             track = 0;
         }
-        if (album >= (int)albums_.size() || albums_[album].tracks.empty()) {
+        if (album < 0) {           // end of the section — nothing follows
             nextAlbum_ = nextTrack_ = -1;
             return;
         }
@@ -3747,6 +4269,15 @@ void PlayerWindow::startGaplessCoordinator(PcmS32Callback cbI32, int outSr, int 
             active_ = incoming;
             currentAlbum_ = nextAlbum_;
             currentTrack_ = nextTrack_;
+            // A seamless handoff never reaches onPlay(), so without this line
+            // an automatic advance leaves no record of WHERE it went — which
+            // is precisely what has to be checkable about it (it must stay
+            // inside the playing album's section; see nextAlbumInSection).
+            // Indices only: this runs on the gapless thread and reading
+            // albums_ for a title would need albumsMu_ for a log line.
+            printf("[%s][Gapless] advance -> album=%d track=%d\n",
+                   logTs(), currentAlbum_, currentTrack_);
+            fflush(stdout);
 
             if (seamless) {
                 // Do NOT flush: the ring still holds the *end* of the finished
@@ -3773,6 +4304,9 @@ void PlayerWindow::startGaplessCoordinator(PcmS32Callback cbI32, int outSr, int 
                        !stopGapless_.load()) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(5));
                 }
+                // Tell onPlay() this restart is the coordinator advancing, not
+                // a listener pressing play — the two look identical from there.
+                playFromGapless_.store(true);
                 host_->postAppEvent(AppEvent::RequestPlay);
                 break;
             }
@@ -3780,6 +4314,85 @@ void PlayerWindow::startGaplessCoordinator(PcmS32Callback cbI32, int outSr, int 
             prepareNextTrack();
         }
     });
+}
+
+// ── Listening stats ──────────────────────────────────────────────────────────
+// An event opens the moment a track reaches the transport and closes when it
+// leaves. Everything here counts from seekPosMs_, which onTimer() derives from
+// frames the DAC has actually rendered (writes minus what is still buffered) —
+// so this measures what was heard, never what was decoded.
+
+// Adds the step the play position just took, if it looks like playback rather
+// than a seek.
+//
+// Summing steps is the whole point. Reading the final position instead —
+// which is what this used to do — calls a skip to the last minute of a track
+// "a minute heard" when none of it sounded, and forgets a stretch replayed
+// after a rewind. A jump larger than a few timer ticks is a seek, not
+// listening, so it resets the baseline and contributes nothing; a backward
+// jump does the same.
+void PlayerWindow::accrueListenTime() {
+    if (statsPath_.empty()) return;
+    const int pos = seekPosMs_ > 0 ? seekPosMs_ : 0;
+    if (statsLastPosMs_ >= 0) {
+        const int step = pos - statsLastPosMs_;
+        // The seek timer runs at 250 ms (see startTimer in onPlay), so a
+        // healthy tick advances by roughly that. Anything past ~2 s in one
+        // tick is a discontinuity — a seek, or the app having been starved —
+        // not audio that reached the DAC.
+        if (step > 0 && step <= 2000) statsMsHeard_ += step;
+    }
+    statsLastPosMs_ = pos;
+}
+
+void PlayerWindow::beginTrackStats(const Track& t, StartCause cause) {
+    // The outgoing track is banked first, and as Replaced: whatever ended it,
+    // it was not the listener reaching for the next-track button.
+    flushTrackStats(EndCause::Replaced);
+    statsPath_       = t.filePath;
+    statsKey_        = t.trackKey;
+    statsDurationMs_ = t.durationMs;
+    statsMsHeard_    = 0;
+    statsLastPosMs_  = -1;
+    statsEventId_    = db_.beginPlayEvent(statsKey_, statsPath_, t.durationMs,
+                                          cause, (int64_t)time(nullptr));
+}
+
+void PlayerWindow::flushTrackStats(EndCause cause) {
+    if (statsPath_.empty()) return;
+    accrueListenTime();              // pick up the stretch since the last tick
+
+    // "Completed" = ran essentially to the end. The 90% threshold keeps a
+    // track that played to its last second — or whose tagged duration is a
+    // hair longer than the audio — out of the skip count. Untagged duration
+    // (0) can't be judged either way, so it is never called complete and
+    // never called a skip: EndCause is what the queries read for that, and a
+    // track nobody skipped away from carries a cause that says so.
+    const bool completed = statsDurationMs_ > 0 &&
+                           statsMsHeard_ >= (int64_t)(statsDurationMs_ * 0.9);
+
+    db_.endPlayEvent(statsEventId_, statsMsHeard_, completed, cause);
+
+    statsEventId_    = 0;
+    statsPath_.clear();
+    statsKey_.clear();
+    statsDurationMs_ = 0;
+    statsMsHeard_    = 0;
+    statsLastPosMs_  = -1;
+}
+
+// Snapshot for resume-on-launch. Volume is written as unity: this player has
+// no volume control (the DAC owns level), so the column is reserved rather
+// than guessed — see playback_state in db.cpp's SCHEMA.
+void PlayerWindow::savePlaybackStateNow() {
+    if (displayAlbum_ < 0 || displayAlbum_ >= (int)albums_.size()) return;
+    const auto& tracks = albums_[displayAlbum_].tracks;
+    if (displayTrack_ < 0 || displayTrack_ >= (int)tracks.size()) return;
+    PlaybackState st;
+    st.filePath   = tracks[displayTrack_].filePath;
+    st.positionMs = seekPosMs_ > 0 ? seekPosMs_ : 0;
+    st.volume     = 1.0f;
+    db_.savePlaybackState(st);
 }
 
 void PlayerWindow::onSeek(int posMs) {
@@ -3839,11 +4452,13 @@ void PlayerWindow::onTimer() {
     if (posMs < 0) posMs = 0;
     if (seekTotalMs_ > 0 && posMs > seekTotalMs_) posMs = seekTotalMs_;
     seekPosMs_ = (int)posMs;
+    accrueListenTime();
     invalidate();
 }
 
 void PlayerWindow::onArtClick() {
     if (displayAlbum_ < 0) return;
+    artWinShowsArtist_ = false;
     artWin_.show(albums_[displayAlbum_].artPath);
 }
 
@@ -3854,6 +4469,17 @@ void PlayerWindow::applyTrackMetadata(int album, int track) {
     if (album < 0 || album >= (int)albums_.size() ||
         track < 0 || track >= (int)albums_[album].tracks.size()) return;
     const auto& nt = albums_[album].tracks[track];
+    // Same ordering rule as onPlay(): bank the outgoing track while seekPosMs_
+    // still describes it. At an ordinary gapless boundary it will be at ~full
+    // duration, so it lands as a completed play rather than a skip.
+    //
+    // Natural, not Replaced: reaching here means the DAC crossed the boundary,
+    // which is a track ending on its own. When onNext() routed a listener's
+    // skip through this same path it already banked the outgoing track itself,
+    // so this flush finds nothing and the verdict it set stands.
+    flushTrackStats(EndCause::Natural);
+    beginTrackStats(nt, gaplessStartCause_);
+    gaplessStartCause_ = StartCause::Gapless;   // consumed; back to the default
     displayAlbum_   = album;
     displayTrack_   = track;
     currentTitle_  = nt.title;
@@ -3965,6 +4591,7 @@ void PlayerWindow::onScanDone() {
     // by bakeFallbackGlyphs above) are dead weight now — GPU + disk have it.
     msdfFont_.releaseAtlasPixels();
 
+    rebuildAlbumGroups();  // albums_ changed — regroup before the tile mapping
     rebuildGridIndices();  // albums_ changed — refresh the (possibly filtered) tile mapping
     recalcLayout();
     invalidate();
@@ -4061,6 +4688,15 @@ void PlayerWindow::onKeyDownPortable(int keyCode) {
 }
 
 void PlayerWindow::shutdown() {
+    // Banked before onStop() so the log says the app closed rather than that
+    // the listener pressed stop — closing mid-track is not a verdict on the
+    // music, and the queries treat the two differently. Doing it here rather
+    // than leaving the row open for Db::open()'s crash repair also keeps the
+    // real ms_heard, which that repair has no way to recover.
+    flushTrackStats(EndCause::AppExit);
+    // onStop() saves the resume point and would bank the stats itself (now a
+    // no-op) — it must run while albums_/seekPosMs_ are still valid, which is
+    // why it stays first.
     onStop();
     watcher_.unwatchAll();
     if (scanThread_.joinable()) scanThread_.join();

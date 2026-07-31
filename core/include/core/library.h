@@ -13,12 +13,26 @@ struct Track {
     std::string album;
     std::string filePath;
     int         trackNumber = 0;
+    // 0 = the file carried no DISCNUMBER (single-disc release, or untagged).
+    // Multi-disc albums number their tracks from 1 on EVERY disc, so this is
+    // the primary sort key — without it the discs interleave. See sortTracks().
+    int         discNumber  = 0;
     int         durationMs  = 0;
     int         sampleRate  = 0;
     int         channels    = 0;
     int         bitDepth    = 0;
     int64_t     fileSize    = 0;
     int64_t     fileMtime   = 0;
+
+    // Analytics inputs. Both come from Vorbis comments only — nothing reads
+    // ID3 yet, so MP3s carry neither (documented in TODO.md, not a blocker).
+    std::string genre;
+    int         year        = 0;   // 0 = untagged; parsed from DATE/YEAR
+
+    // Stable listening identity — see trackKey() in core/variants.h. Computed
+    // during the scan and stored in the tracks table; play_events is keyed on
+    // it rather than on filePath, which changes whenever a folder is renamed.
+    std::string trackKey;
 };
 
 struct Album {
@@ -46,12 +60,9 @@ struct Album {
     void sortTracks();
 };
 
-// Classifies a release from its track list, mirroring the sibling Android
-// player's AlbumDao.classifyRelease() exactly: track-count thresholds
-// (1=Single, 2-4=EP, >4=Album), overridden by remix detection (album name
-// or a strict majority of track titles matching remix patterns).
-Album::ReleaseType classifyReleaseType(const std::string& albumName,
-                                       const std::vector<Track>& tracks);
+// classifyReleaseType() (Album/EP/Single/Remix) is declared in
+// core/variants.h — it moved there with the rest of the pure name/release
+// logic so core/tests/variants_test.cc could link and test it.
 
 // Mean sample rate across tracks with sampleRate > 0 (0 if none), and
 // whether any track is DSD. hasDsd is always false today — this app has no

@@ -1,4 +1,5 @@
 #include "core/library.h"
+#include "core/variants.h"
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -11,59 +12,19 @@
 #include <future>
 #include <thread>
 #include <regex>
-#include "dr_flac.h"
+// Tag/stream-info reading uses libFLAC's metadata API — the same library that
+// decodes playback (audio_engine's backends/flac), so the scan and the decoder
+// can never disagree about a file. dr_wav stays for WAV, which libFLAC has no
+// opinion about.
+#include <FLAC/metadata.h>
 #include "dr_wav.h"
 
 namespace fs = std::filesystem;
 
-// ── Release-type classification (Album/EP/Single/Remix) ─────────────────────
-// Ported verbatim from the sibling Android player's AlbumDao.java
-// (isRemixTrack/isRemixAlbum/classifyRelease) — see the design spec at
-// docs/superpowers/specs/2026-07-27-release-type-and-quality-color-design.md.
-namespace {
-
-bool isRemixTrackTitle(const std::string& title) {
-    if (title.empty()) return false;
-    std::string lower = title;
-    std::transform(lower.begin(), lower.end(), lower.begin(),
-                    [](unsigned char c) { return std::tolower(c); });
-    size_t b = lower.find_first_not_of(" \t");
-    size_t e = lower.find_last_not_of(" \t");
-    std::string trimmed = (b == std::string::npos) ? "" : lower.substr(b, e - b + 1);
-    if (trimmed == "remix" || trimmed == "mix" ||
-        trimmed == "the remix" || trimmed == "the mix") return false;
-    if (lower.find("remix") != std::string::npos) return true;
-    if (lower.find("rmx") != std::string::npos) return true;
-    static const std::regex kWordMix(R"(\b\w+\s+mix\b)", std::regex::icase);
-    static const std::regex kParenMix(R"(\(.*mix.*\))", std::regex::icase);
-    static const std::regex kBracketMix(R"(\[.*mix.*\])", std::regex::icase);
-    if (std::regex_search(title, kWordMix))    return true;
-    if (std::regex_search(title, kParenMix))   return true;
-    if (std::regex_search(title, kBracketMix)) return true;
-    return false;
-}
-
-bool isRemixAlbum(const std::string& albumName, const std::vector<Track>& tracks) {
-    static const std::regex kRemixName(R"(\b(remix|remixes|remixed|rmx)\b)", std::regex::icase);
-    if (!albumName.empty() && std::regex_search(albumName, kRemixName)) return true;
-    int trackCount = (int)tracks.size();
-    if (trackCount == 0) return false;
-    int remixCount = 0;
-    for (auto& t : tracks)
-        if (isRemixTrackTitle(t.title)) remixCount++;
-    return remixCount == trackCount || (remixCount >= 2 && remixCount * 2 > trackCount);
-}
-
-} // namespace
-
-Album::ReleaseType classifyReleaseType(const std::string& albumName,
-                                       const std::vector<Track>& tracks) {
-    if (isRemixAlbum(albumName, tracks)) return Album::ReleaseType::Remix;
-    int trackCount = (int)tracks.size();
-    if (trackCount == 1) return Album::ReleaseType::Single;
-    if (trackCount <= 4) return Album::ReleaseType::Ep;
-    return Album::ReleaseType::Album;
-}
+// Release-type classification (Album/EP/Single/Remix) moved to
+// core/src/variants.cpp — it is pure string/Track logic, and living beside
+// the variant grouping that consumes it means core/tests/variants_test.cc
+// links it directly. Declared in core/variants.h.
 
 void computeAlbumQualityStats(const std::vector<Track>& tracks,
                               int& avgSampleRate, bool& hasDsd) {
@@ -125,6 +86,11 @@ static std::string deriveAlbumArtist(const std::vector<Track>& tracks) {
 
 void Album::sortTracks() {
     std::sort(tracks.begin(), tracks.end(), [](const Track& a, const Track& b) {
+        // Disc first: every disc of a multi-disc release restarts its track
+        // numbering at 1, so sorting by trackNumber alone interleaves them
+        // (two "1"s, two "2"s, ...). Untagged files (discNumber 0) sort ahead
+        // of disc 1, which for a single-disc album is every file — no change.
+        if (a.discNumber != b.discNumber)   return a.discNumber < b.discNumber;
         if (a.trackNumber != b.trackNumber) return a.trackNumber < b.trackNumber;
         return a.title < b.title;
     });
@@ -194,6 +160,23 @@ static std::vector<Album> buildAlbums(
         if (!metaAlbum.empty()) album.displayName = metaAlbum;
         album.releaseType = classifyReleaseType(album.displayName, album.tracks);
         computeAlbumQualityStats(album.tracks, album.avgSampleRate, album.hasDsd);
+
+        // The listening identity is computed HERE — the one place every scan
+        // flavour funnels through, and the first point at which a thinly
+        // tagged track can borrow the album's derived name and artist. Without
+        // that fallback a folder of untagged files would hand every track the
+        // same key and merge their histories into one.
+        //
+        // displayName, not name: the folder's "(24-96)" quality suffix has
+        // already been stripped out of it, so re-ripping an album at a higher
+        // rate does not mint a new identity for every track on it.
+        for (Track& t : album.tracks) {
+            Track keyed = t;
+            if (keyed.album.empty())       keyed.album       = album.displayName;
+            if (keyed.albumArtist.empty()) keyed.albumArtist = album.artist;
+            t.trackKey = trackKey(keyed);
+        }
+
         album.sortTracks();
         albums.push_back(std::move(album));
     }
@@ -205,37 +188,60 @@ static std::vector<Album> buildAlbums(
 // ── FLAC metadata parsing ────────────────────────────────────────────────────
 
 struct VorbisCtx {
-    std::string title, artist, albumArtist, album;
+    std::string title, artist, albumArtist, album, genre;
     int trackNumber = 0;
+    int discNumber  = 0;
+    int year        = 0;
 };
 
-static void onFlacMeta(void* userdata, drflac_metadata* meta) {
-    if (meta->type != DRFLAC_METADATA_BLOCK_TYPE_VORBIS_COMMENT) return;
-    auto* ctx = (VorbisCtx*)userdata;
-    drflac_vorbis_comment_iterator iter;
-    drflac_init_vorbis_comment_iterator(&iter,
-        meta->data.vorbis_comment.commentCount,
-        meta->data.vorbis_comment.pComments);
-    drflac_uint32 len;
-    const char* comment;
-    while ((comment = drflac_next_vorbis_comment(&iter, &len)) != nullptr) {
-        std::string s(comment, len);
-        auto eq = s.find('=');
-        if (eq == std::string::npos) continue;
-        std::string key = s.substr(0, eq);
-        std::string val = s.substr(eq + 1);
-        for (auto& c : key) c = (char)toupper((unsigned char)c);
-        if (key == "TITLE")        ctx->title       = val;
-        else if (key == "ARTIST")  ctx->artist      = val;
-        else if (key == "ALBUMARTIST" || key == "ALBUM ARTIST")
-                                   ctx->albumArtist = val;
-        else if (key == "ALBUM")   ctx->album       = val;
-        else if (key == "TRACKNUMBER") {
-            // Handle "3/12" format
-            auto slash = val.find('/');
-            ctx->trackNumber = atoi(slash != std::string::npos ? val.substr(0, slash).c_str() : val.c_str());
+// TRACKNUMBER/DISCNUMBER are both written either bare ("3") or as a
+// position/total pair ("3/12") — take the part before the slash.
+static int parsePositionTag(const std::string& val) {
+    auto slash = val.find('/');
+    return atoi(slash != std::string::npos ? val.substr(0, slash).c_str() : val.c_str());
+}
+
+// DATE is written as a bare year ("1991"), a full ISO date ("1991-03-25"), or
+// occasionally something looser. Take the first run of exactly four digits and
+// accept it only as a plausible release year — a malformed tag should leave
+// the field untagged (0) rather than poison a decade histogram.
+static int parseYearTag(const std::string& val) {
+    for (size_t i = 0; i + 4 <= val.size(); i++) {
+        if (!isdigit((unsigned char)val[i])) continue;
+        size_t run = 0;
+        while (i + run < val.size() && isdigit((unsigned char)val[i + run])) run++;
+        if (run == 4) {
+            int y = atoi(val.substr(i, 4).c_str());
+            if (y >= 1000 && y <= 2999) return y;
         }
+        i += run;   // -1 not needed: the loop's ++ lands past the digit run
     }
+    return 0;
+}
+
+// One VORBIS_COMMENT entry, "KEY=value" with the key case-insensitive.
+static void applyVorbisComment(VorbisCtx* ctx, const char* entry, unsigned length) {
+    std::string s(entry, length);
+    auto eq = s.find('=');
+    if (eq == std::string::npos) return;
+    std::string key = s.substr(0, eq);
+    std::string val = s.substr(eq + 1);
+    for (auto& c : key) c = (char)toupper((unsigned char)c);
+    if (key == "TITLE")        ctx->title       = val;
+    else if (key == "ARTIST")  ctx->artist      = val;
+    else if (key == "ALBUMARTIST" || key == "ALBUM ARTIST")
+                               ctx->albumArtist = val;
+    else if (key == "ALBUM")   ctx->album       = val;
+    else if (key == "TRACKNUMBER") ctx->trackNumber = parsePositionTag(val);
+    else if (key == "DISCNUMBER")  ctx->discNumber  = parsePositionTag(val);
+    else if (key == "GENRE")   ctx->genre = val;
+    // DATE is the standard field and ORIGINALDATE the reissue's original; YEAR
+    // is non-standard but common. Prefer ORIGINALDATE when both are present —
+    // "which year is this music from" is the question analytics asks, and on a
+    // remaster DATE answers with the year of the reissue instead.
+    else if (key == "ORIGINALDATE") ctx->year = parseYearTag(val);
+    else if ((key == "DATE" || key == "YEAR") && ctx->year == 0)
+                               ctx->year = parseYearTag(val);
 }
 
 // Windows keeps the exact FILETIME-tick value (100ns since 1601) it always
@@ -307,27 +313,50 @@ static Track quickParseFLAC(const std::string& path) {
     statSizeAndMtime(path, t.fileSize, t.fileMtime);
 
     VorbisCtx ctx;
-#ifdef _WIN32
-    int wl = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
-    std::wstring wpath(wl, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath.data(), wl);
-    if (!wpath.empty() && wpath.back() == L'\0') wpath.pop_back();
-    drflac* flac = drflac_open_file_with_metadata_w(wpath.c_str(), onFlacMeta, &ctx, nullptr);
-#else
-    drflac* flac = drflac_open_file_with_metadata(path.c_str(), onFlacMeta, &ctx, nullptr);
-#endif
-    if (flac) {
-        t.sampleRate = (int)flac->sampleRate;
-        t.channels   = (int)flac->channels;
-        t.bitDepth   = (int)flac->bitsPerSample;
-        if (flac->sampleRate > 0 && flac->totalPCMFrameCount > 0)
-            t.durationMs = (int)(flac->totalPCMFrameCount * 1000 / flac->sampleRate);
-        if (!ctx.title.empty())       t.title       = ctx.title;
-        if (!ctx.artist.empty())      t.artist      = ctx.artist;
-        if (!ctx.albumArtist.empty()) t.albumArtist = ctx.albumArtist;
-        if (!ctx.album.empty())       t.album       = ctx.album;
-        t.trackNumber = ctx.trackNumber;
-        drflac_close(flac);
+    // One pass over the metadata blocks for both STREAMINFO and the tags —
+    // the simple iterator opens the file once, where the two convenience
+    // calls (FLAC__metadata_get_streaminfo + _get_tags) would open it twice.
+    // That matters: this runs per file across the whole library.
+    //
+    // libFLAC takes the filename as UTF-8 on every platform (it converts to
+    // wide internally on Windows), so no wpath dance here.
+    FLAC__Metadata_SimpleIterator* it = FLAC__metadata_simple_iterator_new();
+    if (it) {
+        if (FLAC__metadata_simple_iterator_init(it, path.c_str(),
+                                                /*read_only=*/true,
+                                                /*preserve_file_stats=*/true)) {
+            do {
+                FLAC__MetadataType type = FLAC__metadata_simple_iterator_get_block_type(it);
+                if (type != FLAC__METADATA_TYPE_STREAMINFO &&
+                    type != FLAC__METADATA_TYPE_VORBIS_COMMENT) continue;
+                FLAC__StreamMetadata* block = FLAC__metadata_simple_iterator_get_block(it);
+                if (!block) continue;
+                if (block->type == FLAC__METADATA_TYPE_STREAMINFO) {
+                    const auto& si = block->data.stream_info;
+                    t.sampleRate = (int)si.sample_rate;
+                    t.channels   = (int)si.channels;
+                    t.bitDepth   = (int)si.bits_per_sample;
+                    if (si.sample_rate > 0 && si.total_samples > 0)
+                        t.durationMs = (int)(si.total_samples * 1000 / si.sample_rate);
+                } else {
+                    const auto& vc = block->data.vorbis_comment;
+                    for (unsigned i = 0; i < vc.num_comments; i++)
+                        applyVorbisComment(&ctx, (const char*)vc.comments[i].entry,
+                                           vc.comments[i].length);
+                }
+                FLAC__metadata_object_delete(block);
+            } while (FLAC__metadata_simple_iterator_next(it));
+
+            if (!ctx.title.empty())       t.title       = ctx.title;
+            if (!ctx.artist.empty())      t.artist      = ctx.artist;
+            if (!ctx.albumArtist.empty()) t.albumArtist = ctx.albumArtist;
+            if (!ctx.album.empty())       t.album       = ctx.album;
+            t.trackNumber = ctx.trackNumber;
+            t.discNumber  = ctx.discNumber;
+            t.genre       = ctx.genre;
+            t.year        = ctx.year;
+        }
+        FLAC__metadata_simple_iterator_delete(it);
     }
     return t;
 }

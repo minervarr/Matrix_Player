@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 #include "core/library.h"
+#include "core/variants.h"
 #include "core/decoder.h"
 #include "core/db.h"
 #include "core/streamer_db.h"
@@ -103,14 +104,30 @@ public:
     void onScanDone();
     void onArtDecoded();
     void startBackgroundScan();
-    void onPlay();
+    // `cause` is what gets recorded in the listening log — see StartCause in
+    // core/stats.h. Defaulted so the many ordinary call sites (a click on a
+    // track, the transport button) need say nothing; only the paths that are
+    // NOT the listener choosing pass something else.
+    void onPlay(StartCause cause = StartCause::Manual);
 
 private:
     // Actions
     void onAddFolder();
     void onManageFolders();
     void onAudioSettings();
+    // Decodes an artist photo at its on-screen size, mip-free — see the
+    // comment on the definition for why both halves matter.
+    TextureHandle loadArtistImageTexture(const std::string& path);
     void prepareNextTrack();
+    // The album that plays after / before `album`: the next one of the SAME
+    // release type, which is the next tile in the section on screen —
+    // rebuildGridIndices() filters albums_ by that same field in that same
+    // order. Anchoring on the PLAYING album's own type instead of on
+    // albumTypeFilter_ means browsing to another section mid-track cannot
+    // re-route the queue. Albums with no tracks are skipped. Returns -1 at the
+    // section's edge, where playback stops. **Caller must hold albumsMu_.**
+    int  nextAlbumInSection(int album) const;
+    int  prevAlbumInSection(int album) const;
     void startGaplessCoordinator(PcmS32Callback cbI32, int outSr, int dacCh);
     void onAlbumSelected(int idx);
     void onTrackSelected(int idx);
@@ -118,6 +135,50 @@ private:
     void onNext();
     void onPrev();
     void onSeek(int posMs);
+
+    // Listening stats follow the DISPLAY cursor, not the decode cursor: they
+    // describe what the DAC actually rendered. beginTrackStats() logs the play
+    // and starts counting; flushTrackStats() banks the listen time and decides
+    // whether it counted as a skip. statsPath_ empty = nothing being counted.
+    // Pointer image for a point, from the same rects the hover hit-tests use.
+    // Hand only where a click actually does something — a hand over inert
+    // chrome is a promise the UI doesn't keep.
+    CursorShape cursorForPoint(int x, int y) const;
+    void        applyCursorFor(int x, int y);
+    CursorShape lastCursor_ = CursorShape::Arrow;
+    bool        keepAwake_  = false;   // mirrors the art window, see run()
+
+    void beginTrackStats(const Track& t, StartCause cause);
+    void flushTrackStats(EndCause cause);
+    void accrueListenTime();
+    void savePlaybackStateNow();
+    std::string statsPath_;
+    std::string statsKey_;
+    int         statsDurationMs_ = 0;
+    // The open play_events row, 0 when nothing is being counted.
+    int64_t     statsEventId_ = 0;
+    // Honest listen time: onTimer() adds each plausible forward step of the
+    // play position and ignores anything that looks like a seek. Summing the
+    // steps rather than reading the final position is what makes a skip
+    // forward stop counting as time heard, and a rewind-and-replay count the
+    // replayed stretch twice. statsLastPosMs_ < 0 = no previous sample yet.
+    int64_t     statsMsHeard_   = 0;
+    int         statsLastPosMs_ = -1;
+    // Cause to stamp on the play the gapless coordinator is about to start.
+    // Gapless by default — the ordinary case is one track ending and the next
+    // following it — but onNext()'s seamless path routes the listener's own
+    // choice through the very same code, and that is a different fact about
+    // the music. Consumed and reset by applyTrackMetadata(). UI thread only.
+    StartCause  gaplessStartCause_ = StartCause::Gapless;
+    // Set by the gapless coordinator THREAD before it asks the UI thread to
+    // restart playback because the next track needs a different device format
+    // (see startGaplessCoordinator). That restart reaches onPlay() and would
+    // otherwise be indistinguishable from the listener pressing play.
+    std::atomic<bool> playFromGapless_{false};
+    // Position from the previous session, applied once by the first onPlay()
+    // that opens the very file it was saved for. 0 = nothing to resume.
+    int         pendingResumeMs_ = 0;
+    std::string pendingResumePath_;
     void onArtClick();
     void onEqSettings();
     void toggleBitperfectMode();
@@ -173,7 +234,9 @@ private:
     void invalidate();
 
     // Art cache (Vulkan texture path, via stb_image — used by drawFrame())
-    TextureHandle getGridArtTexture(int albumIdx);
+    // sizeClass picks which decode of the cover to hand back: ArtFull for a
+    // whole tile, ArtHalf for a mosaic quadrant. Both are cached separately.
+    TextureHandle getGridArtTexture(int albumIdx, int sizeClass = ArtFull);
     void          clearGridArtTexCache();
     void          loadTrackPanelArtTexture(int albumIdx);
     void          loadTransportArtTexture(const std::string& artPath);
@@ -212,6 +275,8 @@ private:
     bool bakeIconGlyphs();
     int  gridHitTest(int x, int y) const;
     int  trackPanelHitTest(int x, int y) const;
+    // Album index of the "OTHER VERSIONS" thumbnail under (x,y), or -1.
+    int  variantTileHitTest(int x, int y) const;
     int  sidebarHitTest(int x, int y) const;
     int  transportBtnHitTest(int x, int y) const;
     int  settingsHitTest(int x, int y) const;
@@ -264,7 +329,7 @@ private:
     LayoutRect rcNavEp_       = {};
     LayoutRect rcNavSingle_   = {};
     LayoutRect rcNavRemix_    = {};
-    LayoutRect rcNavGear_     = {};
+    LayoutRect rcNavSettings_ = {};
 
     // Settings page items
     LayoutRect rcSettingsAddFolder_    = {};
@@ -373,18 +438,40 @@ private:
     std::vector<int> gridIndices_;
     void rebuildGridIndices();
 
-    // Album view scroll + hit-test anchors. trackListTop_/Left_/Right_ are
-    // written by drawFrame() (the album page lays itself out while drawing,
-    // same pattern as rcDspBadge_) and read by trackPanelHitTest();
-    // trackListTop_ is the window-space Y row 0 would have at scroll 0.
-    // albumViewContentH_ bounds onMouseWheel()'s scroll. The view closes
-    // via Escape only — no on-screen close button.
+    // Album variants (see core/include/core/variants.h). The grid shows one
+    // tile per GROUP — its best member — instead of one per folder, so the
+    // same release held twice (Deluxe beside standard, 24/96 beside 16/44.1)
+    // stops appearing as near-duplicate tiles. Derived from albums_ by a pure
+    // function, never persisted: rebuildAlbumGroups() runs immediately before
+    // rebuildGridIndices() everywhere albums_ is reassigned.
+    std::vector<AlbumGroup> albumGroups_;
+    std::vector<int>        albumGroupOf_;   // albums_ index → albumGroups_ index
+    void rebuildAlbumGroups();
+    // The other members of an album's group, best first, EXCLUDING the album
+    // itself — what the album view lists below the artist bio. Empty when the
+    // album has no siblings.
+    std::vector<int> otherVariantsOf(int albumIdx) const;
+    // Draws a remix group's 2x2 cover mosaic in place of the single tile
+    // cover. False when this album is not a multi-member remix group's
+    // primary, meaning the caller should draw the ordinary cover.
+    bool drawVariantMosaic(Canvas& canvas, int albumIdx,
+                           float x, float y, float a);
+
+    // Album view scroll + hit-test anchors. trackListLeft_/Right_ and
+    // trackRowTop_ are written by drawFrame() (the album page lays itself out
+    // while drawing, same pattern as rcDspBadge_) and read by
+    // trackPanelHitTest(). albumViewContentH_ bounds onMouseWheel()'s scroll.
+    // The view closes via Escape only — no on-screen close button.
     int trackScrollY_   = 0;
     int trackRowHeight_  = 40;
-    int  trackListTop_   = 0;
     int  trackListLeft_  = 0;
     int  trackListRight_ = 0;
     int  albumViewContentH_ = 0;
+    // Scroll-0 window Y of each track row, one entry per album.tracks index,
+    // rewritten by the album view's draw block. Rows are no longer on a fixed
+    // i*trackRowHeight_ grid (a "DISC n" separator shifts everything below
+    // it), so trackPanelHitTest() reads this instead of dividing.
+    std::vector<int> trackRowTop_;
 
     // Album view sidecar content (loaded by loadAlbumViewContent()).
     // *Lines_ are the word-wrapped render caches, rebuilt by drawFrame()
@@ -395,10 +482,39 @@ private:
     std::vector<std::string> artistBioLines_;
     float                    albumTextWrapW_ = -1.0f;
     TextureHandle            artistImgTex_ = kInvalidTexture;
+    // Where the artist photo landed this frame, written by drawFrame() (same
+    // pattern as rcDspBadge_) and read by onLButtonDown to open the viewer.
+    // It is the CROPPED rect — clicking the sliver that is actually on screen
+    // is what a user can aim at. Empty when the photo is off-screen.
+    LayoutRect               rcArtistImg_ = {};
+    // The album view's prose column (description + bio), written by
+    // drawFrame() like rcArtistImg_. Not clickable and deliberately without a
+    // hover background — it exists so the cursor can say "text" there.
+    LayoutRect               rcAlbumText_ = {};
+    // The "OTHER VERSIONS" strip below the artist bio: where each variant
+    // thumbnail landed this frame and which album it stands for. Written by
+    // drawFrame() and read by onLButtonDown/cursorForPoint, the same
+    // draw-then-hit-test pattern as rcArtistImg_. Cleared on every album
+    // switch by loadAlbumViewContent().
+    std::vector<std::pair<LayoutRect, int>> rcVariantTiles_;
+    std::string              artistImgPath_;   // source file, for ArtWindow
+    // What the fullscreen ArtWindow is currently showing. It is one window
+    // serving two jobs — album art from the transport thumbnail, artist photo
+    // from the album view — and loadTransportArtTexture() has to know which,
+    // so a track change refreshes the right picture.
+    bool                     artWinShowsArtist_ = false;
+    // Artist photo path for an album, resolved the same two ways
+    // loadAlbumViewContent() resolves it (streamer db, then legacy sidecar).
+    // Empty when that album has none.
+    std::string artistImagePathFor(int albumIdx) const;
 
     // Hover state
     int hoverAlbumIdx_      = -1;
     int hoverTrackIdx_      = -1;
+    // Album index (not strip position) of the "OTHER VERSIONS" thumbnail
+    // under the pointer, or -1. Holding the album index means it survives the
+    // strip relaying out mid-hover.
+    int hoverVariantIdx_    = -1;
     int hoverSidebarItem_   = -1;
     int hoverTransportBtn_  = -1;
     int hoverSettingsItem_  = -1;
@@ -422,7 +538,7 @@ private:
     static_assert((int)AlbumTypeFilter::Remix  == (int)Album::ReleaseType::Remix,  "AlbumTypeFilter/Album::ReleaseType value mismatch");
     AlbumTypeFilter albumTypeFilter_ = AlbumTypeFilter::Album;
     bool            settingsOpen_    = false;
-    static constexpr int kSidebarGearHit = 4;  // sidebarHitTest() sentinel for the gear
+    static constexpr int kSidebarSettingsHit = 4;  // sidebarHitTest() sentinel for the Settings row
 
     // Last-played album (persisted via Db::saveSetting/loadSetting, matched
     // by name+artist rather than index since the list reorders across
@@ -439,6 +555,17 @@ private:
     int          seekTotalMs_ = 0;
 
     // Art caches (Vulkan textures, used by drawFrame())
+    //
+    // Keyed by artKey(albumIdx, sizeClass), not by album index alone: the
+    // mosaic tile a remix group draws (see §8.2) needs the SAME album's cover
+    // at half the tile's edge, and serving that from the full-size texture
+    // would minify 2:1 with no mip chain (mips are off on purpose — see
+    // onArtDecoded) and alias visibly. Two size classes exist: Full (the tile)
+    // and Half (a mosaic quadrant).
+    enum ArtSizeClass { ArtFull = 0, ArtHalf = 1, ArtSizeClassCount = 2 };
+    static constexpr int artKey(int albumIdx, int sizeClass) {
+        return albumIdx * ArtSizeClassCount + sizeClass;
+    }
     std::unordered_map<int, TextureHandle> gridArtTexCache_;
     TextureHandle trackPanelArtTex_      = kInvalidTexture;
     int           trackPanelArtTexAlbum_ = -1;
@@ -453,8 +580,10 @@ private:
     // must stay on the render thread). `gen` guards against stale results
     // landing after a rescan reshuffled album indices; artDecodePending_ is
     // main-thread-only.
-    struct ArtDecodeResult { int albumIdx; std::vector<uint8_t> rgba; int w = 0, h = 0; uint64_t gen = 0; };
-    struct ArtDecodeJob    { int albumIdx; std::string path; int targetSize; uint64_t gen; };
+    // `key` is artKey(albumIdx, sizeClass) — the worker never needs the album
+    // index itself, only the cache slot the result belongs in.
+    struct ArtDecodeResult { int key; std::vector<uint8_t> rgba; int w = 0, h = 0; uint64_t gen = 0; };
+    struct ArtDecodeJob    { int key; std::string path; int targetSize; uint64_t gen; };
     std::thread                 artDecodeThread_;
     std::mutex                  artDecodeMu_;
     std::condition_variable     artDecodeCv_;

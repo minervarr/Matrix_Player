@@ -61,6 +61,12 @@ ICONS = [
     ("next",     "Next",     2),
     ("settings", "Settings", 1),
     ("warning",  "Warning",  1),
+    # Drawn at the duration text's own size in the track list: caption =
+    # 18.29px at the 1080 reference (ui_min_text_size.gen.h), x4 on an 8K
+    # display -> 73px. A 1 em box (96px cell) would be 5.2x MINIFIED at 1080,
+    # the resolution it is seen at most; 0.5 em (48px cell) gives 2.6x there
+    # and 1.5x magnification at 8K -- both inside the 0.5x-3x band above.
+    ("quality",  "Quality",  0.5),
 ]
 CP_BASE = 0xE000
 
@@ -137,6 +143,31 @@ def draw(contours, pen):
             pen.closePath()
 
 
+def fnv1a(h, text):
+    for ch in text.encode():
+        h = ((h ^ ch) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
+def geom_digest(contours):
+    """Hash of the OUTLINE ITSELF, in font units.
+
+    The set fingerprint used to be built from each icon's ink BOUNDS, which
+    silently misses any edit that keeps the silhouette: hollowing a glyph,
+    moving an interior cut-out, reshaping a hole. Hollowing the quality star
+    did exactly that -- same bounds, same fingerprint, so the atlas cache
+    stayed warm and the app kept drawing the solid one. Bounds answer "how
+    big"; the cache needs "is this the same artwork".
+    """
+    h = 0xCBF29CE484222325
+    for segs in contours:
+        for seg in segs:
+            h = fnv1a(h, seg[0])
+            for p in seg[1:]:
+                h = fnv1a(h, f"{p[0]:.3f},{p[1]:.3f}")
+    return h
+
+
 def bounds_of(contours):
     xs, ys = [], []
     for segs in contours:
@@ -194,7 +225,8 @@ def main():
         cmap[cp] = gname
 
         l, b, r, t = bounds_of(contours)
-        report.append((name, enum, cp, box_em, (r - l) / UPEM, (t - b) / UPEM))
+        report.append((name, enum, cp, box_em, (r - l) / UPEM, (t - b) / UPEM,
+                       geom_digest(contours)))
         print(f"  {name:9} U+{cp:04X}  {len(contours)} contour(s)  box {box_em} em  "
               f"-> {box_em * 96}px cell   ink {(r-l)/UPEM:.2f} x {(t-b)/UPEM:.2f} em")
 
@@ -236,14 +268,14 @@ def main():
             "// See the ICONS table in build_icon_font.py.\n"
             "#pragma once\n\n"
         )
-        for name, enum, cp, box_em, iw, ih in report:
+        for name, enum, cp, box_em, iw, ih, _ in report:
             f.write(f"// {name}: {box_em} em box -> {box_em * 96}px cell, "
                     f"ink {iw:.3f} x {ih:.3f} em\n")
             f.write(f"static constexpr unsigned kIconCp{enum}  = 0x{cp:04X};\n")
             f.write(f"static constexpr float    kIconBox{enum} = {float(box_em):.1f}f;\n")
         f.write("\n// Every icon codepoint, for bake + tests.\n")
         f.write("static constexpr unsigned kIconCodepoints[] = {\n")
-        for _, enum, _, _, _, _ in report:
+        for _, enum, _, _, _, _, _ in report:
             f.write(f"    kIconCp{enum},\n")
         f.write("};\n\n")
         f.write("// Smallest box any icon uses. ui_icons_test asserts every box is at\n"
@@ -263,11 +295,16 @@ def main():
         # a 2 em box and settings/warning to 1 em, against a leftover 4 em
         # bake, rendered the gear and warning 3.3x oversize and spilling out of
         # their rectangles. "Remember to delete the cache" is not a fix.
+        #
+        # geom_digest() is in here because bounds are not enough: an edit that
+        # keeps the silhouette (hollowing a glyph, reshaping a hole) left the
+        # fingerprint untouched, so the stale bake survived -- the very failure
+        # this guard exists to prevent, just a subtler flavour of it.
         h = 0xCBF29CE484222325
-        for name, enum, cp, box_em, iw, ih in report:
-            for tok in (name, str(cp), f"{box_em:.3f}", f"{iw:.6f}", f"{ih:.6f}"):
-                for ch in tok.encode():
-                    h = ((h ^ ch) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+        for name, enum, cp, box_em, iw, ih, digest in report:
+            for tok in (name, str(cp), f"{box_em:.3f}", f"{iw:.6f}", f"{ih:.6f}",
+                        f"{digest:016x}"):
+                h = fnv1a(h, tok)
         fp = h & 0xFFFFFFFF
         f.write("\n// Fingerprint of the baked icon geometry — see build_icon_font.py.\n"
                 "// Part of the atlas cache filename (ui_fonts.hh), so changing any\n"

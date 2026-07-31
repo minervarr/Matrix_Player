@@ -26,7 +26,7 @@
 class Canvas;
 struct Color;
 
-enum class UiIcon { Play, Stop, Prev, Next, Settings, Warning };
+enum class UiIcon { Play, Stop, Prev, Next, Settings, Warning, Quality };
 
 // Private Use Area codepoint for `icon`; 0 if unmapped.
 unsigned uiIconCodepoint(UiIcon icon);

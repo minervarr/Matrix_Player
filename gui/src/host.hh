@@ -22,6 +22,12 @@ class PlayerWindow;
 // need it too.
 enum class UiMode { Essential, Complete };
 
+// Pointer images the UI distinguishes. Kept to what a hit-test can honestly
+// answer — "this is clickable", "you can type here" — and deliberately
+// separate from vk_canvas's own CursorShape so the portable seam doesn't
+// depend on the Wayland backend's header; linux_host.cc maps between them.
+enum class CursorShape { Arrow, Hand, Text };
+
 struct MonitorInfo {
     LayoutRect bounds;    // full monitor bounds, px
     LayoutRect workArea;  // bounds minus taskbar/panels (Windows only; equals bounds elsewhere)
@@ -99,6 +105,17 @@ public:
     virtual void snapToEdge(int hotkeyId) = 0;
 
     virtual void invalidate() = 0;  // schedule a repaint
+
+    // Pointer image over the main window. Called from hit-testing every time
+    // the hovered element changes; both backends collapse a repeat of the
+    // shape already showing, so callers need not track it themselves.
+    virtual void setCursor(CursorShape shape) = 0;
+
+    // Hold the display awake (fullscreen artwork). SetThreadExecutionState on
+    // Windows; a Wayland idle inhibitor on Linux, which needs the compositor
+    // to expose zwp_idle_inhibit_manager_v1 — a no-op where it doesn't, since
+    // nothing else can ask.
+    virtual void setKeepAwake(bool on) = 0;
 
     // Cross-thread wakeup: safe to call from any thread. Dispatches into the
     // matching owner->on*() method from the UI thread, inside pump().
