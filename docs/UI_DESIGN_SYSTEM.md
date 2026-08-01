@@ -576,6 +576,35 @@ UV sub-rect trick, for the same reason.
 A separate compact layout: centered large art + Bold title + three big centered
 Prev/Play-Stop/Next buttons (grey pill hover). No artist line, no seekbar.
 
+### 8.6b Playlists (`drawPlaylists`)
+Reached from its own sidebar row, in the UPPER group with the content filters —
+a playlist is a way of browsing music, not a setting. It borrows the settings
+overlay to draw in (`SettingsPanel::Playlists` + `panelFromSidebar_`), which is
+why the Settings row's own "active" test must exclude it, or two sidebar rows
+light up at once.
+
+**Two screens, one panel.** A chooser (three outlined rows, the §8.6 settings-row
+shape) then a list. `plKind_` holds which; Escape steps back one level before it
+closes, because a listener who opened a list meant to leave the list.
+
+**One row per track, and the ranking is spelled only where there is one.**
+`ordinal()` (`gui/src/ui_text.hh`) prefixes Heavy Rotation and Forgotten
+Favourites. **Never Heard gets no ordinal**: its query orders by artist ⨯ album ⨯
+disc ⨯ track — a browsing order — and "7th" would claim a standing that ordering
+does not confer. Row height is derived from the two type roles it stacks (title
+Bold over artist Italic), never from `kPanelRowH`, which is sized for the single
+line the settings panels draw. Plays and duration are Mono, right-inset past the
+scrollbar. The list carries the same capped reading measure as §8.4.
+
+**The lists are queries, not data.** Nothing is stored, so nothing can drift from
+the log; a range change re-runs the query. Only Heavy Rotation shows range tabs —
+it is the one query that takes a `StatsRange`, and offering the control where it
+does nothing would misdescribe the other two.
+
+**Empty states carry the reason.** Never Heard distinguishes an empty library
+from having heard everything: the first is a dead end, the second an achievement,
+and only the GUI can tell them apart.
+
 ### 8.6 Settings
 Full-page overlays. Shared `panels::drawHeader` (Bold title + Close) and
 `panels::drawButton` (filled: primary = solid accent + dark label; secondary =

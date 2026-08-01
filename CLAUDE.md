@@ -390,6 +390,28 @@ Two mechanisms in `db.cpp`, with a strict division of labour:
   writers. They are the only remaining copy of the pre-migration aggregates,
   and a migration nothing can be checked against is one nobody can trust.
 - `StartCause::Shuffle` has no producer yet — the app has no shuffle.
+  (`StartCause::Playlist` DOES have one now: the Playlists panel, see below.)
+
+## Playlists (`drawPlaylists` in `gui/src/player_view.cc`)
+
+The consumer of the generated-playlist queries. Three lists — Heavy Rotation,
+Forgotten Favourites, Never Heard — behind one sidebar row.
+
+Two things here are load-bearing:
+
+1. **`neverHeard()` takes `limit = 0` meaning UNLIMITED**, the opposite of every
+   other query in `Db`, where `limit <= 0` returns nothing. The call sites use
+   separate named constants precisely so a later edit cannot collapse the two
+   conventions into one shared variable.
+2. **Every manual track pick calls `clearQueue()` first.** Without it
+   `queueActive()` stays true after the first playlist play, and every later
+   manual choice is logged as `StartCause::Playlist` — which `IS_AFFINITY`
+   excludes, so the generated lists quietly stop learning from real choices.
+   Nothing crashes; only the history goes wrong.
+
+`TopEntry` carries no duration, so each row's key is resolved through
+`trackKeyIndex_` once per load under a single `albumsMu_` lock — never per row
+per frame, since that lock is shared with the gapless thread.
 
 ---
 

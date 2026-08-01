@@ -70,6 +70,15 @@ enum class RangePreset : int {
 // counted without recomputing the range.
 StatsRange rangeFor(RangePreset preset, int64_t nowUnixSec, int utcOffsetMin);
 
+// The `utcOffsetMin` rangeFor() wants, for the listener's clock at that
+// instant. Defined in db_stats.cpp (pure <ctime> arithmetic, no sqlite) and
+// already declared in the src-private db_schema.h, where beginPlayEvent needed
+// it first. Re-declared here — not moved — because a CALLER of rangeFor() has
+// no other way to obtain its second argument, and every one of them would
+// otherwise re-derive the same gmtime/mktime dance by hand and get DST wrong
+// in its own way.
+int localUtcOffsetMinutes(int64_t whenUnixSec);
+
 // ── Calendar arithmetic on a DayBucket ──────────────────────────────────────
 // Pure integer math (Howard Hinnant's civil algorithms), NOT localtime(): a
 // DayBucket's day is already expressed on the listener's clock, so handing it

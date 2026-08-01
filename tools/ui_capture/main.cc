@@ -146,6 +146,11 @@ const char* kStates[] = {
     "33-eq-settings",
     "34-eq-all-profiles",
     "35-folder-picker",
+    "36-playlists",
+    "37-playlists-heavy-rotation",
+    "38-playlists-forgotten-favourites",
+    "39-playlists-never-heard",
+    "3a-playlists-row-hover",
     "40-search",
 };
 

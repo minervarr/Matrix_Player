@@ -363,6 +363,7 @@ private:
     LayoutRect rcNavEp_       = {};
     LayoutRect rcNavSingle_   = {};
     LayoutRect rcNavRemix_    = {};
+    LayoutRect rcNavPlaylists_ = {};
     LayoutRect rcNavSettings_ = {};
 
     // Settings page items
@@ -625,9 +626,53 @@ private:
     // casts, so everything else starts above them — and onLButtonDown() must
     // test these BEFORE its `nav >= 0` branch, which would otherwise cast a
     // sentinel straight into an out-of-range AlbumTypeFilter.
-    static constexpr int kSidebarSettingsHit = 4;  // the Settings row
-    static constexpr int kSidebarHpMoreHit   = 5;  // the headphone block's "Search more…"
+    static constexpr int kSidebarSettingsHit  = 4;  // the Settings row
+    static constexpr int kSidebarHpMoreHit    = 5;  // the headphone block's "Search more…"
+    static constexpr int kSidebarPlaylistsHit = 6;  // the Playlists row
     static constexpr int kSidebarHpRowBase   = 100;  // + row index within hpRows_
+
+    // ── Playlists ───────────────────────────────────────────────────────────
+    // Three generated lists, each of which IS its query (core/db.h) — nothing
+    // is stored, so nothing can drift from the listening log. plKind_ is the
+    // second level of state INSIDE SettingsPanel::Playlists: None draws the
+    // chooser, anything else draws that list. Deliberately not three more
+    // SettingsPanel values — the chooser/detail pair is this panel's own
+    // business, exactly as activePanel_ == None vs a panel is one level up.
+    enum class PlaylistKind { None, HeavyRotation, ForgottenFavourites, NeverHeard };
+    PlaylistKind plKind_ = PlaylistKind::None;
+    // Loaded once per kind-chosen / range-changed, never per frame: the query
+    // is the playlist, and re-running it while scrolling would let the list
+    // shift under the cursor.
+    std::vector<TopEntry> plEntries_;
+    // Parallel to plEntries_. TopEntry carries no duration, so each row's key
+    // is resolved through trackKeyIndex_ ONCE per load, under a single
+    // albumsMu_ lock. -1 where the key no longer resolves to anything on disk.
+    std::vector<int>      plDurationMs_;
+    // Only heavyRotation() takes a range; the other two queries have no such
+    // parameter, so they show no tabs.
+    RangePreset plRangePreset_ = RangePreset::Last30Days;
+    // Row height, derived from the two text roles a row actually stacks
+    // (title + artist) rather than borrowed from kPanelRowH, which is sized
+    // for the ONE line the settings panels draw. Written by drawPlaylists(),
+    // read by the wheel clamp and the scrollbar so all three agree.
+    int  plRowH_      = 0;
+    int  plScrollY_   = 0;
+    int  plHoverRow_  = -1;
+    bool plHoverClose_ = false;
+    int  plHoverChooserRow_ = -1;
+    int  plHoverRangeTab_   = -1;
+    LayoutRect plListArea_ = {}, plCloseRc_ = {};
+    LayoutRect plChooserRc_[3] = {};
+    LayoutRect plRangeTabRc_[5] = {};
+    std::vector<widgets::ListRow> plListRows_;  // cached during draw, read by hit-test
+
+    static const char* playlistTitle(PlaylistKind k);
+    void onPlaylists();                       // sidebar row -> chooser
+    void loadPlaylist(PlaylistKind kind);     // runs the query + resolves durations
+    void drawPlaylists(Canvas& canvas, const LayoutRect& area);
+    void onPlaylistsClick(int x, int y);
+    bool onPlaylistsMouseMove(int x, int y);  // true when a hover state changed
+    void playPlaylistFrom(int row);
 
     // Last-played album (persisted via Db::saveSetting/loadSetting, matched
     // by name+artist rather than index since the list reorders across

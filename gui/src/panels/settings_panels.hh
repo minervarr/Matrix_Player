@@ -15,7 +15,15 @@ enum class FontStyle : unsigned char;
 // full-page-view pattern (like the album view) rather than a modal popup —
 // Wayland has no child/owned-window primitive matching Win32's modal dialogs.
 
-enum class SettingsPanel { None, ManageFolders, AudioSettings, EqSettings, FolderPicker };
+// Playlists is the odd one out and deliberately so: it is not a settings page
+// at all, it is a music-browsing destination reached from its own sidebar row.
+// It lives in this enum because the four input dispatchers (onPanelClick /
+// onPanelMouseMove / onPanelWheel / onPanelKeyDown) already redirect here
+// BEFORE any grid/album-view guard runs, so borrowing the overlay costs one
+// `case` in each instead of a fifth top-level view state threaded through
+// every one of those guards. The headphone quick-switcher borrows it the same
+// way (see panelFromSidebar_).
+enum class SettingsPanel { None, ManageFolders, AudioSettings, EqSettings, FolderPicker, Playlists };
 
 // The scrollable/selectable text row list these panels used to draw with a
 // local panels::drawRowList (+ rowRect/hitTestRows) now comes from the

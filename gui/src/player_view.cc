@@ -1,4 +1,5 @@
 #include "player_view.hh"
+#include "ui_text.hh"
 #include "log_util.h"
 #include "ui_fonts.hh"
 #include "ui_icons.hh"
@@ -915,6 +916,10 @@ void PlayerWindow::drawFrame() {
             { "Singles", rcNavSingle_, AlbumTypeFilter::Single },
             { "Remixes", rcNavRemix_,  AlbumTypeFilter::Remix  },
         };
+        // Playlists borrows the settings overlay to draw in, so "settingsOpen_"
+        // is true while it is up — the filter rows must not read that as "a
+        // filter is showing", nor Settings as "Settings is showing".
+        const bool playlistsOpen = (activePanel_ == SettingsPanel::Playlists);
         for (auto& item : items) {
             bool active = (!settingsOpen_ && albumTypeFilter_ == item.filter);
             bool hovered = (hoverSidebarItem_ == (int)item.filter && !active);
@@ -936,6 +941,30 @@ void PlayerWindow::drawFrame() {
                        metrics_.text.body, toColor(active ? CLR_ACCENT : CLR_TEXT_SECONDARY));
         }
 
+        // Playlists — the fifth content row, still above the hairline. Three
+        // generated lists live behind it (see drawPlaylists); it is one row
+        // rather than three because two of the three say nothing on a fresh
+        // install, and a page absorbs that where dead sidebar rows would not.
+        {
+            bool active  = playlistsOpen;
+            bool hovered = (hoverSidebarItem_ == kSidebarPlaylistsHit && !active);
+            Rect r = toRect(rcNavPlaylists_);
+            const float pillX = r.x + metrics_.space(4.0f);
+            const float pillW = r.w - metrics_.space(8.0f);
+            if (active) {
+                canvas.rect(pillX, r.y, pillW, r.h,
+                            toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
+                canvas.rect(pillX, r.y, metrics_.stroke(3.0f), r.h,
+                            toColor(CLR_ACCENT), UI_CORNER_RADIUS);
+            } else if (hovered) {
+                canvas.rect(pillX, r.y, pillW, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+            }
+            canvas.text("Playlists", r.x + metrics_.space(20.0f),
+                        r.y + r.h * 0.5f - metrics_.text.body * 0.5f,
+                        metrics_.text.body,
+                        toColor(active ? CLR_ACCENT : CLR_TEXT_SECONDARY));
+        }
+
         // Settings — spatially separated below a hairline, never mixed into
         // the content-type list above (the user's explicit ask: a music
         // player should read as albums-and-music first, configuration
@@ -947,11 +976,15 @@ void PlayerWindow::drawFrame() {
         canvas.rect((float)rcNavSettings_.left, rcNavSettings_.top - metrics_.space(7.0f),
                     sb.w, metrics_.stroke(1.0f), toColor(CLR_SEPARATOR));
         {
-            bool hovered = (hoverSidebarItem_ == kSidebarSettingsHit && !settingsOpen_);
+            // Active only for the REAL settings destinations, never while
+            // Playlists is borrowing the same overlay — otherwise two sidebar
+            // rows would read as selected at once.
+            const bool settingsActive = settingsOpen_ && !playlistsOpen;
+            bool hovered = (hoverSidebarItem_ == kSidebarSettingsHit && !settingsActive);
             Rect r = toRect(rcNavSettings_);
             const float settPillX = r.x + metrics_.space(4.0f);
             const float settPillW = r.w - metrics_.space(8.0f);
-            if (settingsOpen_) {
+            if (settingsActive) {
                 canvas.rect(settPillX, r.y, settPillW, r.h,
                             toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
                 canvas.rect(settPillX, r.y, metrics_.stroke(3.0f), r.h,
@@ -964,7 +997,7 @@ void PlayerWindow::drawFrame() {
             canvas.text("Settings", r.x + metrics_.space(20.0f),
                         r.y + r.h * 0.5f - metrics_.text.body * 0.5f,
                         metrics_.text.body,
-                        toColor(settingsOpen_ ? CLR_ACCENT : CLR_TEXT_SECONDARY));
+                        toColor(settingsActive ? CLR_ACCENT : CLR_TEXT_SECONDARY));
         }
 
         // (The now-playing mini card that used to fill the space below the
@@ -1947,9 +1980,12 @@ void PlayerWindow::recalcLayout() {
     rcNavEp_     = { 0, (int)(navTop + navRowH),     sidebarW, (int)(navTop + navRowH * 2) };
     rcNavSingle_ = { 0, (int)(navTop + navRowH * 2), sidebarW, (int)(navTop + navRowH * 3) };
     rcNavRemix_  = { 0, (int)(navTop + navRowH * 3), sidebarW, (int)(navTop + navRowH * 4) };
+    // Playlists sits ABOVE the hairline, with the content filters: it is a way
+    // of browsing music, not a setting. Settings therefore moves down a slot.
+    rcNavPlaylists_ = { 0, (int)(navTop + navRowH * 4), sidebarW, (int)(navTop + navRowH * 5) };
     const float settOffset = metrics_.space(13.0711f);
-    rcNavSettings_ = { 0, (int)(navTop + navRowH * 4 + settOffset),
-                          sidebarW, (int)(navTop + navRowH * 5 + settOffset) };
+    rcNavSettings_ = { 0, (int)(navTop + navRowH * 5 + settOffset),
+                          sidebarW, (int)(navTop + navRowH * 6 + settOffset) };
 
     // Transport sub-regions — proportional to the (scaled) bar height.
     int tTop = rcTransport_.top;
@@ -2567,6 +2603,7 @@ int PlayerWindow::sidebarHitTest(int x, int y) const {
     if (ptInRect(rcNavEp_, x, y))     return (int)AlbumTypeFilter::Ep;
     if (ptInRect(rcNavSingle_, x, y)) return (int)AlbumTypeFilter::Single;
     if (ptInRect(rcNavRemix_, x, y))  return (int)AlbumTypeFilter::Remix;
+    if (ptInRect(rcNavPlaylists_, x, y)) return kSidebarPlaylistsHit;
     if (ptInRect(rcNavSettings_, x, y)) return kSidebarSettingsHit;
     // Headphone block. hpRows_/hpMoreRc_ are empty in bitperfect mode (and
     // whenever the block didn't fit), so this costs nothing when hidden.
@@ -2680,6 +2717,9 @@ CursorShape PlayerWindow::cursorForPoint(int x, int y) const {
     if (hoverVariantIdx_    >= 0) return CursorShape::Hand;
     if (hoverAlbumIdx_      >= 0) return CursorShape::Hand;
     if (hoverSettingsItem_  >= 0) return CursorShape::Hand;
+    if (activePanel_ == SettingsPanel::Playlists &&
+        (plHoverRow_ >= 0 || plHoverChooserRow_ >= 0 || plHoverRangeTab_ >= 0 || plHoverClose_))
+        return CursorShape::Hand;
 
     // Artwork opens the fullscreen view; the artist photo does too.
     if (transportArtTex_ != kInvalidTexture && ptInRect(rcTransportArt_, x, y))
@@ -2814,6 +2854,8 @@ void PlayerWindow::onLButtonDown(int x, int y) {
             // album, that is where Escape should return them.
             settingsOpen_     = true;
             panelFromSidebar_ = true;
+        } else if (nav == kSidebarPlaylistsHit) {
+            onPlaylists();
         } else if (nav == kSidebarSettingsHit) {
             if (!settingsOpen_) { settingsOpen_ = true; invalidate(); }
         } else if (nav >= 0 &&
@@ -2840,6 +2882,14 @@ void PlayerWindow::onLButtonDown(int x, int y) {
                    ? (int)albums_[selectedAlbumIdx_].tracks.size() : -1);
         fflush(stdout);
         if (track >= 0) {
+            // Leaving a playlist: picking a track by hand is exactly what
+            // clearQueue()'s contract means by "only from click handlers".
+            // Without this, queueActive() stays true for the rest of the
+            // session and every later manual pick is logged as
+            // StartCause::Playlist — which IS_AFFINITY excludes, so the
+            // generated lists would slowly stop learning from real choices.
+            // Nothing crashes and nothing looks wrong; only the history does.
+            clearQueue();
             currentAlbum_ = selectedAlbumIdx_;
             currentTrack_ = track;
             onPlay();
@@ -2883,6 +2933,14 @@ void PlayerWindow::onLButtonDblClk(int x, int y) {
     if (!settingsOpen_ && !trackPanelOpen_ && ptInRect(rcGrid_, x, y)) {
         int idx = gridHitTest(x, y);
         if (idx >= 0) {
+            // Leaving a playlist: picking a track by hand is exactly what
+            // clearQueue()'s contract means by "only from click handlers".
+            // Without this, queueActive() stays true for the rest of the
+            // session and every later manual pick is logged as
+            // StartCause::Playlist — which IS_AFFINITY excludes, so the
+            // generated lists would slowly stop learning from real choices.
+            // Nothing crashes and nothing looks wrong; only the history does.
+            clearQueue();
             openAlbumView(idx);
             currentAlbum_ = idx;
             currentTrack_ = 0;
@@ -2895,6 +2953,14 @@ void PlayerWindow::onLButtonDblClk(int x, int y) {
     if (trackPanelOpen_ && ptInRect(rcTrackPanel_, x, y)) {
         int track = trackPanelHitTest(x, y);
         if (track >= 0) {
+            // Leaving a playlist: picking a track by hand is exactly what
+            // clearQueue()'s contract means by "only from click handlers".
+            // Without this, queueActive() stays true for the rest of the
+            // session and every later manual pick is logged as
+            // StartCause::Playlist — which IS_AFFINITY excludes, so the
+            // generated lists would slowly stop learning from real choices.
+            // Nothing crashes and nothing looks wrong; only the history does.
+            clearQueue();
             currentAlbum_ = selectedAlbumIdx_;
             currentTrack_ = track;
             onPlay();
@@ -3118,6 +3184,10 @@ void PlayerWindow::drawActivePanel(Canvas& canvas, const LayoutRect& area) {
         drawFolderPicker(canvas, area);
         closeRc = &fpCloseRc_; hoverClose = fpHoverClose_;
         break;
+    case SettingsPanel::Playlists:
+        drawPlaylists(canvas, area);
+        closeRc = &plCloseRc_; hoverClose = plHoverClose_;
+        break;
     case SettingsPanel::None:
         break;
     }
@@ -3175,6 +3245,9 @@ void PlayerWindow::onPanelMouseMove(int x, int y) {
         if (row != fpHoverRow_) { fpHoverRow_ = row; changed = true; }
         break;
     }
+    case SettingsPanel::Playlists:
+        changed = onPlaylistsMouseMove(x, y);
+        break;
     case SettingsPanel::None:
         break;
     }
@@ -3318,6 +3391,9 @@ void PlayerWindow::onPanelClick(int x, int y) {
         invalidate();
         return;
     }
+    case SettingsPanel::Playlists:
+        onPlaylistsClick(x, y);
+        return;
     case SettingsPanel::None:
         break;
     }
@@ -3344,6 +3420,15 @@ void PlayerWindow::onPanelWheel(int x, int y, int delta) {
         int listH = fpListArea_.bottom - fpListArea_.top;
         int contentH = rowCount * kPanelRowH;
         fpScrollY_ = std::clamp(fpScrollY_ - delta, 0, std::max(0, contentH - listH));
+        invalidate();
+        return;
+    }
+    case SettingsPanel::Playlists: {
+        // The chooser never scrolls — only a loaded list does.
+        if (plKind_ == PlaylistKind::None) return;
+        int listH = plListArea_.bottom - plListArea_.top;
+        int contentH = (int)plEntries_.size() * plRowH_;
+        plScrollY_ = std::clamp(plScrollY_ - delta, 0, std::max(0, contentH - listH));
         invalidate();
         return;
     }
@@ -3890,6 +3975,395 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
         panels::drawButton(canvas, eqBtnAssign_, "Assign to Device", eqHoverAssign_, metrics_.text.body, true);
         panels::drawButton(canvas, eqBtnClear_, "Clear", eqHoverClear_, metrics_.text.body);
     }
+}
+
+// ── Playlists panel ─────────────────────────────────────────────────────────
+//
+// Three generated lists, each of which IS its query (see core/include/core/db.h):
+// nothing is stored, so nothing can drift from the listening log. The panel has
+// two screens — a chooser and a list — held in plKind_ rather than in two more
+// SettingsPanel values, because chooser-vs-list is this panel's own business.
+
+namespace {
+// Heavy Rotation and Forgotten Favourites are rankings and take a cap. Never
+// Heard does NOT use this: its limit argument means the opposite thing (see
+// loadPlaylist).
+constexpr int kPlaylistLimit = 100;
+// A play count that reads as a pattern rather than an accident. One play cannot
+// be "forgotten" — there is nothing yet to forget; two is a false start or a
+// double-tap; three is the first count at which "you used to come back to this"
+// is a claim worth making.
+constexpr int kForgottenMinPlays = 3;
+// Deliberately INSIDE the 90-day "recent taste" window (RangePreset::Last90Days),
+// so a record drops out of "recent" only after it has already been offered back.
+constexpr int64_t kForgottenStaleSec = 60 * 86400;
+
+struct RangeTab { RangePreset preset; const char* label; };
+constexpr RangeTab kRangeTabs[5] = {
+    { RangePreset::Last7Days,  "7 Days"    },
+    { RangePreset::Last30Days, "30 Days"   },
+    { RangePreset::Last90Days, "90 Days"   },
+    { RangePreset::ThisYear,   "This Year" },
+    { RangePreset::AllTime,    "All Time"  },
+};
+} // namespace
+
+const char* PlayerWindow::playlistTitle(PlaylistKind k) {
+    switch (k) {
+    case PlaylistKind::HeavyRotation:       return "Heavy Rotation";
+    case PlaylistKind::ForgottenFavourites: return "Forgotten Favourites";
+    case PlaylistKind::NeverHeard:          return "Never Heard";
+    case PlaylistKind::None:                break;
+    }
+    return "Playlists";
+}
+
+void PlayerWindow::onPlaylists() {
+    activePanel_      = SettingsPanel::Playlists;
+    plKind_           = PlaylistKind::None;
+    plEntries_.clear();
+    plDurationMs_.clear();
+    plListRows_.clear();
+    plScrollY_        = 0;
+    plHoverRow_       = -1;
+    plHoverChooserRow_ = -1;
+    plHoverRangeTab_  = -1;
+    // Borrow the settings overlay to draw in — the panel only draws under
+    // settingsOpen_ — but remember it was NOT reached by walking into
+    // Settings, so closeActivePanel() hands the view back instead of stranding
+    // the listener there. Same trick as the sidebar's headphone switcher.
+    settingsOpen_     = true;
+    panelFromSidebar_ = true;
+    invalidate();
+}
+
+void PlayerWindow::loadPlaylist(PlaylistKind kind) {
+    plKind_ = kind;
+    plEntries_.clear();
+    plDurationMs_.clear();
+    plListRows_.clear();
+    plScrollY_  = 0;
+    plHoverRow_ = -1;
+    if (kind == PlaylistKind::None) { invalidate(); return; }
+
+    const int64_t now = (int64_t)time(nullptr);
+
+    switch (kind) {
+    case PlaylistKind::HeavyRotation: {
+        // rangeFor() reads no clock of its own — that is what makes it
+        // testable — so the caller supplies both "now" and the offset.
+        StatsRange range = rangeFor(plRangePreset_, now, localUtcOffsetMinutes(now));
+        plEntries_ = db_.heavyRotation(range, kPlaylistLimit);
+        break;
+    }
+    case PlaylistKind::ForgottenFavourites:
+        plEntries_ = db_.forgottenFavourites(kPlaylistLimit, kForgottenMinPlays,
+                                             now - kForgottenStaleSec);
+        break;
+    case PlaylistKind::NeverHeard:
+        // 0 means NO LIMIT here, the opposite of every other query in Db (see
+        // db_stats.cpp's neverHeard: capping it would quietly decide how much
+        // of your own library you are allowed to meet). Written as a literal,
+        // never as a shared variable with the two above, so a future edit
+        // cannot collapse the two conventions into one.
+        plEntries_ = db_.neverHeard(0);
+        break;
+    case PlaylistKind::None:
+        break;
+    }
+
+    // TopEntry carries no duration, so resolve each key through the library —
+    // ONCE, here, under a SINGLE albumsMu_ lock. Doing it per row per frame
+    // would take the lock during every scroll frame, and albumsMu_ is the same
+    // non-reentrant lock the gapless thread and onPlay() contend for.
+    plDurationMs_.assign(plEntries_.size(), -1);
+    {
+        std::lock_guard<std::mutex> lk(albumsMu_);
+        for (size_t i = 0; i < plEntries_.size(); i++) {
+            auto it = trackKeyIndex_.find(plEntries_[i].key);
+            if (it == trackKeyIndex_.end()) continue;   // no copy on disk any more
+            int ai = it->second.first, ti = it->second.second;
+            if (ai < 0 || ai >= (int)albums_.size()) continue;
+            if (ti < 0 || ti >= (int)albums_[ai].tracks.size()) continue;
+            plDurationMs_[i] = albums_[ai].tracks[ti].durationMs;
+        }
+    }
+    invalidate();
+}
+
+void PlayerWindow::playPlaylistFrom(int row) {
+    if (row < 0 || row >= (int)plEntries_.size()) return;
+    std::vector<std::string> keys;
+    keys.reserve(plEntries_.size());
+    for (auto& e : plEntries_) keys.push_back(e.key);
+    // startQueue() resolves every key and drops what the library lost, so the
+    // clicked index is re-anchored by key inside it. It sets the position but
+    // does not start playback — the same "set, then onPlay()" idiom the album
+    // view and grid already use.
+    if (startQueue(keys, row)) onPlay();
+}
+
+void PlayerWindow::drawPlaylists(Canvas& canvas, const LayoutRect& area) {
+    LayoutRect content = panels::drawHeader(canvas, area, playlistTitle(plKind_),
+                                            metrics_.scale, metrics_.text.header, plCloseRc_);
+    Rect c = toRect(content);
+    float pad = metrics_.space(SP_LG);
+    float y = c.y + pad;
+
+    // ── Chooser ─────────────────────────────────────────────────────────────
+    if (plKind_ == PlaylistKind::None) {
+        static const char* kSub[3] = {
+            "What you have chosen and finished, most often.",
+            "Loved once, untouched for a while.",
+            "Everything in your library you have never played.",
+        };
+        float rowH   = metrics_.space(84.0f);
+        float rowStep = rowH + metrics_.space(22.0f);
+        float rowW   = std::min(c.w - pad * 2.0f, metrics_.space(718.0f));
+        for (int i = 0; i < 3; i++) {
+            float ry = y + i * rowStep;
+            plChooserRc_[i] = { (int)(c.x + pad), (int)ry,
+                                (int)(c.x + pad + rowW), (int)(ry + rowH) };
+            Rect r = toRect(plChooserRc_[i]);
+            if (plHoverChooserRow_ == i)
+                canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+            canvas.rect(r.x, r.y, r.w, metrics_.stroke(1.0f), toColor(CLR_SEPARATOR));
+            canvas.rect(r.x, r.y + r.h - metrics_.stroke(1.0f), r.w,
+                        metrics_.stroke(1.0f), toColor(CLR_SEPARATOR));
+            canvas.rect(r.x, r.y, metrics_.stroke(1.0f), r.h, toColor(CLR_SEPARATOR));
+            canvas.rect(r.x + r.w - metrics_.stroke(1.0f), r.y, metrics_.stroke(1.0f),
+                        r.h, toColor(CLR_SEPARATOR));
+            const char* label = playlistTitle((PlaylistKind)(i + 1));
+            canvas.textStyled(label, r.x + metrics_.space(26.0f),
+                              r.y + r.h * 0.32f - metrics_.text.body * 0.5f,
+                              metrics_.text.body, toColor(CLR_TEXT_PRIMARY), FontStyle::Bold);
+            canvas.textStyled(kSub[i], r.x + metrics_.space(26.0f),
+                              r.y + r.h * 0.68f - metrics_.text.secondary * 0.5f,
+                              metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        }
+        return;
+    }
+
+    // ── A list ──────────────────────────────────────────────────────────────
+    // Range tabs, and ONLY for Heavy Rotation: it is the one query that takes a
+    // StatsRange. Offering the control where it does nothing would be a lie
+    // about what the other two lists are.
+    if (plKind_ == PlaylistKind::HeavyRotation) {
+        float tabH = metrics_.space(52.0f);
+        float tabW = metrics_.space(150.0f);
+        float gap  = metrics_.space(SP_SM);
+        for (int i = 0; i < 5; i++) {
+            float tx = c.x + pad + i * (tabW + gap);
+            plRangeTabRc_[i] = { (int)tx, (int)y, (int)(tx + tabW), (int)(y + tabH) };
+            Rect r = toRect(plRangeTabRc_[i]);
+            bool active = (plRangePreset_ == kRangeTabs[i].preset);
+            // Accent = state, hover = neutral (UI_DESIGN_SYSTEM.md §1.4).
+            if (active)
+                canvas.rect(r.x, r.y, r.w, r.h,
+                            toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
+            else if (plHoverRangeTab_ == i)
+                canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+            if (active)
+                canvas.rect(r.x, r.y + r.h - metrics_.stroke(2.0f), r.w,
+                            metrics_.stroke(2.0f), toColor(CLR_ACCENT));
+            float tw = canvas.textWidthStyled(kRangeTabs[i].label, metrics_.text.body, FontStyle::Roman);
+            canvas.textStyled(kRangeTabs[i].label, r.x + std::max(0.0f, (r.w - tw) * 0.5f),
+                              r.y + r.h * 0.5f - metrics_.text.body * 0.5f,
+                              metrics_.text.body,
+                              toColor(active ? CLR_ACCENT : CLR_TEXT_SECONDARY), FontStyle::Roman);
+        }
+        y += tabH + metrics_.space(SP_MD);
+    } else {
+        for (auto& rc : plRangeTabRc_) rc = {};
+    }
+
+    // A row stacks a title over an artist, so its height comes from those two
+    // roles plus breathing room — not from kPanelRowH, which is sized for the
+    // single line the settings panels draw and would let each row's artist
+    // collide with the next row's title.
+    plRowH_ = (int)(metrics_.text.body * 1.3f + metrics_.text.secondary * 1.35f
+                    + metrics_.space(20.0f));
+
+    float btnH = metrics_.space(58.0f);
+    // Capped reading measure, the same rule (and the same number) as the album
+    // view's track list: unbounded, a wide window puts a title a full screen
+    // away from its own duration and the eye has to cross to pair them. The cap
+    // scales with the type, so it holds a constant measure rather than a
+    // constant pixel width.
+    const int plListW = std::min(content.right - content.left,
+                                 (int)metrics_.space(820.0f));
+    plListArea_ = { content.left, (int)y, content.left + plListW,
+                    (int)(content.bottom - (btnH + pad)) };
+
+    if (plEntries_.empty()) {
+        plListRows_.clear();
+        const char* msg = "";
+        switch (plKind_) {
+        case PlaylistKind::HeavyRotation:
+            msg = "Nothing in heavy rotation for this range yet. "
+                  "A track counts here once you have played it all the way through.";
+            break;
+        case PlaylistKind::ForgottenFavourites:
+            msg = "No forgotten favourites yet. "
+                  "Records you loved and have not touched in a while will appear here.";
+            break;
+        case PlaylistKind::NeverHeard:
+            // Two very different reasons this list can be empty, and only the
+            // GUI can tell them apart: an empty library is a dead end, having
+            // heard everything is an achievement.
+            msg = albums_.empty()
+                ? "No music yet. Add a folder from Settings to get started."
+                : "You have heard everything in your library at least once.";
+            break;
+        case PlaylistKind::None:
+            break;
+        }
+        Rect a = toRect(plListArea_);
+        canvas.textStyled(msg, a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
+                          metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        return;
+    }
+
+    // drawScrollList draws ONE plain string per row in ONE style, and a ranked
+    // row needs four differently-styled columns. So it is used for what it is
+    // genuinely good at — scroll clipping, off-screen culling, the hover pill,
+    // and rects to hit-test — by handing it blank strings, and the text is
+    // drawn on top. fitWidth must be off: matrixListStyle() hugs a row to its
+    // text, and a blank string would hug to nothing.
+    {
+        auto style = matrixListStyle();
+        style.fitWidth = false;
+        std::vector<std::string> blanks(plEntries_.size());
+        plListRows_ = widgets::drawScrollList(canvas, toRect(plListArea_), blanks,
+                                              -1, (float)plScrollY_, (float)plRowH_,
+                                              plHoverRow_, widgets::kTextFree, style);
+    }
+    panels::drawScrollbar(canvas, plListArea_, (int)plEntries_.size() * plRowH_,
+                          plScrollY_, metrics_.scale);
+
+    canvas.setClip((float)plListArea_.left, (float)plListArea_.top,
+                   (float)(plListArea_.right - plListArea_.left),
+                   (float)(plListArea_.bottom - plListArea_.top));
+    const float rankW = metrics_.space(78.0f);
+    // panels::drawScrollbar docks inside the list's right edge, so the numbers
+    // are inset past it rather than tucked under it.
+    const float rightInset = metrics_.space(44.0f);
+    const float durW  = metrics_.space(96.0f);
+    const float playsW = metrics_.space(150.0f);
+    for (auto& lr : plListRows_) {
+        const int i = lr.index;
+        if (i < 0 || i >= (int)plEntries_.size()) continue;
+        const TopEntry& e = plEntries_[i];
+        const float rx = lr.rect.x + metrics_.space(20.0f);
+        const float ry = lr.rect.y + lr.rect.h * 0.5f;
+        // Title sits above the row's midline, artist below it, so the pair
+        // reads as one block with the numbers vertically centred beside them.
+        const float titleY  = ry - metrics_.text.body * 0.95f;
+        const float artistY = ry + metrics_.space(4.0f);
+
+        // A rank prefix only where there IS a ranking. Never Heard is ordered
+        // artist ⨯ album ⨯ disc ⨯ track — a browsing order — and "7th" would
+        // claim a standing that ordering does not confer (see ui_text.hh).
+        if (plKind_ != PlaylistKind::NeverHeard) {
+            std::string rank = ordinal(i + 1);
+            canvas.textStyled(rank, rx, ry - metrics_.text.secondary * 0.5f,
+                              metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Math);
+        }
+
+        const float textX = rx + rankW;
+        const float textW = lr.rect.x + lr.rect.w - rightInset - playsW - durW - textX;
+
+        // A track can leave the library while its plays survive in the log —
+        // the key stays, the title does not. Say so rather than drawing a gap.
+        bool gone = e.label.empty();
+        std::string title = gone ? std::string("(no longer in the library)") : e.label;
+        canvas.textStyled(truncateToWidth(canvas, title, textW, metrics_.text.body,
+                                          gone ? FontStyle::Italic : FontStyle::Bold),
+                          textX, titleY, metrics_.text.body,
+                          toColor(gone ? CLR_TEXT_DIM : CLR_TEXT_PRIMARY),
+                          gone ? FontStyle::Italic : FontStyle::Bold);
+        if (!e.subLabel.empty())
+            canvas.textStyled(truncateToWidth(canvas, e.subLabel, textW, metrics_.text.secondary,
+                                              FontStyle::Italic),
+                              textX, artistY,
+                              metrics_.text.secondary, toColor(CLR_TEXT_SECONDARY),
+                              FontStyle::Italic);
+
+        // Never Heard has no plays by definition (the query hardcodes 0), so
+        // printing "0 plays" on every row would be noise saying nothing.
+        if (plKind_ != PlaylistKind::NeverHeard && e.plays > 0) {
+            std::string plays = std::to_string(e.plays) + (e.plays == 1 ? " play" : " plays");
+            float pw = canvas.textWidthStyled(plays, metrics_.text.secondary, FontStyle::Math);
+            canvas.textStyled(plays, lr.rect.x + lr.rect.w - rightInset - durW - pw,
+                              ry - metrics_.text.secondary * 0.5f, metrics_.text.secondary,
+                              toColor(CLR_TEXT_SECONDARY), FontStyle::Math);
+        }
+
+        if (i < (int)plDurationMs_.size() && plDurationMs_[i] > 0) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%d:%02d", plDurationMs_[i] / 60000,
+                     (plDurationMs_[i] % 60000) / 1000);
+            float dw = canvas.textWidthStyled(buf, metrics_.text.secondary, FontStyle::Math);
+            canvas.textStyled(buf, lr.rect.x + lr.rect.w - rightInset - dw,
+                              ry - metrics_.text.secondary * 0.5f, metrics_.text.secondary,
+                              toColor(CLR_TEXT_SECONDARY), FontStyle::Math);
+        }
+    }
+    canvas.clearClip();
+}
+
+bool PlayerWindow::onPlaylistsMouseMove(int x, int y) {
+    bool changed = false;
+    bool hc = ptInRect(plCloseRc_, x, y);
+    if (hc != plHoverClose_) { plHoverClose_ = hc; changed = true; }
+
+    if (plKind_ == PlaylistKind::None) {
+        int row = -1;
+        for (int i = 0; i < 3; i++)
+            if (ptInRect(plChooserRc_[i], x, y)) { row = i; break; }
+        if (row != plHoverChooserRow_) { plHoverChooserRow_ = row; changed = true; }
+        if (plHoverRow_ != -1) { plHoverRow_ = -1; changed = true; }
+    } else {
+        int tab = -1;
+        if (plKind_ == PlaylistKind::HeavyRotation)
+            for (int i = 0; i < 5; i++)
+                if (ptInRect(plRangeTabRc_[i], x, y)) { tab = i; break; }
+        if (tab != plHoverRangeTab_) { plHoverRangeTab_ = tab; changed = true; }
+        int row = hitTestListRows(plListRows_, x, y);
+        if (row != plHoverRow_) { plHoverRow_ = row; changed = true; }
+        if (plHoverChooserRow_ != -1) { plHoverChooserRow_ = -1; changed = true; }
+    }
+    // The other four panels never update the cursor (a documented gap); this
+    // one does, so a clickable row reads as clickable.
+    applyCursorFor(x, y);
+    return changed;
+}
+
+void PlayerWindow::onPlaylistsClick(int x, int y) {
+    if (ptInRect(plCloseRc_, x, y)) { closeActivePanel(); return; }
+
+    if (plKind_ == PlaylistKind::None) {
+        for (int i = 0; i < 3; i++)
+            if (ptInRect(plChooserRc_[i], x, y)) {
+                loadPlaylist((PlaylistKind)(i + 1));
+                return;
+            }
+        return;
+    }
+
+    if (plKind_ == PlaylistKind::HeavyRotation) {
+        for (int i = 0; i < 5; i++)
+            if (ptInRect(plRangeTabRc_[i], x, y)) {
+                if (plRangePreset_ != kRangeTabs[i].preset) {
+                    plRangePreset_ = kRangeTabs[i].preset;
+                    loadPlaylist(plKind_);   // the range IS the query
+                }
+                return;
+            }
+    }
+
+    int row = hitTestListRows(plListRows_, x, y);
+    if (row >= 0) playPlaylistFrom(row);
 }
 
 // ── Folder picker panel (also reached via "Add Music Folder") ───────────────
@@ -5265,7 +5739,23 @@ void PlayerWindow::onPanelChar(uint32_t codepoint) {
 
 bool PlayerWindow::onPanelKeyDown(int keyCode) {
     if (activePanel_ == SettingsPanel::None) return false;
-    if (keyCode == key::Escape) { closeActivePanel(); return true; }
+    if (keyCode == key::Escape) {
+        // Playlists is two screens deep, so Escape steps back one level before
+        // it closes: a listener who opened a list meant to leave the LIST, not
+        // the section.
+        if (activePanel_ == SettingsPanel::Playlists && plKind_ != PlaylistKind::None) {
+            plKind_ = PlaylistKind::None;
+            plEntries_.clear();
+            plDurationMs_.clear();
+            plListRows_.clear();
+            plScrollY_ = 0;
+            plHoverRow_ = -1;
+            invalidate();
+            return true;
+        }
+        closeActivePanel();
+        return true;
+    }
     return true;  // swallow every other key while a panel is open — no
                   // play/stop or search-box interaction bleeding through to
                   // the main view behind it (mirrors the native dialogs'
@@ -5444,6 +5934,37 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
     if (state == "35-folder-picker") {
         click(rcNavSettings_); drawFrame();
         click(rcSettingsAddFolder_);
+        return true;
+    }
+
+    // The chooser, then each list. Reaching a list means clicking through the
+    // chooser, so the rects have to have been drawn once first — the same
+    // draw-then-click order the EQ tabs need.
+    if (state == "36-playlists") { click(rcNavPlaylists_); return true; }
+    if (state == "37-playlists-heavy-rotation") {
+        click(rcNavPlaylists_); drawFrame();
+        click(plChooserRc_[0]);
+        return true;
+    }
+    if (state == "38-playlists-forgotten-favourites") {
+        click(rcNavPlaylists_); drawFrame();
+        click(plChooserRc_[1]);
+        return true;
+    }
+    if (state == "39-playlists-never-heard") {
+        click(rcNavPlaylists_); drawFrame();
+        click(plChooserRc_[2]);
+        return true;
+    }
+    if (state == "3a-playlists-row-hover") {
+        // The hover pill is the one thing a static shot cannot show, and it is
+        // exactly where a wrong fitWidth collapses the highlight to a sliver.
+        click(rcNavPlaylists_); drawFrame();
+        click(plChooserRc_[2]);          // Never Heard — the list with rows on a fresh log
+        drawFrame();
+        if (plListRows_.empty()) return false;
+        const auto& r = plListRows_[0];
+        onMouseMove((int)(r.rect.x + r.rect.w * 0.4f), (int)(r.rect.y + r.rect.h * 0.5f));
         return true;
     }
 
