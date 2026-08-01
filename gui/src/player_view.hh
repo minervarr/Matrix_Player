@@ -467,17 +467,29 @@ private:
     int gridCols_        = 1;
     int gridTotalHeight_ = 0;
     int gridPadX_        = 24;
-    int gridPadY_        = 16;
 
     // ── Resolved grid pads, in DEVICE pixels ────────────────────────────────
-    // gridPadX_/gridPadY_ above are AUTHORED values (at the 1080 reference).
-    // These three are what recalcLayout() resolves them to, and they are the
-    // ONLY thing the draw block and gridHitTest() are allowed to read.
+    // gridPadX_ above is the ONLY authored pad (at the 1080 reference) — it is
+    // the horizontal margin, and the sole knob for "more air around the grid."
+    // There is no authored vertical pad: gridPadYpx_ below is DERIVED from
+    // gridPadXpx_ and the cell's own centering slack via gridTopPad(), never
+    // hand-tuned. This is by design, not an omission — the top margin and the
+    // left margin are meant to stay optically equal (a tile is centered in
+    // its cell, so the left margin already includes half the cell's slack;
+    // the top pad must absorb that same slack or the first row reads tighter
+    // than the sidebar beside it). Widening the top margin independently of
+    // the left one would break that property, so there is nothing to author.
+    // To put more air above the grid, change gridPadX_ — it moves both.
     //
-    // They exist because those two used the authored numbers raw while
-    // recalcLayout() passed the same numbers through space() — so at any
-    // height above 1080 the layout reserved one column width and the draw
-    // painted another, and the top margin never scaled at all.
+    // gridPadXpx_/gridPadYpx_/gridStepX_ are what recalcLayout() resolves
+    // gridPadX_ to every layout pass, and they are the ONLY thing the draw
+    // block and gridHitTest() are allowed to read.
+    //
+    // They exist because those two used to read gridPadX_ (and a second,
+    // now-deleted authored vertical pad) raw while recalcLayout() passed the
+    // same numbers through space() — so at any height above 1080 the layout
+    // reserved one column width and the draw painted another, and the top
+    // margin never scaled at all.
     int gridPadXpx_ = 24;
     int gridPadYpx_ = 16;
     int gridStepX_  = 0;    // cell stride incl. margins; was recomputed twice
