@@ -232,6 +232,14 @@ private:
     void onPanelChar(uint32_t codepoint);
     void drawActivePanel(Canvas& canvas, const LayoutRect& area);
 
+    // Where a settings panel's button row sits. Anchored to the BOTTOM of the
+    // page once the content is tall enough to reach it, and tucked just below
+    // the content when it is not — a Done button 900px under a one-row list
+    // reads as belonging to the window rather than to the list. One helper so
+    // the four panels cannot drift apart again.
+    int panelButtonRowY(const LayoutRect& content, float contentBottomPx,
+                        float btnH, float pad) const;
+
     void drawManageFolders(Canvas& canvas, const LayoutRect& area);
 
     void drawAudioSettings(Canvas& canvas, const LayoutRect& area);
