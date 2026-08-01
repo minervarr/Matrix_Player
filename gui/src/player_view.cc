@@ -5379,7 +5379,7 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
         if (gridIndices_.empty()) return false;
         drawFrame();
         onMouseMove(rcGrid_.left + (rcGrid_.right - rcGrid_.left) / 4,
-                    rcGrid_.top + gridTileSize_ / 2 + (int)metrics_.space((float)gridPadY_));
+                    rcGrid_.top + gridTileSize_ / 2 + gridPadYpx_);
         return true;
     }
 

@@ -71,7 +71,7 @@ int main() {
 
         // Degenerate: a cell narrower than its art cannot push the row off
         // the top of the page.
-        assert(gridTopPad(32, 300, 314) <= 32);
+        assert(gridTopPad(32, 300, 314) == 32);
     }
 
     std::printf("ui_metrics_test: all assertions passed\n");
