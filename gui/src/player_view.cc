@@ -3386,13 +3386,6 @@ void PlayerWindow::onManageFolders() {
     invalidate();
 }
 
-int PlayerWindow::panelButtonRowY(const LayoutRect& content, float contentBottomPx,
-                                  float btnH, float pad) const {
-    const int floorY  = (int)(content.bottom - (btnH + pad));
-    const int huggedY = (int)(contentBottomPx + pad);
-    return std::min(floorY, huggedY);
-}
-
 void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
     LayoutRect content = panels::drawHeader(canvas, area, "Music Folders", metrics_.scale, metrics_.text.header, mfCloseRc_);
     float pad = metrics_.space(SP_LG);
@@ -3412,8 +3405,7 @@ void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
     }
 
     float btnW = metrics_.space(277.0f);
-    int by = panelButtonRowY(content, (float)listArea.top + (float)mfRoots_.size() * kPanelRowH,
-                             btnH, pad);
+    int by = (int)(content.bottom - (btnH + pad));
     mfBtnRemove_ = { content.left + (int)pad, by, (int)(content.left + pad + btnW), (int)(by + btnH) };
     mfBtnDone_   = { (int)(content.right - pad - btnW), by, content.right - (int)pad, (int)(by + btnH) };
     panels::drawButton(canvas, mfBtnRemove_, "Remove Selected", mfHoverRemove_, metrics_.text.body);
@@ -3634,7 +3626,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
 #endif
 
     float btnW = metrics_.space(196.0f);   // btnH declared above — the list is sized against it
-    int by = panelButtonRowY(content, y, btnH, pad);
+    int by = (int)(content.bottom - (btnH + pad));
     asBtnApply_ = { (int)(content.right - pad - btnW), by, content.right - (int)pad, (int)(by + btnH) };
     panels::drawButton(canvas, asBtnApply_, "Apply", asHoverApply_, metrics_.text.body, true);
 }
@@ -3862,8 +3854,7 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
 
     float btnW = metrics_.space(277.0f);
     float gap  = metrics_.space(SP_MD);
-    int by = panelButtonRowY(content, (float)eqListArea_.top + (float)eqListRows_.size() * kPanelRowH,
-                             btnH, pad);
+    int by = (int)(content.bottom - (btnH + pad));
     // Slot 0 is the PRIMARY and sits hard right, matching Manage Folders,
     // Audio Settings and the folder picker. Secondaries fill leftward. This
     // panel used to lay out left-to-right, so it was the one page of four
@@ -3972,8 +3963,7 @@ void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
     }
 
     float btnW = metrics_.space(326.0f);
-    int by = panelButtonRowY(content, (float)listArea.top + (float)labels.size() * kPanelRowH,
-                             btnH, pad);
+    int by = (int)(content.bottom - (btnH + pad));
     fpBtnCancel_ = { content.left + (int)pad, by, (int)(content.left + pad + btnW), (int)(by + btnH) };
     fpBtnSelect_ = { (int)(content.right - pad - btnW), by, content.right - (int)pad, (int)(by + btnH) };
     panels::drawButton(canvas, fpBtnCancel_, "Cancel", fpHoverCancel_, metrics_.text.body);
