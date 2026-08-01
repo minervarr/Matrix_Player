@@ -401,6 +401,21 @@ If the window is short enough that the block would collide with the Settings
 row, the block yields (browsing the library is the app's primary job).
 
 ### 8.2 Album grid
+**The two margins are equal by construction, not by hand.** `gridPadX_` is the
+only authored pad; `recalcLayout()` resolves it through `space()` into
+`gridPadXpx_`, and the TOP pad is *derived* from it by `gridTopPad()`
+(`ui_metrics.hh`, pure and pinned by `ui_metrics_test`): a tile is centered in
+its cell, so the visible left margin is the pad PLUS half the cell's leftover
+slack, which the vertical axis has no equivalent of. Setting the two to the same
+number measured equal and looked wrong — the first row bled against the window
+edge while the sidebar beside it had air. There is deliberately no independent
+vertical knob; changing `gridPadX_` moves both.
+
+Layout, drawing AND hit-testing all read the resolved `gridPadXpx_` /
+`gridPadYpx_` / `gridStepX_`. They used to disagree — layout passed the authored
+pads through `space()` while draw and hit-test used them raw — so above the 1080
+reference the clickable box and the painted box drifted apart.
+
 Square art tiles (placeholder = flat `CLR_TILE_PLACEHOLDER`) + Bold white title
 (two-line fallback) + italic secondary artist. **Hover** = neutral grey focus
 frame. **State ring** = one solid `space(3)` accent band hugging the art, square
@@ -448,6 +463,9 @@ Left: art thumb + Bold title + italic artist. Center: Prev / Play-Stop / Next
 vector buttons (grey pill on hover). Right: `m:ss / m:ss` time (Mono) + a DSP
 badge (BITPERFECT accent / REF EQ dim) that expands to the signal path on hover.
 *There is no seekbar* — position is text only (a deliberate current limitation).
+The cluster's margin from the window edge (`space(SP_LG)`) must stay LARGER than
+the gap inside it (`space(24)` between time and badge). At 16 it did not, and the
+reading and the state read as one run of text pushed against the edge.
 
 ### 8.4 Track panel (album view)
 Full-page (replaces grid). Large scrolling art + wrapped title/artist + quality
@@ -468,6 +486,14 @@ defensible on paper and unusable in practice: an album of mixed tiers (*Bad
 Ideas* — one cyan row, four yellow, six cyan) became eleven stacked frames in two
 colors over a list whose whole character was restraint. A mark says the same
 thing in a tenth of the ink.
+
+**The list has a capped reading measure.** `colW` is `min(available,
+space(820))`, so a wide window stops stretching the row: unbounded, a 2560px
+window put a track title ~1045px from its own duration. Note the cap passes
+through `space()` — a reading measure should scale with the type — which means
+the NUMBER must sit below the width the layout produces unbounded (~925 authored)
+or the cap is inert decoration. An earlier attempt used 1180 and did nothing at
+any 16:9 size.
 
 **One rectangle governs the row.** `rowX`/`rowW` (the text column plus a
 `space(7)` overhang on each side) is the single source for every layer: the
@@ -557,6 +583,21 @@ elevated grey), both at `UI_CORNER_RADIUS`. Row lists via
 `widgets::drawScrollList` and radio groups via `widgets::drawRadioRow` (framework
 widgets) styled by `matrixListStyle()` / `matrixRadioStyle()` — the shared
 selection family. Search fields via §8.6's shared field.
+
+**The primary button is right-anchored in all four panels.** EQ Settings used to
+lay its row out left-to-right from `content.left`, making it the one page of four
+where the green button changed sides. Mouse muscle memory is learned per app; a
+primary that moves between sibling pages cannot be learned.
+
+**Machine text is Mono; names stay serif.** Filesystem paths (the folder picker's
+current directory) and identifiers (`Device: 32BB:0004`) are data, not names, and
+the family already carries a face that says so — the one with the most legibility
+headroom of the four (9.14px floor against the Regular serif's 18.29px, which is
+the binding constraint behind `kMinReadableTextSizePx`). Headphone models, album
+and artist names stay serif: the rule is about what the string IS, not where it
+appears. **Known gap:** the folder *rows* inside `widgets::drawScrollList` are
+still serif — `ScrollListStyle` has no font-style field, and adding one is a
+change to the vk_canvas submodule's API, not to this app.
 
 **Shared search field** (`drawSearchField`, `player_view.cc`): `CLR_INPUT_BG`
 fill, `UI_CORNER_RADIUS`, dim placeholder, caret when focused, a bottom underline

@@ -1710,7 +1710,11 @@ void PlayerWindow::drawFrame() {
                 dspClr = bitperfectMode_.load() && !isPlaying_ ? CLR_ACCENT : CLR_TEXT_DIM;
                 break;
             }
-            float rightEdge = t.x + t.w - metrics_.space(16.0f);
+            // The outer margin must EXCEED the gap inside the cluster (the
+            // space(24) between clock and badge, below). At 16 it did not, so
+            // the reading and the state sat closer to the window edge than to
+            // each other and read as one run of text.
+            float rightEdge = t.x + t.w - metrics_.space(SP_LG);
             float cy = t.y + t.h * 0.5f;
             float tagW = canvas.textWidthStyled(dsp, metrics_.text.caption, FontStyle::Math);
 
@@ -3757,7 +3761,12 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     float pad = metrics_.space(SP_LG);
     float y = c.y + pad;
 
-    canvas.textStyled("Device: " + eqDeviceKey_, c.x + pad, y, metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+    // Mono, because "32BB:0004" is an identifier, not a name. The family
+    // already carries a face that says so, and it is the one with the most
+    // legibility headroom of the four (9.14px floor against the serif's
+    // 18.29px — see min_text_size in the root CMakeLists). Headphone and album
+    // names stay serif: the rule is about what the string IS, not where it sits.
+    canvas.textStyled("Device: " + eqDeviceKey_, c.x + pad, y, metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Math);
     y += metrics_.text.secondary * 1.6f;
 
     EqAssignment assign;
@@ -3938,8 +3947,11 @@ void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
     Rect c = toRect(content);
     float pad = metrics_.space(SP_LG);
 
-    canvas.textStyled(truncateToWidth(canvas, fpCurrentDir_, c.w - 2.0f * pad, metrics_.text.secondary, FontStyle::Roman),
-                      c.x + pad, c.y + pad, metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+    // A filesystem path is machine text (same rule as the EQ device line). The
+    // measure passed to truncateToWidth MUST use the style it is drawn in, or
+    // the ellipsis lands at the wrong character.
+    canvas.textStyled(truncateToWidth(canvas, fpCurrentDir_, c.w - 2.0f * pad, metrics_.text.secondary, FontStyle::Math),
+                      c.x + pad, c.y + pad, metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Math);
 
     float listTop = pad * 2.0f + metrics_.text.secondary * 1.4f;
     float btnH = metrics_.space(58.0f);
