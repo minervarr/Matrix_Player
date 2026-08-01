@@ -469,6 +469,19 @@ private:
     int gridPadX_        = 24;
     int gridPadY_        = 16;
 
+    // ── Resolved grid pads, in DEVICE pixels ────────────────────────────────
+    // gridPadX_/gridPadY_ above are AUTHORED values (at the 1080 reference).
+    // These three are what recalcLayout() resolves them to, and they are the
+    // ONLY thing the draw block and gridHitTest() are allowed to read.
+    //
+    // They exist because those two used the authored numbers raw while
+    // recalcLayout() passed the same numbers through space() — so at any
+    // height above 1080 the layout reserved one column width and the draw
+    // painted another, and the top margin never scaled at all.
+    int gridPadXpx_ = 24;
+    int gridPadYpx_ = 16;
+    int gridStepX_  = 0;    // cell stride incl. margins; was recomputed twice
+
     // Sidebar search box — live-filters the album grid. gridIndices_ is the
     // single indirection: tile position → albums_ index. Draw loop and
     // gridHitTest() both go through it, so every click/hover consumer keeps

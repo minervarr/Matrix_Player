@@ -19,11 +19,18 @@
 - **Accent green means state, never hover** (§1.4).
 - Commits use `./git_wrapper commit "..."` — **never** plain `git commit`. Note `git_wrapper` runs `git add -A`, so the working tree must be clean of unrelated work before starting.
 
-## Why there are no unit tests in this plan
+## How this plan is verified (and why it is mostly not by unit tests)
 
 This repo's four test executables are pure-logic (`ui_metrics_test`, `ui_icons_test`, `ui_text_test`, `variants_test`) and there is no visual test framework — `CLAUDE.md` states GUI changes are validated by building and looking. A margin has no assertion that is not a screenshot.
 
-So each task's verification is the same loop, and it is not optional:
+**One exception, Task 1.** Its top-pad derivation is real arithmetic with a
+stated property ("the two margins come out optically equal"), so it is
+extracted as a pure function and pinned in `ui_metrics_test` — the same reason
+`ui_icons.cc` is split from `ui_icons_draw.cc` and `variants.cpp` from
+`library.cpp`. No other task in this plan has arithmetic worth asserting; for
+those, the loop below IS the test.
+
+Each task's verification is the same loop, and it is not optional:
 
 ```bash
 scripts/linux/build.sh --debug
@@ -44,6 +51,8 @@ cd build/linux_debug/gui
 
 | File | Change | Responsible for |
 |---|---|---|
+| `gui/src/ui_metrics.hh` | Modify | `gridTopPad()` — the pure derivation (Task 1) |
+| `gui/src/ui_metrics_test.cc` | Modify | Asserts that derivation (Task 1) |
 | `gui/src/player_view.hh` | Modify | Three new resolved-pad members (Task 1) |
 | `gui/src/player_view.cc` | Modify | All six edits — layout, draw, hit-test |
 | `docs/UI_DESIGN_SYSTEM.md` | Modify | §8.2/§8.4/§8.6 updated to match (Task 7) |
@@ -54,12 +63,14 @@ cd build/linux_debug/gui
 ### Task 1: Unify the grid's padding across layout, draw and hit-test
 
 **Files:**
+- Modify: `gui/src/ui_metrics.hh` (add `gridTopPad()`)
+- Modify: `gui/src/ui_metrics_test.cc` (assert it)
 - Modify: `gui/src/player_view.hh` (near `gridPadX_`/`gridPadY_`, ~`:470`)
 - Modify: `gui/src/player_view.cc:1012`, `:1026-1027`, `:1897`, `:1920`, `:2488`, `:2492-2493`, `:2501-2502`
 
 **Interfaces:**
 - Consumes: `metrics_.space()`, `gridCols_`, `gridArtSize_`, `gridTileSize_`, `rcGrid_` — all already computed in `recalcLayout()`.
-- Produces: `int gridPadXpx_`, `int gridPadYpx_`, `int gridStepX_` — resolved device pixels, written only by `recalcLayout()`, read by the grid draw block and `gridHitTest()`. Later tasks do not use them.
+- Produces: `inline int gridTopPad(int padXpx, int cellStepX, int artSize)` in `ui_metrics.hh`; and `int gridPadXpx_`, `int gridPadYpx_`, `int gridStepX_` — resolved device pixels, written only by `recalcLayout()`, read by the grid draw block and `gridHitTest()`. Later tasks do not use them.
 
 **The defect:** `gridPadX_` (24) and `gridPadY_` (16) are passed through `metrics_.space()` when computing layout (`:1897`, `:1920`) but used **raw** when drawing (`:1012`, `:1026-1027`) and hit-testing (`:2488`, `:2492-2493`, `:2501-2502`). At 1440p the column width is reserved against ~32 px while tiles are painted at 24 px, and the top margin stays at 16 unscaled pixels forever.
 
@@ -82,7 +93,74 @@ In `gui/src/player_view.hh`, immediately after `int gridPadY_ = 16;`:
     int gridStepX_  = 0;    // cell stride incl. margins; was recomputed twice
 ```
 
-- [ ] **Step 2: Resolve them in `recalcLayout()`**
+- [ ] **Step 2: Write the failing test for the derivation**
+
+The top pad is derived arithmetic with a stated property, so it gets pinned.
+Append to `gui/src/ui_metrics_test.cc`, inside `main()`:
+
+```cpp
+    // ── gridTopPad: the grid's two margins are equal BY CONSTRUCTION ────────
+    // A tile is centered in its cell, so the visible left margin is the pad
+    // plus half the cell's leftover slack. The top has no such slack, so the
+    // top pad must absorb it or the first row bleeds against the window edge
+    // while the sidebar beside it has air. That is the whole property.
+    {
+        // 32px pad, 354px cell stride, 314px art -> 20px slack per side.
+        assert(gridTopPad(32, 354, 314) == 52);
+
+        // No slack (art exactly fills the cell): the pads coincide.
+        assert(gridTopPad(32, 314, 314) == 32);
+
+        // Odd slack truncates like the integer cell math it mirrors, and
+        // never exceeds the visible left margin by rounding up.
+        assert(gridTopPad(32, 355, 314) == 52);
+
+        // Degenerate: a cell narrower than its art cannot push the row off
+        // the top of the page.
+        assert(gridTopPad(32, 300, 314) <= 32);
+    }
+```
+
+- [ ] **Step 3: Run it and watch it fail**
+
+```bash
+scripts/linux/build.sh --debug
+```
+
+Expected: **compile error**, `gridTopPad` not declared. That is the failure.
+
+- [ ] **Step 4: Add the pure function**
+
+In `gui/src/ui_metrics.hh`, after the `UiMetrics` struct:
+
+```cpp
+// The album grid's TOP pad, derived from its horizontal pad and the cell's
+// own centering slack — never authored independently.
+//
+// It lives here, beside space()/stroke(), because it is the same kind of
+// thing: resolution-robust geometry derived from one place rather than
+// hand-tuned per screen. Pure and header-only so ui_metrics_test can assert
+// it without linking a Canvas (same reason ui_icons.cc is split from
+// ui_icons_draw.cc).
+//
+// Clamped at 0 slack: a cell narrower than its art is degenerate, and a
+// negative pad would push the first row off the top of the page.
+inline int gridTopPad(int padXpx, int cellStepX, int artSize) {
+    const int slack = cellStepX - artSize;
+    return padXpx + (slack > 0 ? slack / 2 : 0);
+}
+```
+
+- [ ] **Step 5: Run the test and watch it pass**
+
+```bash
+scripts/linux/build.sh --debug
+./build/linux_debug/gui/ui_metrics_test && echo METRICS-OK
+```
+
+Expected: `METRICS-OK`.
+
+- [ ] **Step 6: Resolve the pads in `recalcLayout()`**
 
 In `gui/src/player_view.cc`, replace line `:1897`:
 
@@ -97,27 +175,19 @@ with:
     int gridW = rcGrid_.right - rcGrid_.left - gridPadXpx_ * 2;
 ```
 
-- [ ] **Step 3: Derive the top pad from the cell's own slack**
-
-Still in `recalcLayout()`, immediately after `gridTileSize_ = gridArtSize_ + artMargin;` (`:1909`), insert:
+Then, immediately after `gridTileSize_ = gridArtSize_ + artMargin;` (`:1909`), insert:
 
 ```cpp
     // Cell stride, resolved once. The draw block and gridHitTest() both used
     // to recompute this from raw pads and disagree with the line above.
     gridStepX_ = gridCols_ > 1 ? gridW / gridCols_ : gridTileSize_;
 
-    // The top pad is DERIVED, not authored, and that is the point. A tile is
-    // centered inside its cell, so the visible left margin is the pad PLUS
-    // half the cell's leftover slack — something the vertical axis has no
-    // equivalent of. Setting the two to the same number produced margins that
-    // measured equal and looked wrong (the first row bled against the window
-    // edge while the sidebar beside it had air). Deriving it makes them
-    // provably equal instead of eyeballed, and keeps them equal when the
-    // column count changes on a resize.
-    gridPadYpx_ = gridPadXpx_ + (gridStepX_ - gridArtSize_) / 2;
+    // Derived, not authored — see gridTopPad()'s comment in ui_metrics.hh.
+    gridPadYpx_ = gridTopPad(gridPadXpx_, gridStepX_, gridArtSize_);
 ```
 
-- [ ] **Step 4: Point the grid total height at the resolved pad**
+
+- [ ] **Step 7: Point the grid total height at the resolved pad**
 
 Replace line `:1920`:
 
@@ -131,7 +201,7 @@ with:
     gridTotalHeight_ = albumRows * (gridTileSize_ + gridRowGap_) + gridPadYpx_;
 ```
 
-- [ ] **Step 5: Point the draw block at the resolved values**
+- [ ] **Step 8: Point the draw block at the resolved values**
 
 Replace `:1012-1013`:
 
@@ -160,7 +230,7 @@ with:
                     float y = (float)(rcGrid_.top + gridPadYpx_ + row * tileStepY - gridScrollY_);
 ```
 
-- [ ] **Step 6: Point the hit-test at the same values**
+- [ ] **Step 9: Point the hit-test at the same values**
 
 Replace `:2487-2493`:
 
@@ -198,7 +268,7 @@ with:
     int artY = rcGrid_.top + gridPadYpx_ + row * tileStepY - gridScrollY_;
 ```
 
-- [ ] **Step 7: Verify no raw use survives**
+- [ ] **Step 10: Verify no raw use survives**
 
 ```bash
 grep -n "gridPadX_\|gridPadY_" gui/src/player_view.cc
@@ -206,7 +276,7 @@ grep -n "gridPadX_\|gridPadY_" gui/src/player_view.cc
 
 Expected: exactly two hits, both inside `recalcLayout()` (the `space()` call and the derivation). Any other hit is a site that was missed.
 
-- [ ] **Step 8: Build and capture both resolutions**
+- [ ] **Step 11: Build and capture both resolutions**
 
 ```bash
 scripts/linux/build.sh --debug
@@ -218,7 +288,7 @@ cd build/linux_debug/gui
 
 Look at `10-grid-albums.png` in both. Expected: the top margin above the first row now visually matches the left margin before the first column, at **both** sizes.
 
-- [ ] **Step 9: Verify hit-testing by hand — this is the risk of the task**
+- [ ] **Step 12: Verify hit-testing by hand — this is the risk of the task**
 
 Layout, draw and hit-test disagreed before this change; now they agree, which means every tile's clickable box moved. A screenshot cannot catch a click landing one tile off.
 
@@ -228,7 +298,7 @@ Layout, draw and hit-test disagreed before this change; now they agree, which me
 
 Click the **first** tile of row 1, the **last** tile of row 1, and a tile in row 3. Each must open the album whose art you clicked. Then click the gap *between* two tiles and the text block below a tile — both must do nothing (only the artwork is a target).
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 13: Commit**
 
 ```bash
 ./git_wrapper commit "Grid: one padding for layout, draw and hit-test; derive the top margin"

@@ -53,6 +53,27 @@ int main() {
     assert(nearlyEqual(computeUiMetrics(2160.0f).stroke(1.0f), 2.0f));
     assert(nearlyEqual(computeUiMetrics(2160.0f).stroke(3.0f), 6.0f));
 
+    // ── gridTopPad: the grid's two margins are equal BY CONSTRUCTION ────────
+    // A tile is centered in its cell, so the visible left margin is the pad
+    // plus half the cell's leftover slack. The top has no such slack, so the
+    // top pad must absorb it or the first row bleeds against the window edge
+    // while the sidebar beside it has air. That is the whole property.
+    {
+        // 32px pad, 354px cell stride, 314px art -> 20px slack per side.
+        assert(gridTopPad(32, 354, 314) == 52);
+
+        // No slack (art exactly fills the cell): the pads coincide.
+        assert(gridTopPad(32, 314, 314) == 32);
+
+        // Odd slack truncates like the integer cell math it mirrors, and
+        // never exceeds the visible left margin by rounding up.
+        assert(gridTopPad(32, 355, 314) == 52);
+
+        // Degenerate: a cell narrower than its art cannot push the row off
+        // the top of the page.
+        assert(gridTopPad(32, 300, 314) <= 32);
+    }
+
     std::printf("ui_metrics_test: all assertions passed\n");
     return 0;
 }

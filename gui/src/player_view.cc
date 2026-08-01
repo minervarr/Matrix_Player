@@ -1009,8 +1009,7 @@ void PlayerWindow::drawFrame() {
             emptyState(msg);
         } else {
             canvas.setClip(g.x, g.y, g.w, g.h);
-            int tileSpaceW = rcGrid_.right - rcGrid_.left - gridPadX_ * 2;
-            int tileStepX = gridCols_ > 1 ? tileSpaceW / gridCols_ : gridTileSize_;
+            int tileStepX = gridStepX_;   // resolved in recalcLayout()
             int tileStepY = gridTileSize_ + gridRowGap_;
             int firstRow = std::max(0, gridScrollY_ / tileStepY);
             int gridH = rcGrid_.bottom - rcGrid_.top;
@@ -1023,8 +1022,8 @@ void PlayerWindow::drawFrame() {
                     int idx = gridIndices_[tile];   // real albums_ index
                     const Album& alb = albums_[idx];
 
-                    float x = (float)(rcGrid_.left + gridPadX_ + col * tileStepX + (tileStepX - gridArtSize_) / 2);
-                    float y = (float)(rcGrid_.top + gridPadY_ + row * tileStepY - gridScrollY_);
+                    float x = (float)(rcGrid_.left + gridPadXpx_ + col * tileStepX + (tileStepX - gridArtSize_) / 2);
+                    float y = (float)(rcGrid_.top + gridPadYpx_ + row * tileStepY - gridScrollY_);
                     float a = (float)gridArtSize_;
 
                     bool nowPlaying = isPlaying_ && idx == displayAlbum_;
@@ -1894,7 +1893,8 @@ void PlayerWindow::recalcLayout() {
     const int minArtSize = (int)metrics_.space((float)kMinGridArtSize);
     const int artMargin  = (int)metrics_.space((float)kGridArtMargin);
 
-    int gridW = rcGrid_.right - rcGrid_.left - (int)metrics_.space((float)gridPadX_) * 2;
+    gridPadXpx_ = (int)metrics_.space((float)gridPadX_);
+    int gridW = rcGrid_.right - rcGrid_.left - gridPadXpx_ * 2;
     int desiredCols = std::clamp(gridW / tilePitch, 2, 8);
     while (desiredCols > 1 && (gridW / desiredCols) - artMargin < minArtSize) desiredCols--;
     gridCols_ = std::max(1, desiredCols);
@@ -1908,6 +1908,13 @@ void PlayerWindow::recalcLayout() {
     }
     gridTileSize_ = gridArtSize_ + artMargin;
 
+    // Cell stride, resolved once. The draw block and gridHitTest() both used
+    // to recompute this from raw pads and disagree with the line above.
+    gridStepX_ = gridCols_ > 1 ? gridW / gridCols_ : gridTileSize_;
+
+    // Derived, not authored — see gridTopPad()'s comment in ui_metrics.hh.
+    gridPadYpx_ = gridTopPad(gridPadXpx_, gridStepX_, gridArtSize_);
+
     // Tile text block height from the ACTUAL text sizes (two title lines +
     // artist + breathing room) — see gridRowGap_'s comment in the header.
     gridRowGap_ = (int)(titleArtistAdvance(metrics_.text.body) * 2.0f
@@ -1917,7 +1924,7 @@ void PlayerWindow::recalcLayout() {
     trackRowHeight_ = (int)metrics_.space(SP_XL);
 
     int albumRows = ((int)gridIndices_.size() + gridCols_ - 1) / gridCols_;
-    gridTotalHeight_ = albumRows * (gridTileSize_ + gridRowGap_) + (int)metrics_.space((float)gridPadY_);
+    gridTotalHeight_ = albumRows * (gridTileSize_ + gridRowGap_) + gridPadYpx_;
 
     // Sidebar items — search box sits between the brand and the nav. All
     // Y positions scale with the text (fixed values put "Albums" visibly
@@ -2484,13 +2491,11 @@ int PlayerWindow::gridHitTest(int x, int y) const {
     if (trackPanelOpen_) return -1;  // grid is hidden behind the album view
     if (x < rcGrid_.left || x >= rcGrid_.right || y < rcGrid_.top || y >= rcGrid_.bottom)
         return -1;
-    int gridW = rcGrid_.right - rcGrid_.left;
-    int tileSpaceW = gridW - gridPadX_ * 2;
-    int tileStepX = gridCols_ > 1 ? tileSpaceW / gridCols_ : gridTileSize_;
+    int tileStepX = gridStepX_;
     int tileStepY = gridTileSize_ + gridRowGap_;
 
-    int col = (x - rcGrid_.left - gridPadX_) / tileStepX;
-    int row = (y - rcGrid_.top - gridPadY_ + gridScrollY_) / tileStepY;
+    int col = (x - rcGrid_.left - gridPadXpx_) / tileStepX;
+    int row = (y - rcGrid_.top - gridPadYpx_ + gridScrollY_) / tileStepY;
     if (col < 0 || col >= gridCols_ || row < 0) return -1;
     int idx = row * gridCols_ + col;
     if (idx >= (int)gridIndices_.size()) return -1;
@@ -2498,8 +2503,8 @@ int PlayerWindow::gridHitTest(int x, int y) const {
     // Only the artwork itself is a target — the gaps, the text block below,
     // and the cell margins are dead space. Same art-position math as the
     // grid draw block in drawFrame().
-    int artX = rcGrid_.left + gridPadX_ + col * tileStepX + (tileStepX - gridArtSize_) / 2;
-    int artY = rcGrid_.top + gridPadY_ + row * tileStepY - gridScrollY_;
+    int artX = rcGrid_.left + gridPadXpx_ + col * tileStepX + (tileStepX - gridArtSize_) / 2;
+    int artY = rcGrid_.top + gridPadYpx_ + row * tileStepY - gridScrollY_;
     if (x < artX || x >= artX + gridArtSize_ ||
         y < artY || y >= artY + gridArtSize_) return -1;
 

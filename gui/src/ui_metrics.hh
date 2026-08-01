@@ -50,3 +50,19 @@ struct UiMetrics {
 };
 
 UiMetrics computeUiMetrics(float contentHeight);
+
+// The album grid's TOP pad, derived from its horizontal pad and the cell's
+// own centering slack — never authored independently.
+//
+// It lives here, beside space()/stroke(), because it is the same kind of
+// thing: resolution-robust geometry derived from one place rather than
+// hand-tuned per screen. Pure and header-only so ui_metrics_test can assert
+// it without linking a Canvas (same reason ui_icons.cc is split from
+// ui_icons_draw.cc).
+//
+// Clamped at 0 slack: a cell narrower than its art is degenerate, and a
+// negative pad would push the first row off the top of the page.
+inline int gridTopPad(int padXpx, int cellStepX, int artSize) {
+    const int slack = cellStepX - artSize;
+    return padXpx + (slack > 0 ? slack / 2 : 0);
+}
