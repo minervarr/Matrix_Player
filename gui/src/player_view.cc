@@ -1219,7 +1219,12 @@ void PlayerWindow::drawFrame() {
 
             // Right column: title block + track list.
             float colX = artX + artSize + metrics_.space(SP_XL);
-            float colW = tp.x + tp.w - pad - colX;
+            // Capped, not "whatever is left". Unbounded, a 2560px window put a
+            // track title ~1045px from its own duration and the eye had to
+            // cross the screen to pair them. The cap is a reading measure, so
+            // it scales like type rather than like the window: past it, extra
+            // width buys nothing and costs the pairing.
+            float colW = std::min(tp.x + tp.w - pad - colX, metrics_.space(1180.0f));
             float y = artY + metrics_.space(4.0f);
 
             std::string base, mod;
