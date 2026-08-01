@@ -9,3 +9,9 @@ dist/
 .antigravitycli/
 matrix_player.db
 git_wrapper
+
+# Headless UI captures (tools/ui_capture) — regenerate, never commit
+ui-shots*/
+
+# subagent-driven-development scratch workspace
+.superpowers/

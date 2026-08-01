@@ -43,9 +43,19 @@ matrix_player/
                                  re-ripping at a higher rate never orphans history.
                                  PURE: no OS, no Canvas, no sqlite — variants_test
                                  links it alone. Keep it that way
-    include/core/stats.h       — listening-analytics vocabulary: StartCause/EndCause
-                                 and the aggregate result types (Totals, TopEntry,
-                                 HourBucket, DayBucket, PlayEvent). No sqlite, no OS
+    include/core/stats.h       — listening-analytics vocabulary: StartCause/EndCause,
+                                 the aggregate result types (Totals, TopEntry,
+                                 HourBucket, DayBucket, PlayEvent, SessionStats) and
+                                 the knobs the queries take (TopSort, RangePreset,
+                                 StatsRange). No sqlite, no OS
+    src/stats.cpp              — the PURE half of the above: Hinnant civil-date
+                                 arithmetic plus rangeFor(), which turns "the last
+                                 seven days" into unix seconds on LOCAL midnights.
+                                 Integer math only — no <ctime>, no TZ database — so
+                                 the answer is the same in every zone and can be
+                                 asserted exactly. This is deliberately not in the
+                                 GUI: a range boundary looks obvious, is not, and is
+                                 invisible when wrong
     src/db_stats.cpp           — the play_events log and EVERY query derived from it.
                                  Split out of db.cpp, which was already carrying the
                                  library/settings/roots/EQ halves. Both define methods
@@ -273,7 +283,7 @@ Nothing writes a derived counter anywhere, so no aggregate can drift out of
 step with the log. Play counts, rankings and histograms are all computed on
 demand from it.
 
-Three things about it are load-bearing and easy to undo by accident:
+These things are load-bearing and easy to undo by accident:
 
 1. **Keyed on `trackKey()`, never on `file_path`.** A path is rewritten
    whenever a folder is renamed, and history keyed on it orphans silently and
@@ -297,6 +307,27 @@ Three things about it are load-bearing and easy to undo by accident:
    the log held 43, and 27 of 518 track rows shared a key with another. The
    regression case in `stats_test` puts three copies of one track behind one
    key and asserts no ranking totals more than the log holds.
+5. **A calendar day is grouped by its LOCAL DATE (`LOCAL_DAY`), never by the
+   UTC instant of local midnight.** That instant *moves with the offset*, so
+   grouping on it splits one calendar day into two rows whenever the offset
+   changes inside it — a daylight-saving Sunday, or a day spent flying — and
+   makes `Totals::activeDays` count that day twice. `DayBucket::dayLocal` is
+   therefore a **local** second, already shifted, always a multiple of 86400:
+   convert it with `statsCivilFromLocalDay()`, never with `localtime()`, which
+   would shift it a second time. `stats_test` pins both directions — one
+   calendar day stays one bucket across two offsets, and two genuinely
+   different local dates still split.
+6. **An album's identity is title AND artist.** `topAlbums()` groups on both.
+   Two artists can each have a record called "Live", and grouping on the title
+   alone merged them into one row whose artist column then read as whichever
+   `MAX()` happened to pick — a wrong count under a misleading name. Same class
+   of mistake as the fan-out above, in the other direction. `TopEntry::key`
+   carries the pair joined by U+001F; `label`/`subLabel` carry the halves.
+7. **Calendar arithmetic lives in `core/src/stats.cpp`, and is pure.** Integer
+   math (Hinnant's civil algorithms), no `<ctime>`, no TZ database consulted
+   behind its back — which is the only reason `rangeFor()`'s "last seven days"
+   can be asserted to land on an exact local midnight. Range presets belong
+   there and not in the GUI, where nothing can test them.
 
 ## Headphone profiles (`eq_headphones`)
 

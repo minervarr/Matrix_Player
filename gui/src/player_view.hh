@@ -73,8 +73,30 @@ enum class AudioBackend { Usb, Wasapi, Alsa, Jack };
 
 class PlayerWindow {
 public:
-    bool create();
+    // `injectedHost` is the dev-tooling seam: pass nothing and create() builds
+    // the platform's real Host via make_host(), exactly as before. The headless
+    // UI-capture tool (tools/ui_capture) passes its own Host so that everything
+    // below this line — Vulkan init, the DB restore, the font/atlas bake, the
+    // layout — runs the SAME code the shipping app runs, against a surface that
+    // presents to nothing. A capture that re-implemented any of it would stop
+    // describing the app the moment the app moved.
+    bool create(std::unique_ptr<Host> injectedHost = nullptr);
     void run();
+
+#ifdef MATRIX_UI_CAPTURE
+    // Compiled ONLY into tools/ui_capture — the shipping binary never defines
+    // MATRIX_UI_CAPTURE, so neither method exists in it.
+    //
+    // captureGoTo() reaches a named UI state by SYNTHESIZING THE CLICKS a user
+    // would make, on the rects recalcLayout() itself computed. Being a member
+    // is the whole point: the tool never restates where the sidebar or the
+    // settings rows are, so the captures follow the layout instead of drifting
+    // behind it. Returns false for an unknown state name.
+    bool captureGoTo(const std::string& state);
+    // Draws exactly one frame and reads the swapchain image back as
+    // tightly-packed RGBA8 (Renderer::readbackLastFrame).
+    bool captureFrame(std::vector<uint8_t>& rgba, uint32_t& w, uint32_t& h);
+#endif
 
     // Host callbacks — public because Host (a separate object, not a
     // PlayerWindow subclass) dispatches into these directly, the same way
@@ -466,6 +488,19 @@ private:
     std::vector<AlbumGroup> albumGroups_;
     std::vector<int>        albumGroupOf_;   // albums_ index → albumGroups_ index
     void rebuildAlbumGroups();
+
+    // trackKey() → the (album, track) that should PLAY for that identity.
+    //
+    // A generated playlist is a list of keys, and a key is deliberately shared
+    // by every copy of the same music on disk (27 of 518 rows in the test
+    // library), so turning one back into something playable means choosing a
+    // copy. The choice is variantOutranks() (core/variants.h) — DSD over PCM,
+    // then sample rate, then bit depth — reused rather than restated, because
+    // a second answer to "which copy is best" is one answer too many.
+    //
+    // Rebuilt inside rebuildAlbumGroups(), so it can never be stale while
+    // albums_ is fresh. Read under albumsMu_ like albums_ itself.
+    std::unordered_map<std::string, std::pair<int, int>> trackKeyIndex_;
     // The other members of an album's group, best first, EXCLUDING the album
     // itself — what the album view lists below the artist bio. Empty when the
     // album has no siblings.
@@ -642,10 +677,56 @@ private:
     // background gaplessThread_ (see startGaplessCoordinator()) — without
     // this lock a rescan landing mid-gapless-preload is a use-after-free on
     // the vector's backing storage.
-    std::mutex albumsMu_;
+    // mutable so queueActive() can be const: it only reads, but reading these
+    // safely still means taking the lock.
+    mutable std::mutex albumsMu_;
     std::vector<Album> albums_;
     int  currentAlbum_ = -1;
     int  currentTrack_ = -1;
+
+    // ── The playlist queue ──────────────────────────────────────────────────
+    // Empty (queuePos_ < 0) is the ordinary case and the ordinary code path:
+    // browsing albums advances by (currentAlbum_, currentTrack_ + 1) and then
+    // nextAlbumInSection(), exactly as it always has. A queue only exists
+    // while a generated playlist is playing, because a playlist crosses albums
+    // and that model cannot express it.
+    //
+    // GUARDED BY albumsMu_, not by a lock of its own. prepareNextTrack() runs
+    // on the UI thread (via onPlay) AND on the background gapless coordinator,
+    // so queuePos_ advances from two threads — and albumsMu_ already protects
+    // albums_, which is precisely what these indices point into. One lock, one
+    // thing protected.
+    struct QueueEntry {
+        // The identity, kept alongside the indices so a rescan can re-resolve
+        // rather than force the queue to be thrown away mid-listen.
+        std::string trackKey;
+        int album = -1;
+        int track = -1;
+    };
+    std::vector<QueueEntry> queue_;
+    int queuePos_ = -1;
+
+    // True while a playlist is driving playback. Takes albumsMu_, so never
+    // call it from code already holding it — queueActiveLocked() is the
+    // in-lock form.
+    bool queueActive() const;
+    bool queueActiveLocked() const { return queuePos_ >= 0 && !queue_.empty(); }
+
+    // Replace the queue with `keys` (resolved through trackKeyIndex_, dropping
+    // what the library no longer has) and start at `startIndex` of what
+    // survived. Returns false when nothing resolved, leaving playback alone.
+    bool startQueue(const std::vector<std::string>& keys, int startIndex);
+
+    // Abandon the queue and go back to ordinary album navigation. Called ONLY
+    // from click handlers — never from a state change. applyTrackMetadata()
+    // reassigns selectedAlbumIdx_ at every gapless boundary, so hanging this
+    // off "the selected album changed" would make a playlist cancel itself on
+    // its own second track.
+    void clearQueue();
+
+    // Re-point the queue's indices at the new albums_ after a rescan, by key.
+    // Entries whose music is gone are dropped. Caller holds albumsMu_.
+    void reresolveQueueLocked();
 
     Decoder          decoder_;
     Decoder          nextDecoder_;

@@ -157,15 +157,47 @@ load-bearing.
       over `DATE` so a remaster reports the music's year, not the reissue's.
 - [x] **The aggregate API**: totals, top tracks/albums/artists/genres, local
       hour histogram, daily buckets, recently played, per-track totals, skip
-      rate.
+      rate, sessions.
+- [x] **A calendar day is one bucket, whatever the offset did inside it.**
+      `dailyListening()` and `Totals::activeDays` grouped on the UTC instant of
+      local midnight — an instant that moves with the offset, so a
+      daylight-saving Sunday or a day spent flying split into two rows and
+      counted twice. They group on the local DATE now (`LOCAL_DAY`), and
+      `DayBucket::dayLocal` is a local second rather than a UTC one. An earlier
+      version of `stats_test` had this assertion backwards; it now pins both
+      directions.
+- [x] **An album is title AND artist.** `topAlbums()` grouped on the title
+      alone, so two artists with a record called *Live* merged into one row
+      under whichever name `MAX()` picked. Latent on this library — no
+      collisions in 57 albums — but the same class of error as the `TRACK_REP`
+      fan-out, in the other direction.
+- [x] **Rankings can be ordered by time listened**, not only by play count
+      (`TopSort`). Different questions: on the test library *Genesys II* leads
+      by plays with 11 and by time with zero, because every one of those plays
+      is a migrated row that recorded no duration.
+- [x] **Range presets on local midnights** — `rangeFor()` in the new, pure
+      `core/src/stats.cpp`, alongside the civil-date arithmetic a calendar view
+      needs. Integer math, no `<ctime>`, so it is exactly testable.
+- [x] **`recentlyPlayed()` matches the rankings**: takes a range, and resolves
+      its labels through the same LEFT JOIN, so a deleted track keeps its place
+      in the history unnamed instead of vanishing from it alone.
+- [x] **`trackTotals()` reports first and last play**, out of the scan it was
+      already doing.
 
 Next, in the order it would be picked up:
 
 - [ ] **A statistics screen.** The data is ready and tested; nothing draws it.
       Full-page overlay over the content area, same pattern as the settings
-      panels (`gui/src/panels/settings_panels.hh`), reached from the sidebar.
-      Needs its own design pass against `docs/UI_DESIGN_SYSTEM.md` — this is
-      the first part of the app that is mostly numbers.
+      panels (`gui/src/panels/settings_panels.hh`). **Decided**: reached from a
+      fifth row on the Settings page (`Listening Statistics`, beside
+      `EQ / AutoEQ Profiles`), not from the sidebar — the headphone switcher
+      already occupies the sidebar's bottom. Needs its own design pass against
+      `docs/UI_DESIGN_SYSTEM.md` — this is the first part of the app that is
+      mostly numbers.
+      - Note for that pass: on a library upgraded from `play_history`, most
+        events are migrated rows carrying `ms_heard = 0` (43 of 51 on the test
+        library). Everything time-based reads near-empty at first. The screen
+        has to say so rather than disguise it.
 - [ ] **ID3 tag reading**, so MP3s carry genre and year. Today only Vorbis
       comments are parsed, which leaves every MP3 out of `topGenres()` and out
       of any year-based view.

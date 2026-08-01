@@ -10,6 +10,7 @@ add_library(matrix_core STATIC
     src/variants.cpp
     src/db.cpp
     src/db_stats.cpp
+    src/stats.cpp
     src/streamer_db.cpp
     src/eq_manager.cpp
     src/eq_profiles.cpp
@@ -83,6 +84,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         tests/stats_test.cc
         src/db.cpp
         src/db_stats.cpp
+        src/stats.cpp
         src/variants.cpp)
     target_include_directories(stats_test PRIVATE include src ${CMAKE_SOURCE_DIR}/third_party)
     target_link_libraries(stats_test PRIVATE sqlite3)

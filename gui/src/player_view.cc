@@ -181,8 +181,8 @@ static void drawSearchField(Canvas& canvas, const LayoutRect& rc, const std::str
 // Defined further down, next to the icon bake it exists to protect.
 static void pruneStaleCaches(const std::string& dir, const std::string& keepPath);
 
-bool PlayerWindow::create() {
-    host_ = make_host();
+bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
+    host_ = injectedHost ? std::move(injectedHost) : make_host();
 
     // Fixed, non-resizable window — both UI modes are fixed sizes the app
     // itself sets on toggle (toggleUiMode()), never left to interactive
@@ -2356,6 +2356,34 @@ void PlayerWindow::rebuildAlbumGroups() {
     for (int g = 0; g < (int)albumGroups_.size(); g++)
         for (int m : albumGroups_[g].members)
             albumGroupOf_[m] = g;
+
+    // Rebuild the key → playable-copy index in the same pass, so it cannot be
+    // stale while albums_ is fresh. A playlist is a list of trackKey()s and
+    // several copies of the same music legitimately share one; the copy that
+    // plays is the one on the album variantOutranks() prefers, which is the
+    // very ranking the grid already uses to pick a group's tile. One rule, one
+    // implementation.
+    trackKeyIndex_.clear();
+    trackKeyIndex_.reserve(albums_.size() * 12);
+    for (int ai = 0; ai < (int)albums_.size(); ai++) {
+        const Album& a = albums_[ai];
+        for (int ti = 0; ti < (int)a.tracks.size(); ti++) {
+            const std::string& key = a.tracks[ti].trackKey;
+            if (key.empty()) continue;
+            auto it = trackKeyIndex_.find(key);
+            if (it == trackKeyIndex_.end()) {
+                trackKeyIndex_.emplace(key, std::make_pair(ai, ti));
+            } else if (it->second.first != ai &&
+                       variantOutranks(a, albums_[it->second.first])) {
+                // Better copy of the same music. The album-level comparison is
+                // what decides: quality is a property of the release, not of
+                // the one file, and comparing per track would let a single
+                // odd-rate file drag a whole album's worth of history onto a
+                // copy nobody wants to hear.
+                it->second = std::make_pair(ai, ti);
+            }
+        }
+    }
 }
 
 // The 2x2 mosaic a REMIX group's tile wears instead of one cover. Returns
@@ -2896,14 +2924,26 @@ void PlayerWindow::onNext() {
     // Singles, where every album holds one track, that meant Next did nothing
     // at all. Resolved under the lock, then released: onPlay() takes it too.
     int wantedAlbum, wantedTrack;
+    int wantedQueuePos = -1;       // >= 0 only on the playlist path
     {
         std::lock_guard<std::mutex> lk(albumsMu_);
-        if (currentAlbum_ >= (int)albums_.size()) return;
-        wantedAlbum = currentAlbum_;
-        wantedTrack = currentTrack_ + 1;
-        if (wantedTrack >= (int)albums_[wantedAlbum].tracks.size()) {
-            wantedAlbum = nextAlbumInSection(wantedAlbum);
-            wantedTrack = 0;
+        if (queueActiveLocked()) {
+            // A playlist crosses albums, so "next" is the next ENTRY, not the
+            // next track of this album. At the end it stops, like the section
+            // walk below does.
+            const int next = queuePos_ + 1;
+            if (next >= (int)queue_.size()) return;
+            wantedQueuePos = next;
+            wantedAlbum    = queue_[next].album;
+            wantedTrack    = queue_[next].track;
+        } else {
+            if (currentAlbum_ >= (int)albums_.size()) return;
+            wantedAlbum = currentAlbum_;
+            wantedTrack = currentTrack_ + 1;
+            if (wantedTrack >= (int)albums_[wantedAlbum].tracks.size()) {
+                wantedAlbum = nextAlbumInSection(wantedAlbum);
+                wantedTrack = 0;
+            }
         }
     }
     if (wantedAlbum < 0) return;   // end of the section
@@ -2931,7 +2971,12 @@ void PlayerWindow::onNext() {
             // skip would be logged as an ordinary gapless advance — and
             // "tracks you bail out of" is exactly what that would hide.
             flushTrackStats(EndCause::Next);
-            gaplessStartCause_ = StartCause::Manual;
+            // Manual normally — the listener pressed Next. But inside a
+            // playlist the play still CAME OUT of the playlist, and letting it
+            // log as Manual would feed the very ranking the list was built
+            // from. Choosing a row is not the same as earning one.
+            gaplessStartCause_ = queueActive() ? StartCause::Playlist
+                                               : StartCause::Manual;
             active_->stop();
             output_->flush();
             {
@@ -2944,6 +2989,10 @@ void PlayerWindow::onNext() {
     }
 
     flushTrackStats(EndCause::Next);
+    if (wantedQueuePos >= 0) {
+        std::lock_guard<std::mutex> lk(albumsMu_);
+        queuePos_ = wantedQueuePos;
+    }
     currentAlbum_ = wantedAlbum;
     currentTrack_ = wantedTrack;
     onPlay();
@@ -2958,6 +3007,27 @@ void PlayerWindow::onPrev() {
     // Past this point every path changes track, so the outgoing one is banked
     // once here rather than at each of the two exits below.
     flushTrackStats(EndCause::Prev);
+
+    // A playlist walks its own entries backwards, ignoring album boundaries
+    // entirely — the previous entry may live in another album, or in the same
+    // one two tracks up. At the head it stops, mirroring onNext at the tail.
+    bool onQueue = false;
+    {
+        std::lock_guard<std::mutex> lk(albumsMu_);
+        if (queueActiveLocked()) {
+            onQueue = true;
+            if (queuePos_ <= 0) return;
+            const int prev = queuePos_ - 1;
+            const int a = queue_[prev].album, t = queue_[prev].track;
+            if (a < 0 || a >= (int)albums_.size() ||
+                t < 0 || t >= (int)albums_[a].tracks.size()) return;
+            queuePos_     = prev;
+            currentAlbum_ = a;
+            currentTrack_ = t;
+        }
+    }
+    if (onQueue) { onPlay(); return; }
+
     if (currentTrack_ > 0) {
         currentTrack_--;
         onPlay();
@@ -4187,6 +4257,11 @@ void PlayerWindow::onPlay(StartCause cause) {
         // this function, which is what clears the pending fields.
         cause = StartCause::Resume;
     }
+    // A playlist overrides all of the above, Manual included. What matters
+    // downstream is only that the play came OUT of a playlist: picking a row,
+    // pressing Next in one, or shuffling it are all the same fact, and none of
+    // them may feed the ranking the list was built from. See IS_AFFINITY.
+    if (queueActive()) cause = StartCause::Playlist;
     beginTrackStats(t, cause);
 
     // Update UI state. Fresh stream: display cursor == decode cursor, and the
@@ -4544,7 +4619,111 @@ int PlayerWindow::prevAlbumInSection(int album) const {
     return -1;
 }
 
+// ── The playlist queue ──────────────────────────────────────────────────────
+// A generated playlist crosses albums, which (currentAlbum_, currentTrack_ + 1)
+// plus nextAlbumInSection() cannot express. When the queue is empty every path
+// below falls through to exactly the old behaviour.
+
+bool PlayerWindow::queueActive() const {
+    std::lock_guard<std::mutex> lk(albumsMu_);
+    return queueActiveLocked();
+}
+
+bool PlayerWindow::startQueue(const std::vector<std::string>& keys, int startIndex) {
+    std::lock_guard<std::mutex> lk(albumsMu_);
+    // Lay the keys down unresolved and let reresolveQueueLocked() do the
+    // resolving — it is the same job it does after a rescan, and one resolver
+    // means "what happens to a key the library no longer holds" is decided in
+    // exactly one place.
+    queue_.clear();
+    queue_.reserve(keys.size());
+    for (const std::string& k : keys) queue_.push_back({ k, -1, -1 });
+    queuePos_ = (startIndex >= 0 && startIndex < (int)keys.size()) ? startIndex : 0;
+
+    reresolveQueueLocked();
+    if (queue_.empty()) { queuePos_ = -1; return false; }
+    currentAlbum_ = queue_[queuePos_].album;
+    currentTrack_ = queue_[queuePos_].track;
+    return true;
+}
+
+void PlayerWindow::clearQueue() {
+    std::lock_guard<std::mutex> lk(albumsMu_);
+    queue_.clear();
+    queuePos_ = -1;
+}
+
+void PlayerWindow::reresolveQueueLocked() {
+    if (queue_.empty()) return;
+    // Point every entry at the copy that should play, and drop the entries
+    // whose music the library no longer has. A hole would be worse than an
+    // absence: the log keeps deleted music on purpose, but a queue is a list
+    // of things to PLAY and a gap in it is just a stall.
+    //
+    // The entry at queuePos_ is the anchor — after a rescan the listener must
+    // still be on the same music, whatever moved around it. If the anchor
+    // itself is gone, the queue restarts from the top, which is the only
+    // honest answer when the thing it was pointing at no longer exists.
+    const std::string anchor = (queuePos_ >= 0 && queuePos_ < (int)queue_.size())
+                             ? queue_[queuePos_].trackKey : std::string();
+    std::vector<QueueEntry> kept;
+    kept.reserve(queue_.size());
+    int newPos = 0;
+    for (const QueueEntry& e : queue_) {
+        auto it = trackKeyIndex_.find(e.trackKey);
+        if (it == trackKeyIndex_.end()) continue;
+        if (e.trackKey == anchor) newPos = (int)kept.size();
+        kept.push_back({ e.trackKey, it->second.first, it->second.second });
+    }
+    if (kept.empty()) { queue_.clear(); queuePos_ = -1; return; }
+    queue_    = std::move(kept);
+    queuePos_ = newPos;   // always < kept.size(): it is read from it above
+}
+
 void PlayerWindow::prepareNextTrack() {
+    {
+        // The queue owns "what plays next" whenever it is active.
+        //
+        // It only READS queuePos_ here. The cursor tracks what is PLAYING, not
+        // what has been preloaded, exactly as currentAlbum_/currentTrack_ do
+        // beside nextAlbum_/nextTrack_ — so it advances where those advance
+        // (the gapless coordinator, onNext, onPrev), never here. Advancing it
+        // on preload would put the cursor one track ahead of the audio, and
+        // Prev would then skip two.
+        bool handled = false;
+        std::string preloadPath;
+        {
+            std::lock_guard<std::mutex> lk(albumsMu_);
+            if (queueActiveLocked()) {
+                handled = true;
+                const int next = queuePos_ + 1;
+                nextAlbum_ = nextTrack_ = -1;
+                // End of the playlist: stop rather than wrap or spill into the
+                // library, mirroring nextAlbumInSection() returning -1 at the
+                // end of a section.
+                if (next < (int)queue_.size()) {
+                    const int a = queue_[next].album, t = queue_[next].track;
+                    if (a >= 0 && a < (int)albums_.size() &&
+                        t >= 0 && t < (int)albums_[a].tracks.size()) {
+                        nextAlbum_  = a;
+                        nextTrack_  = t;
+                        preloadPath = albums_[a].tracks[t].filePath;
+                    }
+                }
+            }
+        }
+        // Disk I/O outside the lock, same rule as the album path below: it
+        // must not be able to block onScanDone() for the length of a file open.
+        if (handled) {
+            if (!preloadPath.empty()) {
+                Decoder* preload = (active_ == &decoder_) ? &nextDecoder_ : &decoder_;
+                preload->close();
+                preload->open(preloadPath);
+            }
+            return;
+        }
+    }
+
     int album = currentAlbum_;
     int track = currentTrack_ + 1;
     std::string preloadPath;
@@ -4627,6 +4806,14 @@ void PlayerWindow::startGaplessCoordinator(PcmS32Callback cbI32, int outSr, int 
             active_ = incoming;
             currentAlbum_ = nextAlbum_;
             currentTrack_ = nextTrack_;
+            {
+                // The queue's cursor advances with the decode cursor, in the
+                // same breath, because prepareNextTrack() derived nextAlbum_/
+                // nextTrack_ from queuePos_ + 1 and this is the moment that
+                // preloaded track becomes the playing one.
+                std::lock_guard<std::mutex> lk(albumsMu_);
+                if (queuePos_ >= 0 && queuePos_ + 1 < (int)queue_.size()) queuePos_++;
+            }
             // A seamless handoff never reaches onPlay(), so without this line
             // an automatic advance leaves no record of WHERE it went — which
             // is precisely what has to be checkable about it (it must stay
@@ -4860,7 +5047,14 @@ void PlayerWindow::applyTrackMetadata(int album, int track) {
     // so this flush finds nothing and the verdict it set stands.
     flushTrackStats(EndCause::Natural);
     beginTrackStats(nt, gaplessStartCause_);
-    gaplessStartCause_ = StartCause::Gapless;   // consumed; back to the default
+    // Consumed; back to the default — and inside a playlist the default is
+    // Playlist, not Gapless. THIS IS LOAD-BEARING. The seamless path never
+    // reaches onPlay(), so setting the cause there alone would exclude only
+    // the FIRST track of a playlist and let every chained advance after it
+    // feed the ranking — which is precisely the self-reinforcing loop
+    // IS_AFFINITY exists to prevent. See db_stats.cpp.
+    gaplessStartCause_ = queueActive() ? StartCause::Playlist
+                                       : StartCause::Gapless;
     displayAlbum_   = album;
     displayTrack_   = track;
     currentTitle_  = nt.title;
@@ -4974,6 +5168,15 @@ void PlayerWindow::onScanDone() {
 
     rebuildAlbumGroups();  // albums_ changed — regroup before the tile mapping
     rebuildGridIndices();  // albums_ changed — refresh the (possibly filtered) tile mapping
+    {
+        // Every index into albums_ is dead now, the queue's included. Re-point
+        // it by trackKey rather than dropping it: a background rescan finishing
+        // mid-playlist is not a reason to stop the music the listener chose.
+        // rebuildAlbumGroups() has just refreshed trackKeyIndex_, so this reads
+        // the new mapping.
+        std::lock_guard<std::mutex> lk(albumsMu_);
+        reresolveQueueLocked();
+    }
     recalcLayout();
     invalidate();
 
@@ -5099,3 +5302,131 @@ void PlayerWindow::shutdown() {
     // after this returns.
     renderer_.reset();
 }
+
+#ifdef MATRIX_UI_CAPTURE
+// ── Headless UI capture (tools/ui_capture) ───────────────────────────────────
+//
+// Compiled only into the capture tool. Everything here drives the app through
+// its ORDINARY entry points — the same onLButtonDown() the Wayland backend
+// calls, the same drawFrame() run() calls — so a capture is a photograph of the
+// app, not a re-staging of it. The one thing being a member buys is access to
+// the rects recalcLayout() already computed; a tool that hardcoded sidebar
+// coordinates would silently photograph the wrong pixels the first time the
+// sidebar moved.
+
+namespace {
+// Center of a rect, which is where a user aims.
+inline void centerOf(const LayoutRect& r, int& x, int& y) {
+    x = (r.left + r.right) / 2;
+    y = (r.top + r.bottom) / 2;
+}
+}
+
+bool PlayerWindow::captureFrame(std::vector<uint8_t>& rgba, uint32_t& w, uint32_t& h) {
+    // Album art is decoded on a worker thread and delivered by
+    // host_->postAppEvent(AppEvent::ArtDecoded) — which a headless Host has
+    // nowhere to deliver to. So settle the frame here instead: drawing is what
+    // QUEUES the decodes (getGridArtTexture() enqueues for the tiles actually
+    // on screen), onArtDecoded() takes delivery and uploads the textures, and
+    // the next draw finally has them. Without this loop every screenshot shows
+    // the placeholder rectangles — which is to say, none of the artwork the
+    // grid is built around.
+    for (int i = 0; i < 250; i++) {
+        drawFrame();
+        onArtDecoded();
+        if (artDecodePending_.empty()) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    drawFrame();
+    return renderer_->readbackLastFrame(rgba, w, h);
+}
+
+bool PlayerWindow::captureGoTo(const std::string& state) {
+    // Every state starts from the grid, so a capture list is order-independent
+    // (a panel left open by the previous scenario would otherwise leak into
+    // the next screenshot).
+    auto click = [&](const LayoutRect& r) {
+        int x, y; centerOf(r, x, y);
+        onMouseMove(x, y);       // hover first — the real pointer always does
+        onLButtonDown(x, y);
+    };
+    auto reset = [&] {
+        activePanel_    = SettingsPanel::None;
+        settingsOpen_   = false;
+        trackPanelOpen_ = false;
+        searchFocused_  = false;
+        searchQuery_.clear();
+        rebuildGridIndices();
+        recalcLayout();
+    };
+
+    reset();
+
+    if (state == "10-grid-albums")  { click(rcNavAlbum_);  return true; }
+    if (state == "11-grid-eps")     { click(rcNavEp_);     return true; }
+    if (state == "12-grid-singles") { click(rcNavSingle_); return true; }
+    if (state == "13-grid-remixes") { click(rcNavRemix_);  return true; }
+
+    if (state == "14-grid-hover") {
+        // The grid tile hover state — one of the few pieces of the visual
+        // language that never appears in a static shot otherwise.
+        click(rcNavAlbum_);
+        if (gridIndices_.empty()) return false;
+        drawFrame();
+        onMouseMove(rcGrid_.left + (rcGrid_.right - rcGrid_.left) / 4,
+                    rcGrid_.top + gridTileSize_ / 2 + (int)metrics_.space((float)gridPadY_));
+        return true;
+    }
+
+    if (state == "20-album-view") {
+        click(rcNavAlbum_);
+        if (gridIndices_.empty()) return false;
+        onAlbumSelected(gridIndices_[0]);
+        return true;
+    }
+
+    if (state == "30-settings") { click(rcNavSettings_); return true; }
+
+    if (state == "31-manage-folders") {
+        click(rcNavSettings_); drawFrame();
+        click(rcSettingsManage_);
+        return true;
+    }
+    if (state == "32-audio-settings") {
+        click(rcNavSettings_); drawFrame();
+        click(rcSettingsAudio_);
+        return true;
+    }
+    if (state == "33-eq-settings") {
+        click(rcNavSettings_); drawFrame();
+        click(rcSettingsEq_);
+        return true;
+    }
+    if (state == "34-eq-all-profiles") {
+        // The panel opens on "My Headphones" (33 above), so this is the other
+        // tab: the full 8600-profile catalogue, which is the state that shows
+        // what a long list looks like in this design.
+        click(rcNavSettings_); drawFrame();
+        click(rcSettingsEq_);
+        // The tab rects are written while the panel draws (the same
+        // draw-then-hit-test pattern the album view uses), so the panel has to
+        // have been on screen once before its tabs can be clicked.
+        drawFrame();
+        click(eqTabAll_);
+        return true;
+    }
+    if (state == "35-folder-picker") {
+        click(rcNavSettings_); drawFrame();
+        click(rcSettingsAddFolder_);
+        return true;
+    }
+
+    if (state == "40-search") {
+        click(rcSearch_);
+        for (char c : std::string("love")) onCharPortable((uint32_t)c);
+        return true;
+    }
+
+    return false;
+}
+#endif  // MATRIX_UI_CAPTURE

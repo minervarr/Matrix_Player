@@ -32,6 +32,11 @@ struct TrackStats {
     int64_t playCount    = 0;
     int64_t skipCount    = 0;
     int64_t listenTimeMs = 0;
+    // Unix seconds of the first and last time this identity reached the
+    // transport, 0 when it never did. They come out of the same scan as the
+    // counters above, so asking for them costs nothing.
+    int64_t firstPlayed  = 0;
+    int64_t lastPlayed   = 0;
 };
 
 // What was playing when the app last closed, for resume on launch.
@@ -90,14 +95,58 @@ public:
     // columns, so those rows can only be counted while the track still exists
     // — the one place a deletion costs history, and it costs it only here.
     Totals totals(const StatsRange& range);
-    std::vector<TopEntry>   topTracks (const StatsRange& range, int limit);
-    std::vector<TopEntry>   topAlbums (const StatsRange& range, int limit);
-    std::vector<TopEntry>   topArtists(const StatsRange& range, int limit);
-    std::vector<TopEntry>   topGenres (const StatsRange& range, int limit);
+
+    // TopSort picks the measure the ranking is ordered by; the other measure
+    // is returned regardless, so a caller can flip between them without a
+    // second query.
+    std::vector<TopEntry> topTracks (const StatsRange& range, int limit,
+                                     TopSort sort = TopSort::Plays);
+    std::vector<TopEntry> topAlbums (const StatsRange& range, int limit,
+                                     TopSort sort = TopSort::Plays);
+    std::vector<TopEntry> topArtists(const StatsRange& range, int limit,
+                                     TopSort sort = TopSort::Plays);
+    std::vector<TopEntry> topGenres (const StatsRange& range, int limit,
+                                     TopSort sort = TopSort::Plays);
+
     std::vector<HourBucket> hourHistogram (const StatsRange& range);
     std::vector<DayBucket>  dailyListening(const StatsRange& range);
-    std::vector<PlayEvent>  recentlyPlayed(int limit);
+    std::vector<PlayEvent>  recentlyPlayed(const StatsRange& range, int limit);
     TrackStats trackTotals(const std::string& trackKey);
+
+    // Sessions folded out of the timestamps. gapSec is what separates one from
+    // the next: 30 minutes by default, because shorter lets a meal break an
+    // evening in two and longer merges that evening with the next morning.
+    SessionStats sessions(const StatsRange& range, int gapSec = 1800);
+
+    // ── Generated playlists ─────────────────────────────────────────────────
+    // Nothing here is stored: a playlist IS one of these queries, recomputed
+    // when the section opens. That is why no generated list can ever drift
+    // from the log — there is no second copy of it to drift.
+    //
+    // The first two rank on IS_AFFINITY (see db_stats.cpp), so a play only
+    // counts when it ran to the end AND did not itself come out of a playlist.
+    // Without that second half the list feeds itself and its top row can never
+    // be overtaken.
+
+    // Most completed, deliberate plays. The "safe bet" list.
+    std::vector<TopEntry> heavyRotation(const StatsRange& range, int limit);
+
+    // Once loved, long untouched: at least `minPlays` completed deliberate
+    // plays, and nothing at all since `notSinceUnix`.
+    std::vector<TopEntry> forgottenFavourites(int limit, int minPlays,
+                                              int64_t notSinceUnix);
+
+    // Library tracks with no play_events row at all — the counterpart to the
+    // rankings above, and the only one of the four that says anything on a
+    // fresh install. The ONE query that starts from `tracks` rather than from
+    // the log, grouped by track_key so three copies of one track are one
+    // entry. Ordered artist ⨯ album ⨯ disc ⨯ track, so it plays as whole
+    // albums in their own order rather than as a loose bag.
+    //
+    // limit <= 0 means NO limit: "play everything I don't know" is the whole
+    // point, and capping it would quietly decide how much of your own library
+    // you are allowed to meet.
+    std::vector<TopEntry> neverHeard(int limit);
 
     // Skipped plays as a fraction of judgeable plays, 0..1 (0 if none).
     // Rows migrated from the old play_history log never recorded how they

@@ -175,6 +175,17 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         target_compile_options(ui_icons_test PRIVATE -Wall)
     endif()
 
+    # ui_text_test — ordinal suffixes for ranked playlist rows. One include and
+    # no link line, because src/ui_text.hh is header-only and pulls in nothing
+    # but <string>. The rule worth guarding is the teens (11th, not 11st) and
+    # its repeat every hundred (111th, not 111st): wrong, it reads as a typo
+    # rather than as a bug, which is exactly how such things survive.
+    add_executable(ui_text_test src/ui_text_test.cc)
+    target_include_directories(ui_text_test PRIVATE src)
+    if(NOT WIN32)
+        target_compile_options(ui_text_test PRIVATE -Wall)
+    endif()
+
     # icon_preview — standalone window showing ONLY the icons, at a ladder of
     # sizes plus the sizes the app really draws them at. An MTSDF bake is only
     # sharp within a range around its baked density, and judging that needs the
@@ -197,5 +208,67 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         target_link_libraries(icon_preview PRIVATE
             vk_canvas_core
             vk_canvas_wayland)
+    endif()
+
+    # matrix_ui_capture — headless PNG screenshots of the REAL UI (no window,
+    # no compositor, no DAC): VK_EXT_headless_surface via vk_canvas's
+    # core/headless.hh, plus a Host implementation that answers "there is no
+    # window" to everything else. See tools/ui_capture/main.cc.
+    #
+    # It compiles the app's own sources a second time with MATRIX_UI_CAPTURE
+    # defined (which is what exposes PlayerWindow::captureGoTo/captureFrame) —
+    # NOT a link against matrix_player, which is an executable owning main().
+    # The two swaps versus that source list: gui_main.cc and os/linux_host.cc
+    # are out (both define an entry point; the tool has its own), and the
+    # tool's main.cc is in.
+    #
+    # Linux-only for now, same reason icon_preview is: it needs the Wayland
+    # backend's FileAssetReader. A Windows equivalent would swap that for
+    # win32_platform.cc's reader and drop nothing else.
+    if(NOT WIN32)
+        add_executable(matrix_ui_capture
+            ${CMAKE_SOURCE_DIR}/tools/ui_capture/main.cc
+            src/player_view.cc
+            src/art_view.cc
+            src/ui_metrics.cc
+            src/ui_icons.cc
+            src/ui_icons_draw.cc
+            src/panels/settings_panels.cc
+            ${MATRIX_LINUX_AUDIO_SOURCES}
+            ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/linux/wayland_platform.cc)
+
+        target_compile_definitions(matrix_ui_capture PRIVATE MATRIX_UI_CAPTURE)
+        if(TARGET ae_alsa)
+            target_compile_definitions(matrix_ui_capture PRIVATE MATRIX_HAVE_ALSA)
+        endif()
+        if(TARGET ae_jack)
+            target_compile_definitions(matrix_ui_capture PRIVATE MATRIX_HAVE_JACK)
+        endif()
+
+        target_include_directories(matrix_ui_capture PRIVATE
+            src
+            ${CMAKE_SOURCE_DIR}/third_party
+            ${CMAKE_SOURCE_DIR}/third_party/soxr/src
+            ${CMAKE_BINARY_DIR}/generated
+            ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/linux
+            # stb_image_write.h (public domain, vendored by vk_canvas's own
+            # capture runner) — header-only, so no link against that target.
+            ${CMAKE_SOURCE_DIR}/framework/vk_canvas/core/capture)
+
+        target_compile_options(matrix_ui_capture PRIVATE -Wall)
+        add_dependencies(matrix_ui_capture
+            compile_shared_shaders compile_vk_canvas_shaders generate_ui_min_text_size)
+
+        find_package(Threads REQUIRED)
+        target_link_libraries(matrix_ui_capture PRIVATE
+            matrix_core
+            ae_usb
+            ${MATRIX_LINUX_AUDIO_LIBS}
+            sqlite3
+            soxr
+            turbojpeg-static
+            vk_canvas_core
+            vk_canvas_wayland
+            Threads::Threads)
     endif()
 endif()
