@@ -335,7 +335,7 @@ with:
             // cross the screen to pair them. The cap is a reading measure, so
             // it scales like type rather than like the window: past it, extra
             // width buys nothing and costs the pairing.
-            float colW = std::min(tp.x + tp.w - pad - colX, metrics_.space(1180.0f));
+            float colW = std::min(tp.x + tp.w - pad - colX, metrics_.space(820.0f));
 ```
 
 - [ ] **Step 2: Build and capture**
@@ -347,7 +347,15 @@ cd build/linux_debug/gui
 ./matrix_ui_capture --out /tmp/t2-1080 --frame 1920x1080 --only album-view
 ```
 
-Look at `20-album-view.png`. Expected: title and duration read as one row at 1440. At 1080 the cap should be at or near inactive (the window is narrower than the cap) — if the 1080 shot changed noticeably, the cap is too small; raise it and re-capture.
+Look at `20-album-view.png`. Expected: title and duration read as one row.
+
+**The cap binds at both resolutions, and that is deliberate.** An earlier draft of
+this plan used `space(1180.0f)` and did nothing at all: the cap passes through
+`space()`, so it grows with the window exactly as fast as the content it was
+meant to bound, and both test resolutions are 16:9 — in authored units their
+geometry is identical, `colW` resolving to ~925 either way, well under 1180.
+A reading measure scaling with the type is right; the NUMBER has to sit below
+the uncapped width or the code is decoration. 820 is ~11% under it.
 
 - [ ] **Step 3: Verify the row rectangle followed**
 
