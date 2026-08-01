@@ -3855,9 +3855,13 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     float btnW = metrics_.space(277.0f);
     float gap  = metrics_.space(SP_MD);
     int by = (int)(content.bottom - (btnH + pad));
+    // Slot 0 is the PRIMARY and sits hard right, matching Manage Folders,
+    // Audio Settings and the folder picker. Secondaries fill leftward. This
+    // panel used to lay out left-to-right, so it was the one page of four
+    // where the green button changed sides.
     auto btnAt = [&](int slot) -> LayoutRect {
-        float x0 = content.left + pad + slot * (btnW + gap);
-        return { (int)x0, by, (int)(x0 + btnW), (int)(by + btnH) };
+        float x1 = content.right - pad - slot * (btnW + gap);
+        return { (int)(x1 - btnW), by, (int)x1, (int)(by + btnH) };
     };
     eqBtnAssign_ = btnAt(0);
     if (eqShowMine_) {
