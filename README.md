@@ -1,7 +1,6 @@
 
 # Matrix_Player
 <img width="7680" height="4320" alt="3a-playlists-row-hover" src="https://github.com/minervarr/Matrix_Player/releases/download/v1/HighQuality_Preview.png" />
-<img width="7680" height="4320" alt="10-grid-albums" src="https://github.com/user-attachments/assets/9efc6bce-0949-4acc-a64f-0fb9c5ae33ad" />
 <img width="7680" height="4320" alt="11-grid-eps" src="https://github.com/user-attachments/assets/13c5d570-ea06-42f4-b148-52099a4d0a99" />
 <img width="7680" height="4320" alt="12-grid-singles" src="https://github.com/user-attachments/assets/155a7523-e167-49c7-8c4b-d82b2449147d" />
 <img width="7680" height="4320" alt="13-grid-compilations" src="https://github.com/user-attachments/assets/2672898d-47f7-44fd-9736-13a1a0c2731e" />
