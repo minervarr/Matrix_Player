@@ -4,7 +4,7 @@
 # (NOT pipewire-jack), wayland-client/wayland-cursor/xkbcommon dev headers,
 # a Vulkan loader + headers, and the Slang shader compiler (slangc).
 #
-# Usage: scripts/linux/build.sh [--debug|--release|--share] [--clean] [cmake args...]
+# Usage: scripts/linux/build.sh [--debug|--release|--share|--packages] [--clean] [cmake args...]
 # Passing a mode flag explicitly (scripts, CI) always skips straight to the
 # build — same for non-interactive stdin (defaults to Release, Universal).
 #
@@ -17,7 +17,8 @@
 #     2) Native               -- tuned to this exact CPU (-march=native)
 #     3) Custom                -- enter any -march value (v2/v3/v4/znver4/...)
 #     4) All                   -- build universal/v3/v4/zen4 in one pass
-#   Scene 2 — build type:
+#     5) Packages              -- the same four as Arch packages, for upload
+#   Scene 2 — build type (skipped for Packages, which is Release by definition):
 #     1) Release (default)
 #     2) Debug
 #
@@ -42,6 +43,7 @@ cd "$(dirname "$0")/../.."
 
 BUILD_TYPE=Release
 SHARE=0
+PACKAGES=0
 CLEAN=0
 MODE_SET=0
 ARCH_LEVEL=""
@@ -50,11 +52,12 @@ CMAKE_ARGS=()
 
 for arg in "$@"; do
     case "$arg" in
-        --debug)   BUILD_TYPE=Debug; MODE_SET=1 ;;
-        --release) BUILD_TYPE=Release; MODE_SET=1 ;;
-        --share)   SHARE=1; MODE_SET=1 ;;
-        --clean)   CLEAN=1 ;;
-        *)         CMAKE_ARGS+=("$arg") ;;
+        --debug)    BUILD_TYPE=Debug; MODE_SET=1 ;;
+        --release)  BUILD_TYPE=Release; MODE_SET=1 ;;
+        --share)    SHARE=1; MODE_SET=1 ;;
+        --packages) PACKAGES=1; MODE_SET=1 ;;
+        --clean)    CLEAN=1 ;;
+        *)          CMAKE_ARGS+=("$arg") ;;
     esac
 done
 
@@ -67,7 +70,8 @@ if [[ "$MODE_SET" -eq 0 && -t 0 ]]; then
     echo "  2) Native -- tuned to this exact CPU (-march=native)"
     echo "  3) Custom -- enter a specific -march value (v2/v3/v4/znver4/...)"
     echo "  4) All -- build universal/v3/v4/zen4 in one pass"
-    read -r -p "Enter choice [1-4, default 1]: " arch_choice
+    echo "  5) Packages -- the same four as Arch packages, for upload"
+    read -r -p "Enter choice [1-5, default 1]: " arch_choice
     case "$arch_choice" in
         ""|1) ;;
         2) ARCH_LEVEL="native"; ARCH_SUFFIX="_native" ;;
@@ -81,18 +85,25 @@ if [[ "$MODE_SET" -eq 0 && -t 0 ]]; then
             ARCH_SUFFIX="_custom-${custom_level}"
             ;;
         4) SHARE=1 ;;
+        5) PACKAGES=1 ;;
         *) echo "error: invalid choice '$arch_choice'" >&2; exit 2 ;;
     esac
 
-    echo "Select build type:"
-    echo "  1) Release (default)"
-    echo "  2) Debug"
-    read -r -p "Enter choice [1-2, default 1]: " type_choice
-    case "$type_choice" in
-        ""|1) BUILD_TYPE=Release ;;
-        2)     BUILD_TYPE=Debug ;;
-        *)     echo "error: invalid choice '$type_choice'" >&2; exit 2 ;;
-    esac
+    # Packages are Release by definition — the PKGBUILD hardcodes it, and a
+    # Debug package (symbols, no LTO, smoke-test tools) is not something you
+    # hand anyone. Skip the question rather than ask one whose answer is
+    # ignored.
+    if [[ "$PACKAGES" -eq 0 ]]; then
+        echo "Select build type:"
+        echo "  1) Release (default)"
+        echo "  2) Debug"
+        read -r -p "Enter choice [1-2, default 1]: " type_choice
+        case "$type_choice" in
+            ""|1) BUILD_TYPE=Release ;;
+            2)     BUILD_TYPE=Debug ;;
+            *)     echo "error: invalid choice '$type_choice'" >&2; exit 2 ;;
+        esac
+    fi
 fi
 
 # vk_canvas resolves slangc from $VULKAN_SDK/bin/slangc, falling back to a
@@ -105,6 +116,90 @@ if [[ "${CMAKE_ARGS[*]:-}" != *"VCE_SLANGC"* && -z "${VULKAN_SDK:-}" ]]; then
     elif [[ -x /opt/shader-slang-bin/bin/slangc ]]; then
         SLANGC_ARG=(-DVCE_SLANGC=/opt/shader-slang-bin/bin/slangc)
     fi
+fi
+
+if [[ "$PACKAGES" -eq 1 ]]; then
+    # The Arch-package sibling of --share: same four microarch variants, but
+    # built by makepkg into installable .pkg.tar.zst files instead of tarballs.
+    #
+    # This script does NOT rebuild anything itself here. Everything — the four
+    # configures, the dsp_null_test gate per variant, and the four self-
+    # contained packages — lives in packaging/arch/PKGBUILD, because that is
+    # where a person reading the package expects to find it, and because
+    # makepkg has to own $srcdir for its checksums to mean anything.
+    #
+    # The PKGBUILD builds the last PUSHED commit, not this working tree.
+    PKG_DIR=packaging/arch
+    DIST_DIR=dist/linux
+
+    # WHERE MAKEPKG PUTS ITS WORKING FILES — this is load-bearing, not tidiness.
+    #
+    # Left alone, all of these default to $startdir, i.e. packaging/arch/ itself
+    # (makepkg: `${!var:-$startdir}`). For a git source that means makepkg drops
+    # a BARE CLONE OF THIS ENTIRE REPOSITORY at packaging/arch/matrix_player/ —
+    # a ~97 MB packfile sitting in the working tree, which is exactly how one
+    # got committed and pushed. A .gitignore entry is a second line of defence;
+    # this is the first, because build/ and dist/ are ignored wholesale at the
+    # repo root rather than by a nested pattern that can be missed.
+    #
+    # Absolute paths: makepkg runs with its own $startdir, so relative ones
+    # would resolve against packaging/arch/.
+    export SRCDEST="$PWD/build/packaging/src"      # VCS clones + source tarballs
+    export BUILDDIR="$PWD/build/packaging/build"   # src/ and pkg/ extraction
+    export PKGDEST="$PWD/$DIST_DIR"                # finished packages, straight to dist/
+    mkdir -p "$SRCDEST" "$BUILDDIR" "$PKGDEST"
+
+    if ! command -v makepkg >/dev/null 2>&1; then
+        echo "error: makepkg not found — this mode needs base-devel" >&2
+        exit 2
+    fi
+    if [[ ! -f "$PKG_DIR/PKGBUILD" ]]; then
+        echo "error: $PKG_DIR/PKGBUILD not found" >&2
+        exit 2
+    fi
+    if [[ "$BUILD_TYPE" == "Debug" ]]; then
+        echo "note: --packages is always Release; ignoring --debug." >&2
+    fi
+    if [[ ${#CMAKE_ARGS[@]} -gt 0 ]]; then
+        echo "note: extra cmake args are not forwarded to makepkg;" >&2
+        echo "      edit $PKG_DIR/PKGBUILD's build() instead: ${CMAKE_ARGS[*]}" >&2
+    fi
+
+    if [[ "$CLEAN" -eq 1 ]]; then
+        echo "Cleaning build/packaging and previous packages..."
+        rm -rf build/packaging
+        rm -f "$DIST_DIR"/*.pkg.tar.zst
+        mkdir -p "$SRCDEST" "$BUILDDIR"
+    fi
+
+    echo
+    echo "==> makepkg: four variants, each a full build (this takes a while)"
+    # -f so a re-run overwrites; no -i, since installing one of four on the
+    # build machine is a separate decision from producing them.
+    ( cd "$PKG_DIR" && makepkg -f )
+
+    # PKGDEST already put them in $DIST_DIR, next to the --share tarballs, so
+    # there is one place to upload from and nothing to move.
+    shopt -s nullglob
+    built=("$DIST_DIR"/*.pkg.tar.zst)
+    shopt -u nullglob
+    if [[ ${#built[@]} -eq 0 ]]; then
+        echo "error: makepkg reported success but produced no packages" >&2
+        exit 1
+    fi
+
+    echo
+    echo "Packages in $DIST_DIR/:"
+    for p in "${built[@]}"; do
+        printf '  %6s  %s\n' "$(du -h "$p" | cut -f1)" "$p"
+    done
+    echo
+    echo "Each is self-contained — a recipient downloads ONE and runs:"
+    echo "  sudo pacman -U <file>"
+    echo "They can check which variant their CPU supports with:"
+    echo "  /lib/ld-linux-x86-64.so.2 --help | grep -A4 'Subdirectories of glibc-hwcaps'"
+    echo "universal works everywhere; v3/v4/zen4 only where that line says 'supported'."
+    exit 0
 fi
 
 if [[ "$SHARE" -eq 1 ]]; then

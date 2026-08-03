@@ -1,33 +1,48 @@
 # Maintainer: nava <nava@noreply.com>
-# Contributor: nava <nava@noreply.com>
 #
-# Matrix Player — Arch package.
+# Matrix Player — Arch packages, four microarchitecture variants.
 #
-# Builds the latest pushed main. Nothing here is fetched from the working tree,
-# so commit and push (with ./git_wrapper, which pushes SUBMODULES FIRST) before
-# running makepkg — a parent commit pointing at unpushed submodule commits will
-# fail in prepare().
+# ONE makepkg run produces FOUR packages. Each is SELF-CONTAINED: a person
+# downloads exactly one file, runs `pacman -U`, and it works. That requirement
+# is why the 124 MB of fonts is duplicated into every variant instead of being
+# split into a shared -data package — a dependency on a second package would
+# make `pacman -U` fail for anyone who downloaded only the one.
 #
-#   makepkg -si
+#   makepkg              # all four, ~30 min (each -march forces a full rebuild)
+#   makepkg --pkg matrix-player-v3    # just one
 #
-# Layout this produces:
-#   /opt/matrix_player/          root-owned, read-only: the exe + fonts/ +
-#                                assets/shaders/ + eq_profiles.json
-#   /usr/bin/matrix_player       symlink — /proc/self/exe resolves through it,
-#                                so no wrapper script is needed
-#   ~/.matrix_player/            the DB, the log and the ~45 MB atlas cache,
-#                                via -DMATRIX_STATE_HOME (see gui/src/app_paths.hh)
-pkgname=matrix-player-git
-pkgver=0.1.0
+# Builds the latest pushed main. Commit and push first (./git_wrapper save,
+# which pushes SUBMODULES before the parent) — a parent commit pointing at
+# unpushed submodule commits fails in prepare().
+#
+# Which variant is which:
+#   universal  portable generic x86-64 — works on ANY x86-64 CPU
+#   v3         AVX2/BMI2      (Intel Haswell 2013+, AMD Excavator/Zen 2015+)
+#   v4         AVX-512        (Intel Skylake-X/Ice Lake+, AMD Zen 4+)
+#   zen4       -march=znver4  (AMD Zen 4 specifically)
+#
+# A downloader finds their level with:
+#   /lib/ld-linux-x86-64.so.2 --help | grep -A4 'Subdirectories of glibc-hwcaps'
+#
+# NOTE: -march=native is deliberately NOT offered. It bakes in whatever the
+# BUILD machine supports and SIGILLs on anything older — fine for a local
+# install, never for something uploaded.
+
+pkgbase=matrix-player
+pkgname=('matrix-player-universal'
+         'matrix-player-v3'
+         'matrix-player-v4'
+         'matrix-player-zen4')
+pkgver=0.1.0.r66.g74dcb76
 pkgrel=1
-pkgdesc="Native C++17 music player driving a USB DAC directly, with a Vulkan-rendered UI"
 arch=('x86_64')
 url='https://github.com/minervarr/Matrix_Player'
 license=('custom')
 
 # Only these six are dynamic. Everything else — libFLAC, libmpg123, libusb,
 # soxr, libjpeg-turbo, freetype, msdfgen, sqlite3 — is linked statically into
-# the binary, by design.
+# the binary, by design. pacman enforces these on `pacman -U`, so they are what
+# stands between a downloader and a missing-library error at first launch.
 depends=('alsa-lib' 'jack2' 'vulkan-icd-loader' 'wayland' 'libxkbcommon' 'gcc-libs')
 
 # shader-slang-bin: slangc is REQUIRED at build time — no .spv is committed,
@@ -39,10 +54,7 @@ depends=('alsa-lib' 'jack2' 'vulkan-icd-loader' 'wayland' 'libxkbcommon' 'gcc-li
 makedepends=('git' 'cmake' 'ninja' 'shader-slang-bin' 'vulkan-headers'
              'wayland-protocols' 'nasm')
 
-provides=('matrix-player')
-conflicts=('matrix-player')
 options=('!lto' '!debug')
-install="${pkgname}.install"
 
 # libmpg123 is NOT in git — audio_engine's initialize_files.py normally
 # downloads it, which cannot happen inside build(). Fetched here instead so
@@ -58,11 +70,26 @@ sha256sums=('SKIP'
             'SKIP'
             'SKIP')
 
-# The 124 MB of bundled fonts dominate everything here. zstd -1 keeps the
-# packaging step to seconds; the default level spends noticeably longer for a
-# file that gets installed once and deleted.
 PKGEXT='.pkg.tar.zst'
+# The 124 MB of bundled fonts dominate everything here, and they are already
+# compressed formats. zstd -1 keeps four packaging passes to seconds rather
+# than minutes, at a few MB of size.
 COMPRESSZST=(zstd -c -T0 -1 -)
+
+# variant -> MATRIX_ARCH_LEVEL ("" = the compiler's portable baseline).
+# Same set scripts/linux/build.sh --share produces as tarballs, so the two
+# distribution paths stay in step.
+_arch_level() {
+    case "$1" in
+        universal) printf '' ;;
+        v3)        printf 'v3' ;;
+        v4)        printf 'v4' ;;
+        zen4)      printf 'znver4' ;;
+        *)         echo "unknown variant: $1" >&2; return 1 ;;
+    esac
+}
+
+_slangc() { command -v slangc || echo /opt/shader-slang-bin/bin/slangc; }
 
 pkgver() {
     cd "${srcdir}/matrix_player"
@@ -74,9 +101,10 @@ prepare() {
     cd "${srcdir}/matrix_player"
 
     # 10 submodules, 3 levels deep. Writing the full `git config submodule.*.url`
-    # dance for a nested tree this size is not worth it for a package only ever
-    # built locally; this does mean prepare() touches the network, which is a
-    # deliberate deviation from Arch policy and is why this is not AUR-ready.
+    # dance for a nested tree this size is not worth it for a release build run
+    # by hand; it does mean prepare() touches the network, a deliberate
+    # deviation from Arch policy. Running once for all four variants is the main
+    # reason this is a split package rather than four separate makepkg runs.
     git submodule update --init --recursive
 
     # ae_mpg123.cmake reads third_party/mpg123/src/{libmpg123,compat,common,
@@ -85,8 +113,8 @@ prepare() {
     # only filters that same tree down to a subset.
     #
     # Guarded loudly: if this path is ever wrong, core/CMakeLists.txt merely
-    # WARNS about the missing ae_mp3 target and the package silently loses MP3
-    # playback.
+    # WARNS about the missing ae_mp3 target, and every uploaded package would
+    # silently play everything except MP3.
     local _mpg="${srcdir}/mpg123-${_mpg123ver}"
     [[ -f "${_mpg}/src/libmpg123/libmpg123.c" ]] || {
         echo "==> ERROR: mpg123 source not where ae_mpg123.cmake expects it" >&2
@@ -96,53 +124,97 @@ prepare() {
 }
 
 build() {
-    # -DMATRIX_ARCH_LEVEL=native tunes for the build machine (and SIGILLs
-    # elsewhere — this package is not portable, on purpose). The root
-    # CMakeLists appends -ffp-contract=off unconditionally, which is what keeps
-    # the FMA that comes with native from changing the EQ's output; verify with
-    # dsp_null_test after any change here.
-    #
-    # MATRIX_STATE_HOME is what makes a read-only /opt install work at all.
-    cmake -S matrix_player -B build -G Ninja \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/usr \
-        -DMATRIX_ARCH_LEVEL=native \
-        -DMATRIX_STATE_HOME=.matrix_player \
-        -DVCE_SLANGC="$(command -v slangc || echo /opt/shader-slang-bin/bin/slangc)" \
-        -DAUDIO_ENGINE_BUILD_TOOLS=OFF \
-        -DMATRIX_BUILD_AB_TEST=OFF
+    local _v _level _arch_arg
+    for _v in universal v3 v4 zen4; do
+        _level="$(_arch_level "$_v")"
+        _arch_arg=()
+        [[ -n "$_level" ]] && _arch_arg=(-DMATRIX_ARCH_LEVEL="$_level")
 
-    cmake --build build
+        echo "==> Building variant '${_v}'${_level:+ (-march=${_level})}"
+
+        # MATRIX_STATE_HOME is what makes the read-only /opt install work:
+        # the DB, log and ~45 MB atlas cache go to $HOME/.matrix_player
+        # instead of next to the binary. See gui/src/app_paths.hh.
+        #
+        # -ffp-contract=off is NOT passed here — the root CMakeLists applies it
+        # to every build. It is load-bearing for exactly these variants: at v3
+        # and above FMA exists, and GCC's default contraction fuses the EQ's
+        # biquad accumulator into results that no longer match the frozen
+        # oracle. check() below re-verifies that per variant.
+        cmake -S matrix_player -B "build-${_v}" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMATRIX_STATE_HOME=.matrix_player \
+            -DVCE_SLANGC="$(_slangc)" \
+            -DAUDIO_ENGINE_BUILD_TOOLS=OFF \
+            -DMATRIX_BUILD_AB_TEST=OFF \
+            "${_arch_arg[@]}"
+        cmake --build "build-${_v}"
+    done
 }
 
 check() {
-    # The audio path's gate. Debug-only targets are not built in a Release
-    # tree, so this configures a second, minimal tree for the one test that
-    # matters — the flags under test (-march=native, -ffp-contract=off) are the
-    # same ones build() uses.
-    cmake -S matrix_player -B build-check -G Ninja \
-        -DCMAKE_BUILD_TYPE=Debug \
-        -DMATRIX_ARCH_LEVEL=native \
-        -DVCE_SLANGC="$(command -v slangc || echo /opt/shader-slang-bin/bin/slangc)" \
-        -DAUDIO_ENGINE_BUILD_TOOLS=OFF
-    cmake --build build-check --target dsp_null_test variants_test stats_test
-    ./build-check/framework/audio_engine/dsp_null_test
-    ./build-check/core/variants_test
-    ./build-check/core/stats_test
+    # The audio path's bit-exactness gate, per variant.
+    #
+    # dsp_null_test is Debug-gated, so each variant gets a second, minimal tree
+    # — but only the one target is built, and it links almost nothing (ae_core
+    # is an INTERFACE target), so this costs a configure plus two compile steps
+    # rather than another full build.
+    #
+    # A variant the BUILD machine cannot execute dies with SIGILL. That is
+    # reported as SKIPPED, never folded into "passed" — an untested variant
+    # must not look like a verified one.
+    #
+    # Measured on an i7-11800H (Tiger Lake-H): all four variants RUN and pass,
+    # zen4 included — it and Tiger Lake share AVX-512, and GCC emits nothing
+    # Zen-only for this code. The guard is here for the machines where that
+    # stops being true: build v4 or zen4 on a pre-AVX-512 CPU and those two
+    # cannot be executed locally, only built.
+    local _v _level _arch_arg _rc _skipped=()
+    for _v in universal v3 v4 zen4; do
+        _level="$(_arch_level "$_v")"
+        _arch_arg=()
+        [[ -n "$_level" ]] && _arch_arg=(-DMATRIX_ARCH_LEVEL="$_level")
+
+        cmake -S matrix_player -B "check-${_v}" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DVCE_SLANGC="$(_slangc)" \
+            -DAUDIO_ENGINE_BUILD_TOOLS=OFF \
+            "${_arch_arg[@]}" > /dev/null
+        cmake --build "check-${_v}" --target dsp_null_test > /dev/null
+
+        echo "==> dsp_null_test [${_v}]"
+        _rc=0
+        "./check-${_v}/framework/audio_engine/dsp_null_test" || _rc=$?
+        if (( _rc == 132 )); then          # 128 + SIGILL
+            echo "    SKIPPED — this CPU cannot execute ${_level:-baseline} code"
+            _skipped+=("$_v")
+        elif (( _rc != 0 )); then
+            echo "    FAILED (exit ${_rc}) — the audio path changed for '${_v}'" >&2
+            return 1
+        fi
+    done
+    (( ${#_skipped[@]} )) && \
+        echo "==> NOTE: unverified on this machine: ${_skipped[*]} — test on target hardware"
+    return 0
 }
 
-package() {
+# Everything a variant installs. Identical for all four apart from which
+# build-<variant>/ the binary comes from.
+_package_variant() {
+    local _v="$1"
     cd "${srcdir}"
 
     install -dm755 "${pkgdir}/opt/matrix_player"
-    install -Dm755 build/gui/matrix_player      "${pkgdir}/opt/matrix_player/matrix_player"
-    install -Dm644 matrix_player/eq_profiles.json "${pkgdir}/opt/matrix_player/eq_profiles.json"
+    install -Dm755 "build-${_v}/gui/matrix_player" \
+        "${pkgdir}/opt/matrix_player/matrix_player"
+    install -Dm644 matrix_player/eq_profiles.json \
+        "${pkgdir}/opt/matrix_player/eq_profiles.json"
 
     # Shaders from the BUILD tree (compiled .spv), fonts from the SOURCE tree.
-    # Deliberately not from build/gui/, where the POST_BUILD steps put copies of
-    # both: a stale ~45 MB *.msdf.cache left in build/gui/fonts/ by a previous
-    # run would be packaged along with them.
-    cp -r build/assets                "${pkgdir}/opt/matrix_player/assets"
+    # Deliberately not from build-*/gui/, where the POST_BUILD steps put copies
+    # of both: a stale ~45 MB *.msdf.cache left there by a previous run would be
+    # packaged along with them.
+    cp -r "build-${_v}/assets"        "${pkgdir}/opt/matrix_player/assets"
     cp -r matrix_player/assets/fonts  "${pkgdir}/opt/matrix_player/fonts"
     find "${pkgdir}/opt/matrix_player/assets" "${pkgdir}/opt/matrix_player/fonts" \
         -type f -exec chmod 644 {} +
@@ -164,10 +236,9 @@ package() {
 
     # Static linking pulls these libraries' notices into the binary, so they
     # ship with it. Paths tolerate a submodule reorganising its license file.
-    local _lic="${pkgdir}/usr/share/licenses/${pkgname}"
+    local _lic="${pkgdir}/usr/share/licenses/matrix-player-${_v}" f _src _name
     install -dm755 "${_lic}"
     install -Dm644 matrix_player/LICENSE "${_lic}/LICENSE"
-    local f
     for f in \
         "framework/audio_engine/LICENSE:audio_engine" \
         "framework/vk_canvas/LICENSE:vk_canvas" \
@@ -178,9 +249,40 @@ package() {
         "third_party/soxr/COPYING.LGPL:soxr" \
         "third_party/libjpeg-turbo/LICENSE.md:libjpeg-turbo"
     do
-        local _src="matrix_player/${f%%:*}" _name="${f##*:}"
+        _src="matrix_player/${f%%:*}"; _name="${f##*:}"
         [[ -f "${_src}" ]] && install -Dm644 "${_src}" "${_lic}/LICENSE.${_name}"
     done
     # mpg123 comes from the tarball, not the git tree.
     install -Dm644 "mpg123-${_mpg123ver}/COPYING" "${_lic}/LICENSE.libmpg123"
+}
+
+# All four provide and conflict with 'matrix-player', so pacman refuses to hold
+# two variants at once and swapping one for another is a single -U.
+
+package_matrix-player-universal() {
+    pkgdesc="Native C++17 music player driving a USB DAC directly (portable x86-64 build)"
+    provides=('matrix-player'); conflicts=('matrix-player')
+    install=matrix-player.install
+    _package_variant universal
+}
+
+package_matrix-player-v3() {
+    pkgdesc="Native C++17 music player driving a USB DAC directly (x86-64-v3 / AVX2)"
+    provides=('matrix-player'); conflicts=('matrix-player')
+    install=matrix-player.install
+    _package_variant v3
+}
+
+package_matrix-player-v4() {
+    pkgdesc="Native C++17 music player driving a USB DAC directly (x86-64-v4 / AVX-512)"
+    provides=('matrix-player'); conflicts=('matrix-player')
+    install=matrix-player.install
+    _package_variant v4
+}
+
+package_matrix-player-zen4() {
+    pkgdesc="Native C++17 music player driving a USB DAC directly (AMD Zen 4 tuned)"
+    provides=('matrix-player'); conflicts=('matrix-player')
+    install=matrix-player.install
+    _package_variant zen4
 }

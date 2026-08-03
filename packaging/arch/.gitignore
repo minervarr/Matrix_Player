@@ -1,8 +1,21 @@
-# makepkg's working directories and output. The PKGBUILD itself is tracked;
-# everything it produces is not — including the clone of this very repo that
-# makepkg drops in src/.
+# makepkg's working files. The PKGBUILD and its companions are tracked;
+# nothing makepkg produces is.
+#
+# scripts/linux/build.sh --packages exports SRCDEST/BUILDDIR/PKGDEST so none of
+# this lands here in the first place — build/ and dist/ are ignored wholesale at
+# the repo root, which is a far stronger guarantee than the patterns below.
+# These exist for the case where makepkg is run BY HAND from this directory,
+# where its defaults put everything in $startdir, i.e. right here.
+#
+# The one that actually bit: a `git+https://` source makes makepkg keep a BARE
+# CLONE of the whole repository next to the PKGBUILD, named after the source
+# (matrix_player). That is a ~97 MB packfile, and it was committed and pushed
+# once already.
+matrix_player/
 src/
 pkg/
 *.pkg.tar.zst
 *.pkg.tar.zst.sig
 *.tar.bz2
+*.tar.gz
+*.tar.xz
