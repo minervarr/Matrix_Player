@@ -72,6 +72,43 @@ if(NOT MSVC)
     endif()
 endif()
 
+# -ffp-contract=off: forbid the compiler from fusing `a*b + c` into a single
+# FMA instruction. This is NOT a micro-optimization knob — it is what keeps
+# MATRIX_ARCH_LEVEL from silently changing the audio.
+#
+# GCC defaults to -ffp-contract=fast, which is licensed to contract even in
+# strict ISO mode. At the generic x86-64 baseline that is harmless because
+# there is no FMA instruction to contract INTO. The moment MATRIX_ARCH_LEVEL
+# reaches v3 (or native/znver4 on any modern part) FMA appears, the EQ's
+# `acc = b0*x + b1*x1 + ...` starts fusing, and each biquad keeps a wider
+# intermediate than the frozen scalar oracle it is checked against. The result
+# is not "wrong" in a numerical sense — it is arguably more accurate — but it
+# is DIFFERENT, and this project's whole DSP contract is that speed comes from
+# removing overhead and never from touching the signal (rule 9 in
+# framework/audio_engine/CLAUDE.md).
+#
+# Measured, not assumed: with -march=native and contraction left at the
+# default, framework/audio_engine/tests/dsp_null_test.cpp fails test [2]
+# (EqProcessor vs frozen scalar oracle) at line 481. With this flag it passes
+# all 15681922 checks. That means every -DMATRIX_ARCH_LEVEL build — including
+# the v3/v4/znver4 tarballs `scripts/linux/build.sh --share` produces — was
+# shipping an EQ that did not match the reference.
+#
+# Global, not per-target, and deliberately so: the DSP primitives are HEADERS
+# (core/dsp/eq_processor.h et al), compiled into whichever translation unit
+# includes them — gui/src/player_view.cc among them. A flag scoped to the
+# ae_* targets would miss exactly the copies that matter.
+#
+# Appended to the global flags for the same reason as MATRIX_ARCH_LEVEL above:
+# the ExternalProject sub-builds forward these variables.
+if(NOT MSVC)
+    check_cxx_compiler_flag("-ffp-contract=off" MATRIX_HAVE_FP_CONTRACT_OFF)
+    if(MATRIX_HAVE_FP_CONTRACT_OFF)
+        string(APPEND CMAKE_CXX_FLAGS " -ffp-contract=off")
+        string(APPEND CMAKE_C_FLAGS " -ffp-contract=off")
+    endif()
+endif()
+
 # Standalone dev tool, not part of the shipped player — off by default so a
 # normal build never compiles or links it. Turn on with
 # `cmake -B build -DMATRIX_BUILD_AB_TEST=ON`. Windows-only (uses <windows.h>

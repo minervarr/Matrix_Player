@@ -1,0 +1,8 @@
+# makepkg's working directories and output. The PKGBUILD itself is tracked;
+# everything it produces is not — including the clone of this very repo that
+# makepkg drops in src/.
+src/
+pkg/
+*.pkg.tar.zst
+*.pkg.tar.zst.sig
+*.tar.bz2

@@ -20,6 +20,7 @@
 // review of nothing.
 
 #include "player_view.hh"
+#include "app_paths.hh"
 #include "host.hh"
 #include "headless.hh"
 #include "wayland_platform.hh"   // FileAssetReader (exe-relative assets/)
@@ -52,15 +53,7 @@ class HeadlessHost : public Host {
 public:
     HeadlessHost(int w, int h) : w_(w), h_(h), surface_((uint32_t)w, (uint32_t)h) {}
 
-    std::string exeDir() const override {
-        char buf[4096];
-        ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-        if (n <= 0) return "./";
-        buf[n] = '\0';
-        std::string path(buf);
-        auto slash = path.rfind('/');
-        return slash == std::string::npos ? "./" : path.substr(0, slash + 1);
-    }
+    std::string exeDir() const override { return app_paths::exeDir(); }
 
     bool init(PlayerWindow*, UiMode) override { return true; }
 
@@ -137,8 +130,10 @@ const char* kStates[] = {
     "10-grid-albums",
     "11-grid-eps",
     "12-grid-singles",
-    "13-grid-remixes",
-    "14-grid-hover",
+    "13-grid-compilations",
+    "14-grid-live",
+    "15-grid-remixes",
+    "16-grid-hover",
     "20-album-view",
     "30-settings",
     "31-manage-folders",

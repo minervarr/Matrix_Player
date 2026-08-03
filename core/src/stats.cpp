@@ -21,7 +21,10 @@ namespace {
 //
 // `days` is days since 1970-01-01 (may be negative).
 
-void civilFromDays(int64_t days, int& y, int& m, int& d) {
+// All three are constexpr: they are closed-form integer arithmetic, so where a
+// caller passes a constant the compiler can fold the whole thing away instead
+// of emitting a call. Nothing else about them changes.
+constexpr void civilFromDays(int64_t days, int& y, int& m, int& d) {
     days += 719468;                                     // shift epoch to 0000-03-01
     const int64_t era = (days >= 0 ? days : days - 146096) / 146097;
     const int64_t doe = days - era * 146097;            // day of era,  [0, 146096]
@@ -36,7 +39,7 @@ void civilFromDays(int64_t days, int& y, int& m, int& d) {
     d = (int)dd;
 }
 
-int64_t daysFromCivil(int y, int m, int d) {
+constexpr int64_t daysFromCivil(int y, int m, int d) {
     y -= (m <= 2 ? 1 : 0);
     const int64_t era = (int64_t)(y >= 0 ? y : y - 399) / 400;
     const int64_t yoe = (int64_t)y - era * 400;                         // [0, 399]
@@ -49,7 +52,7 @@ constexpr int64_t kDay = 86400;
 
 // Floor division by a day. A plain `/` truncates toward zero, which for any
 // instant before 1970 would round the day boundary the wrong way.
-int64_t floorDay(int64_t sec) {
+constexpr int64_t floorDay(int64_t sec) {
     return (sec - (((sec % kDay) + kDay) % kDay)) / kDay;
 }
 

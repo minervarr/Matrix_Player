@@ -1,6 +1,7 @@
 #pragma once
 #include "usb_audio.h"
 #include <vector>
+#include <string>
 #include <chrono>
 #include <thread>
 #include <cstdio>
@@ -48,6 +49,14 @@ public:
     // (e.g. a crash inside a Windows audio DLL) and torn down its own stream.
     // The caller should stop playback rather than keep feeding a dead output.
     virtual bool hasFaulted() const { return false; }
+    // Why the last configure()/start() failed, in the DRIVER's own words, or
+    // empty when the backend has nothing more specific than "it failed".
+    //
+    // Exists because "Audio output failed to configure. Check Audio Settings."
+    // is not a diagnosis: when PipeWire is holding the card, ALSA already knows
+    // the answer is "Device or resource busy" and it was being thrown away one
+    // frame below the call. The caller puts this on screen (audioNotice_).
+    virtual std::string lastError() const { return {}; }
 };
 
 namespace detail {

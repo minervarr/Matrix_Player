@@ -364,41 +364,74 @@ The universal state rules (apply everywhere):
 
 ### 8.1 Sidebar / nav
 Brand "MATRIX PLAYER" (Bold, accent, truncated). Shared **search field** (§8.6).
-Four content-type filters — *Albums* / *EPs* / *Singles* / *Remixes*, each
-filtering the grid by `Album::releaseType` — hover = grey pill; active =
-accent-tint pill + left bar + accent label (same family as before, just four
-rows instead of one). Below a hairline separator sits a fifth row, **Settings**
-— spatially isolated from the filters because the app reads as
-albums-and-music first, configuration second. It is a *word*, set exactly like
-the four filter labels (same `space(20)` inset, same `body` size, same
-accent-when-active rule), so all five read as one family; the gear glyph it
+Six content-type filters — *Albums* / *EPs* / *Singles* / *Compilations* /
+*Live* / *Remixes*, each filtering the grid by `Album::releaseType` —
+hover = grey pill; active = accent-tint pill + left bar + accent label (same
+family as before, just six rows instead of one). They read in that order for a
+reason: original material by descending size, then the artist's own material
+re-presented, then other people's reworkings of it. **The row order is not the
+`ReleaseType` enum order** — those values are frozen by the `albums` table that
+stores them — and it lives in `recalcLayout()` alone. Below a hairline separator
+sits a further row, **Settings** — spatially isolated from the filters because
+the app reads as albums-and-music first, configuration second. It is a *word*,
+set exactly like the six filter labels (same `space(20)` inset, same `body`
+size, same accent-when-active rule), so they all read as one family; the gear glyph it
 replaced is still in the icon set but is no longer drawn (§7). It shares the
 same hover/active visual language; opening it replaces the whole content area
 (§8.6) and closing it returns to whichever filter was active, never
 resetting to Albums.
 
-**Headphone block** (`drawHeadphoneBlock`, `player_view.cc`) — anchored to the
-BOTTOM of the sidebar under a `CLR_SEPARATOR` hairline, in the space the old
-now-playing mini card used to occupy. A `HEADPHONES` header (Bold, `secondary`
-size, `CLR_TEXT_DIM`), up to four saved profiles, and a `Search more…` row that
-opens the EQ panel. Rows reuse the nav's exact selection family — accent-tint
-pill + `stroke(3)` left bar when active, `CLR_HOVER` when merely hovered (§1.4)
-— at `secondary` size, one step down from the nav proper, because this is
-equipment configuration and not navigation. Every label goes through
-`truncateToWidth`: profile names run long and the sidebar is only `space(277)`.
+**DRIVER'S AUTOEQ block** (`drawHeadphoneBlock`, `player_view.cc`) — anchored to
+the BOTTOM of the sidebar under a `CLR_SEPARATOR` hairline, in the space the old
+now-playing mini card used to occupy. A `DRIVER'S AUTOEQ` header (Bold,
+`secondary` size, `CLR_TEXT_DIM`), then `No AutoEQ`, then the saved profiles,
+then a `Search more…` row that opens the EQ panel. Rows reuse the nav's exact
+selection family —
+accent-tint pill + `stroke(3)` left bar when active, `CLR_HOVER` when merely
+hovered (§1.4) — at `secondary` size, one step down from the nav proper, because
+this is equipment configuration and not navigation. Every profile label goes
+through `truncateToWidth`: names run long and the sidebar is only `space(277)`.
+The **header does not**, deliberately — a section header that quietly loses its
+tail hides a fit failure rather than showing one.
 
-Two states are specific to this block:
+**The label is not "HEADPHONES".** What an AutoEQ profile corrects is the
+*driver*, and the same list serves IEMs and speakers; but `DRIVERS` alone would
+read as an output driver in an app whose primary path is a USB DAC, so the
+header has to carry both halves.
 
-- **On trial** — `CLR_TEXT_DIM` + Italic, always the first row. The profile is
-  already audible; what is pending is whether it keeps a row (it needs 60 s of
-  real listening first). Italic-and-dim rather than a badge because the row is
-  temporary, and a badge would imply a durable property.
+Rows are `space(36)`, not the `space(48)` this block was authored with. The
+sidebar holds three rows below Settings and no more (the nav is eight
+`space(65.36)` rows), so at the original height the `No AutoEQ` row would have
+been paid for by a saved pair.
+
+Three states are specific to this block:
+
+- **`No AutoEQ`** — the OFF position of the switch, and an ordinary row wearing
+  the ordinary active state when nothing is assigned, so "no EQ" is something
+  the block SHOWS rather than the absence of any highlight. It is the FIRST row,
+  the radio-list convention where "none of these" heads the set rather than
+  trailing it, and it is never the row that gets clamped away when space runs
+  short — the saved list below it is.
+- **On trial** — `CLR_TEXT_DIM` + Italic, first among the profiles (directly
+  under `No AutoEQ`). The profile is already audible; what is pending is whether
+  it keeps a row (it needs 60 s of real listening first). Italic-and-dim rather
+  than a badge because the row is temporary, and a badge would imply a durable
+  property.
 - **Hidden in bitperfect mode.** Not greyed — *not drawn at all*, and it gives
   its space back. There is no EQ to pick a profile for, and a disabled control
   still asks to be read before it can be dismissed.
 
 If the window is short enough that the block would collide with the Settings
-row, the block yields (browsing the library is the app's primary job).
+row, what yields is the SAVED LIST, not the block: the header, `No AutoEQ` and
+`Search more…` are the minimum, because a pair that doesn't fit is still one
+click away under the latter while the off switch has nowhere else to live. Only when
+even one list row won't fit does the block disappear entirely (browsing the
+library is the app's primary job).
+
+Saved rows are ordered **pinned first, then most-used**, with recency only as
+the tie-break (`Db::loadEqHeadphones`) — with three rows on screen the order
+decides what is reachable in one click, and "what I touched last" is not the
+same question as "what I actually use".
 
 ### 8.2 Album grid
 **The two margins are equal by construction, not by hand.** `gridPadX_` is the
@@ -576,16 +609,44 @@ UV sub-rect trick, for the same reason.
 A separate compact layout: centered large art + Bold title + three big centered
 Prev/Play-Stop/Next buttons (grey pill hover). No artist line, no seekbar.
 
-### 8.6b Playlists (`drawPlaylists`)
-Reached from its own sidebar row, in the UPPER group with the content filters —
-a playlist is a way of browsing music, not a setting. It borrows the settings
-overlay to draw in (`SettingsPanel::Playlists` + `panelFromSidebar_`), which is
-why the Settings row's own "active" test must exclude it, or two sidebar rows
-light up at once.
+### 8.6b Playlists (`drawPlaylistSection`)
+The SEVENTH content section, not a panel. Its sidebar row sits in the upper
+group with the six release filters and behaves identically to them
+(`PlayerWindow::NavSection`): the content area changes, and the sidebar, the
+Settings row, the transport bar and the play/stop key all stay live behind it.
 
-**Two screens, one panel.** A chooser (three outlined rows, the §8.6 settings-row
-shape) then a list. `plKind_` holds which; Escape steps back one level before it
-closes, because a listener who opened a list meant to leave the list.
+It used to borrow the settings overlay instead (`SettingsPanel::Playlists` +
+`panelFromSidebar_`), and that is the thing not to go back to. The panel
+dispatchers divert every mouse and key event before the sidebar is ever
+hit-tested — correct for a dialog, wrong for a way of browsing music. While a
+playlist was on screen you could not click Singles, could not click Settings,
+and could not press Space to stop the music.
+
+**Two levels, exactly like the album section.** A grid of three tiles, then one
+list opened full-page — `plKind_` holds which, the same way `trackPanelOpen_`
+does on the album side. Going back (§8.10) steps out of the list before it
+steps out of the section, because a listener who opened a list meant to leave
+the list.
+
+**The tile art is generated, because a generated list has no cover.** A tile is
+the album grid's own square on the album grid's own geometry, so a playlist
+tile is the same object in the same place as an album tile. For an ORDERED list
+it is a 2×2 mosaic of the covers behind its top entries, numbered the
+mathematical way: **quadrant 1 is top-right and holds first place**, then
+top-left, bottom-left, bottom-right. The fourth quadrant is the one carrying
+information — with exactly four records behind the list it is the fourth
+record's cover; past that it fades to black, three covers plus "and there is
+more". Covers are DISTINCT records: five tracks off one album are five rows but
+one cover. Empty quadrants stay flat `CLR_TILE_PLACEHOLDER`, so absence reads
+as absence rather than as a broken image. (§8.2's remix mosaic is the same
+shape for a different reason and numbers its quadrants left-to-right — a remix
+group has no ranking pointing at a particular corner.)
+
+An UNORDERED list has no first place to put in a corner, so it wears a flat
+treatment: a custom image, a solid colour, or a gradient. Never Heard is the
+only unordered list today and it is generated, so there is nobody to pick an
+image for it — it gets the gradient. The other two arms belong to hand-made
+playlists, which do not exist yet.
 
 **One row per track, and the ranking is spelled only where there is one.**
 `ordinal()` (`gui/src/ui_text.hh`) prefixes Heavy Rotation and Forgotten
@@ -622,7 +683,7 @@ primary that moves between sibling pages cannot be learned.
 current directory) and identifiers (`Device: 32BB:0004`) are data, not names, and
 the family already carries a face that says so — the one with the most legibility
 headroom of the four (9.14px floor against the Regular serif's 18.29px, which is
-the binding constraint behind `kMinReadableTextSizePx`). Headphone models, album
+the binding constraint behind `kMinReadableTextSizePx`). Driver names, album
 and artist names stay serif: the rule is about what the string IS, not where it
 appears. **Known gap:** the folder *rows* inside `widgets::drawScrollList` are
 still serif — `ScrollListStyle` has no font-style field, and adding one is a
@@ -632,23 +693,37 @@ change to the vk_canvas submodule's API, not to this app.
 fill, `UI_CORNER_RADIUS`, dim placeholder, caret when focused, a bottom underline
 that turns accent on focus. One implementation for the sidebar and EQ searches.
 
-**EQ panel tabs** (`drawEqSettings`): `My Headphones` / `All Profiles`, drawn
+**EQ panel tabs** (`drawEqSettings`): `My Drivers` / `All Profiles`, drawn
 above the search field. Active = accent-tint fill + a `stroke(2)` accent
 underline + accent label; hover = `CLR_HOVER`; otherwise `CLR_TEXT_SECONDARY`.
 They are two views over **one list and one selection**, not two lists — so
 `Pin`/`Remove` can only ever act on the visibly highlighted row. This panel is
 the only place a saved pair is pinned or removed; the sidebar block stays a pure
-switcher, since a per-row `×` at `space(277)` would be too small to hit.
+switcher, since a per-row `×` at `space(277)` would be too small to hit — its
+`No AutoEQ` row is a switch POSITION, not an edit, which is why it belongs there
+and `Pin`/`Remove` do not. The vocabulary matches the sidebar (§8.1): drivers,
+not headphones.
 
-### 8.7 Bitperfect warning strip
-A **non-modal** full-width strip drawn directly above the transport bar when a
-bitperfect-mismatch playback attempt fails (`player_view.cc`, guarded on
-`bitperfectWarning_`). `CLR_WARNING` tint at `UI_SELECT_TINT_ALPHA`, a
-`stroke(1)` hairline top and bottom, the §7 warning icon, then the message in
-`secondary`. It does not reserve or shrink grid space — a rare transient event
-isn't worth a permanent layout dependency — and it clears on the next play
-attempt or on click. This is the only use of `CLR_WARNING`; green stays
-state-only and `CLR_ERROR` stays reserved for hard failures.
+### 8.7 Audio notice strip
+A **non-modal** full-width strip drawn directly above the transport bar
+whenever the audio path could not do what was asked (`player_view.cc`, guarded
+on `audioNotice_`). `CLR_WARNING` tint at `UI_SELECT_TINT_ALPHA`, a `stroke(1)`
+hairline top and bottom, the §7 warning icon, then the message in `secondary`.
+It does not reserve or shrink grid space — a rare transient event isn't worth a
+permanent layout dependency — and it clears on the next play attempt or on
+click. This is the only use of `CLR_WARNING`; green stays state-only and
+`CLR_ERROR` stays reserved for hard failures.
+
+**Every** audio failure comes through here: a bit-perfect rate mismatch, a
+backend that will not configure, and a device that faults mid-playback. It was
+`bitperfectWarning_` and wired to the first of those alone, which left the
+visibility exactly inverted — a rate mismatch drew a banner, while an ALSA card
+that would not open at all failed through `Host::showErrorMessage`, which is
+stderr-only on Linux and so showed nothing anywhere. **The message carries the
+driver's own words** (`AudioOutput::lastError()` — "Device or resource busy",
+"no running JACK server"), never a generic "check Audio Settings": the whole
+value of the strip is that it ends the guessing, and a message that says
+nothing specific is the same silence with a border around it.
 
 ### 8.8 Scrollbar affordance (`panels::drawScrollbar`)
 A thin track + proportional thumb docked inside a scrolling list's right edge
@@ -664,6 +739,22 @@ Every panel that scrolls draws it.
 A separate window with its own swapchain. Renders only the album texture,
 aspect-fit and centered on `CLR_BG_MAIN`; empty state is centered "No artwork" in
 `CLR_TEXT_DIM` — the same app palette as the main window.
+
+### 8.10 Going back (`PlayerWindow::goBack`)
+There is **no back button drawn anywhere**, and that is the rule, not an
+omission: nothing in this UI is closed by a chrome affordance. Going back is
+Escape, or the back button on the side of the mouse — the two go through one
+function so they cannot describe different shapes of "back".
+
+One step, outermost first: a settings panel, then a live search filter, then
+the Settings page, then an opened playlist, then the album view. At the root of
+a section it does nothing, exactly as Escape on the album grid always has.
+
+**Forward is one step and one step only.** The mouse's forward button re-enters
+what the last back left (`navForward_`) and then the stack is spent; any other
+navigation clears it, the same way following a link drops a browser's forward
+history. Closing a settings panel records no forward: the state it came from
+was the Settings page it was borrowing, which is not where the listener was.
 
 ---
 

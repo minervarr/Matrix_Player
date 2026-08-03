@@ -94,10 +94,10 @@ std::string trackKey(const Track& t);
 bool variantOutranks(const Album& a, const Album& b);
 
 // ── Release-type classification ─────────────────────────────────────────────
-// Album / EP / Single / Remix, ported from the sibling Android player's
-// AlbumDao.classifyRelease(): track-count thresholds (1=Single, 2-4=EP,
-// >4=Album), overridden by remix detection — the album name saying so, or a
-// strict majority of track titles matching remix patterns.
+// Album / EP / Single / Remix / Compilation / Live, ported from the sibling Android
+// player's AlbumDao.classifyRelease(): track-count thresholds (1=Single,
+// 2-4=EP, >4=Album), overridden by remix detection — the album name saying so,
+// or a strict majority of track titles matching remix patterns.
 //
 // With ONE addition this app makes: on a MULTI-DISC release the majority is
 // counted per disc, and the release only counts as a remix set if every disc
@@ -105,6 +105,37 @@ bool variantOutranks(const Album& a, const Album& b);
 // first is new material is an album with a bonus disc, not a remix release —
 // and by flat track count it would otherwise tip over the majority and land in
 // the wrong tab (Anyma's *Genesys II*: 10 originals, 11 remixes).
+// Compilation is decided by the album NAME ALONE, and deliberately so. The two
+// signals that look obvious — a spread of release years across the tracks, and
+// track titles that already exist on other records — were both measured on the
+// real library and neither works:
+//
+//   * Taggers write ONE date per release onto every track, so the year spread
+//     inside an album is zero everywhere. The original years do survive, but in
+//     the ℗ line of COPYRIGHT, and there a career-spanning *special edition*
+//     outscores an actual anthology (1986-2000 vs 1987-2000), while an ordinary
+//     album with lead singles already spreads two or three years.
+//   * Title overlap ranks ordinary albums FIRST: a record whose deluxe twin is
+//     also on disk scores 100%, above a real anthology's 69%. It is also
+//     relative to what else is in the library, so adding or deleting one album
+//     would silently reclassify others — and this function has to stay pure and
+//     per-album, because its answer is cached in Db's albums table.
+//
+// The name is what the tables below can actually read, it is the mechanism
+// isRemixAlbum() already uses, and it gives the same answer on every machine.
+bool isCompilationAlbum(const std::string& albumName);
+
+// A live record is decided the same way a remix set is — the album name, or a
+// majority of track titles, counted PER DISC. The per-disc rule is what keeps
+// the "Edición Especial" reissues out: each pairs a studio disc with a live
+// bonus disc, so flat they read 32-48% live, and per disc their first disc
+// answers no.
+//
+// Unlike the remix test, a title only counts when the marker sits inside a
+// BRACKET: "live" is an ordinary English word, and a studio track called "Live
+// and Let Die" must not vote.
+bool isLiveTrackTitle(const std::string& title);
+
 bool isRemixTrackTitle(const std::string& title);
 Album::ReleaseType classifyReleaseType(const std::string& albumName,
                                        const std::vector<Track>& tracks);

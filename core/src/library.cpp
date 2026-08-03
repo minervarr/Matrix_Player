@@ -7,11 +7,10 @@
 #include <filesystem>
 #include <system_error>
 #include <map>
-#include <cctype>
 #include <cstdio>
 #include <future>
+#include <string_view>
 #include <thread>
-#include <regex>
 // Tag/stream-info reading uses libFLAC's metadata API — the same library that
 // decodes playback (audio_engine's backends/flac), so the scan and the decoder
 // can never disagree about a file. dr_wav stays for WAV, which libFLAC has no
@@ -20,6 +19,32 @@
 #include "dr_wav.h"
 
 namespace fs = std::filesystem;
+
+// ASCII character classes, constexpr and locale-independent — same reasoning as
+// the block at the top of variants.cpp. <cctype>'s versions read the global
+// locale through a table pointer, and this file calls them once per byte of
+// every tag in the library.
+namespace {
+constexpr bool asciiDigit(unsigned char c) { return c >= '0' && c <= '9'; }
+constexpr bool asciiSpace(unsigned char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r';
+}
+constexpr char asciiLower(unsigned char c) {
+    return (c >= 'A' && c <= 'Z') ? char(c + 32) : char(c);
+}
+constexpr char asciiUpper(unsigned char c) {
+    return (c >= 'a' && c <= 'z') ? char(c - 32) : char(c);
+}
+constexpr bool iequalsUpper(std::string_view s, std::string_view upperLit) {
+    if (s.size() != upperLit.size()) return false;
+    for (size_t i = 0; i < s.size(); i++)
+        if (asciiUpper((unsigned char)s[i]) != upperLit[i]) return false;
+    return true;
+}
+void lowerAscii(std::string& s) {
+    for (char& c : s) c = asciiLower((unsigned char)c);
+}
+} // namespace
 
 // Release-type classification (Album/EP/Single/Remix) moved to
 // core/src/variants.cpp — it is pure string/Track logic, and living beside
@@ -41,15 +66,22 @@ void computeAlbumQualityStats(const std::vector<Track>& tracks,
     hasDsd = false;  // no DSD/DSF decode yet — see the declaration's comment
 }
 
-static const char* COVER_NAMES[] = { "cover", "folder", "front", "albumart", "album" };
-static const char* COVER_EXTS[]  = { ".jpg", ".jpeg", ".png" };
+static constexpr std::string_view COVER_NAMES[] = {
+    "cover", "folder", "front", "albumart", "album" };
+static constexpr std::string_view COVER_EXTS[] = { ".jpg", ".jpeg", ".png" };
 
 std::string resolveArtPath(const std::string& folderPath) {
-    fs::path dir = fs::u8path(folderPath);
-    // Pass 1: preferred names in priority order
-    for (const char* name : COVER_NAMES) {
-        for (const char* ext : COVER_EXTS) {
-            fs::path candidate = dir / (std::string(name) + ext);
+    const fs::path dir = fs::u8path(folderPath);
+    // Pass 1: preferred names in priority order. One reused buffer and one
+    // reused path across the 15 candidates, rather than building both afresh
+    // each time — this runs once per album in the library.
+    std::string leaf;
+    fs::path candidate = dir / "x";
+    for (const std::string_view name : COVER_NAMES) {
+        for (const std::string_view ext : COVER_EXTS) {
+            leaf.assign(name);
+            leaf.append(ext);
+            candidate.replace_filename(leaf);
             if (fs::exists(candidate)) return candidate.u8string();
         }
     }
@@ -58,8 +90,8 @@ std::string resolveArtPath(const std::string& folderPath) {
     for (auto& entry : fs::directory_iterator(dir, ec)) {
         if (ec) break;
         if (!entry.is_regular_file()) continue;
-        auto ext = entry.path().extension().u8string();
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        std::string ext = entry.path().extension().u8string();
+        lowerAscii(ext);
         if (ext == ".jpg" || ext == ".jpeg" || ext == ".png")
             return entry.path().u8string();
     }
@@ -104,17 +136,57 @@ void Album::sortTracks() {
 // the download quality; strip it for display and keep it as a structured
 // field so SQL queries can filter on it.
 
+// The trailing " (bit-rate)" quality suffix, e.g. " (24-96)" / " (16-44.1)".
+// Returns the offset of the leading SPACE (so the caller can cut the display
+// name there) and fills `quality` with the text between the parens, or npos.
+//
+// Replaces the regex ` \((\d{1,2}-\d{1,3}(?:\.\d)?)\)$` — the last <regex> use
+// in this file, and worth removing on its own: <regex> compiled to hundreds of
+// kilobytes of object code here and this is the only shape it ever matched.
+//
+// Scanning back to the LAST '(' is exact rather than a heuristic: the suffix's
+// contents are digits, '-' and '.' only, so the '(' that opens a valid suffix
+// is necessarily the final '(' in the string.
+static size_t parseQualitySuffix(const std::string& s, std::string& quality) {
+    const size_t n = s.size();
+    if (n < 6 || s[n - 1] != ')') return std::string::npos;   // shortest is " (0-0)"
+    const size_t open = s.rfind('(');
+    if (open == std::string::npos || open == 0 || s[open - 1] != ' ')
+        return std::string::npos;
+
+    const size_t close = n - 1;
+    size_t i = open + 1;
+    const size_t bitStart = i;
+    while (i < close && asciiDigit((unsigned char)s[i])) i++;
+    const size_t bitLen = i - bitStart;                        // \d{1,2}
+    if (bitLen < 1 || bitLen > 2) return std::string::npos;
+    if (i >= close || s[i] != '-') return std::string::npos;
+    i++;
+    const size_t rateStart = i;
+    while (i < close && asciiDigit((unsigned char)s[i])) i++;
+    const size_t rateLen = i - rateStart;                      // \d{1,3}
+    if (rateLen < 1 || rateLen > 3) return std::string::npos;
+    if (i < close && s[i] == '.') {                            // (?:\.\d)?
+        i++;
+        if (i >= close || !asciiDigit((unsigned char)s[i])) return std::string::npos;
+        i++;
+    }
+    if (i != close) return std::string::npos;                  // the '$' anchor
+
+    quality.assign(s, open + 1, close - open - 1);
+    return open - 1;
+}
+
 void parseAlbumFolder(const std::string& folderPath,
                       const std::string& rootPath, Album& album) {
     album.displayName = album.name;
     album.mode        = "album";
 
-    // Trailing " (bit-rate)" quality suffix, e.g. " (24-96)" / " (16-44.1)".
-    static const std::regex kQualityRe(R"( \((\d{1,2}-\d{1,3}(?:\.\d)?)\)$)");
-    std::smatch m;
-    if (std::regex_search(album.name, m, kQualityRe)) {
-        album.quality     = m[1].str();
-        album.displayName = album.name.substr(0, m.position(0));
+    std::string quality;
+    const size_t at = parseQualitySuffix(album.name, quality);
+    if (at != std::string::npos) {
+        album.quality = std::move(quality);
+        album.displayName.resize(at);
     }
 
     // Path components relative to the scan root: [country/]Artist[/Singles]/Album
@@ -170,11 +242,20 @@ static std::vector<Album> buildAlbums(
         // displayName, not name: the folder's "(24-96)" quality suffix has
         // already been stripped out of it, so re-ripping an album at a higher
         // rate does not mint a new identity for every track on it.
+        //
+        // The fallbacks are applied to the track ITSELF and then undone, rather
+        // than to a copy: a Track holds seven std::strings, and copying every
+        // one of them per file only to read four fields back was the single
+        // largest allocation source in the scan. trackKey() reads no state this
+        // touches, so the observable result is identical.
         for (Track& t : album.tracks) {
-            Track keyed = t;
-            if (keyed.album.empty())       keyed.album       = album.displayName;
-            if (keyed.albumArtist.empty()) keyed.albumArtist = album.artist;
-            t.trackKey = trackKey(keyed);
+            const bool borrowedAlbum  = t.album.empty();
+            const bool borrowedArtist = t.albumArtist.empty();
+            if (borrowedAlbum)  t.album       = album.displayName;
+            if (borrowedArtist) t.albumArtist = album.artist;
+            t.trackKey = trackKey(t);
+            if (borrowedAlbum)  t.album.clear();
+            if (borrowedArtist) t.albumArtist.clear();
         }
 
         album.sortTracks();
@@ -195,23 +276,39 @@ struct VorbisCtx {
 };
 
 // TRACKNUMBER/DISCNUMBER are both written either bare ("3") or as a
-// position/total pair ("3/12") — take the part before the slash.
-static int parsePositionTag(const std::string& val) {
-    auto slash = val.find('/');
-    return atoi(slash != std::string::npos ? val.substr(0, slash).c_str() : val.c_str());
+// position/total pair ("3/12") — take the part before the slash. Parsed in
+// place; this used to build a substring per tag just to hand it to atoi.
+// atoi's own semantics are kept exactly: leading whitespace, an optional sign,
+// then digits, and 0 for anything unparseable.
+static int parsePositionTag(std::string_view val) {
+    const size_t slash = val.find('/');
+    if (slash != std::string_view::npos) val = val.substr(0, slash);
+    size_t i = 0;
+    while (i < val.size() && asciiSpace((unsigned char)val[i])) i++;
+    bool neg = false;
+    if (i < val.size() && (val[i] == '+' || val[i] == '-')) neg = val[i++] == '-';
+    long long v = 0;
+    while (i < val.size() && asciiDigit((unsigned char)val[i])) {
+        v = v * 10 + (val[i++] - '0');
+        if (v > 1'000'000'000) break;      // tag junk; atoi would overflow anyway
+    }
+    return (int)(neg ? -v : v);
 }
 
 // DATE is written as a bare year ("1991"), a full ISO date ("1991-03-25"), or
 // occasionally something looser. Take the first run of exactly four digits and
 // accept it only as a plausible release year — a malformed tag should leave
 // the field untagged (0) rather than poison a decade histogram.
-static int parseYearTag(const std::string& val) {
+static int parseYearTag(std::string_view val) {
     for (size_t i = 0; i + 4 <= val.size(); i++) {
-        if (!isdigit((unsigned char)val[i])) continue;
+        if (!asciiDigit((unsigned char)val[i])) continue;
         size_t run = 0;
-        while (i + run < val.size() && isdigit((unsigned char)val[i + run])) run++;
+        while (i + run < val.size() && asciiDigit((unsigned char)val[i + run])) run++;
         if (run == 4) {
-            int y = atoi(val.substr(i, 4).c_str());
+            // Exactly four digits, so the value is direct arithmetic — no
+            // substring and no atoi.
+            const int y = (val[i]     - '0') * 1000 + (val[i + 1] - '0') * 100 +
+                          (val[i + 2] - '0') * 10   + (val[i + 3] - '0');
             if (y >= 1000 && y <= 2999) return y;
         }
         i += run;   // -1 not needed: the loop's ++ lands past the digit run
@@ -220,21 +317,23 @@ static int parseYearTag(const std::string& val) {
 }
 
 // One VORBIS_COMMENT entry, "KEY=value" with the key case-insensitive.
+// The key is compared as a view against upper-case literals rather than being
+// copied and upper-cased first, and only the values actually kept are
+// materialised — this runs for every tag of every file in the library.
 static void applyVorbisComment(VorbisCtx* ctx, const char* entry, unsigned length) {
-    std::string s(entry, length);
-    auto eq = s.find('=');
-    if (eq == std::string::npos) return;
-    std::string key = s.substr(0, eq);
-    std::string val = s.substr(eq + 1);
-    for (auto& c : key) c = (char)toupper((unsigned char)c);
-    if (key == "TITLE")        ctx->title       = val;
-    else if (key == "ARTIST")  ctx->artist      = val;
-    else if (key == "ALBUMARTIST" || key == "ALBUM ARTIST")
-                               ctx->albumArtist = val;
-    else if (key == "ALBUM")   ctx->album       = val;
-    else if (key == "TRACKNUMBER") ctx->trackNumber = parsePositionTag(val);
-    else if (key == "DISCNUMBER")  ctx->discNumber  = parsePositionTag(val);
-    else if (key == "GENRE")   ctx->genre = val;
+    const std::string_view s(entry, length);
+    const size_t eq = s.find('=');
+    if (eq == std::string_view::npos) return;
+    const std::string_view key = s.substr(0, eq);
+    const std::string_view val = s.substr(eq + 1);
+    if (iequalsUpper(key, "TITLE"))        ctx->title.assign(val);
+    else if (iequalsUpper(key, "ARTIST"))  ctx->artist.assign(val);
+    else if (iequalsUpper(key, "ALBUMARTIST") || iequalsUpper(key, "ALBUM ARTIST"))
+                                           ctx->albumArtist.assign(val);
+    else if (iequalsUpper(key, "ALBUM"))   ctx->album.assign(val);
+    else if (iequalsUpper(key, "TRACKNUMBER")) ctx->trackNumber = parsePositionTag(val);
+    else if (iequalsUpper(key, "DISCNUMBER"))  ctx->discNumber  = parsePositionTag(val);
+    else if (iequalsUpper(key, "GENRE"))   ctx->genre.assign(val);
     // DATE is the standard field and ORIGINALDATE the reissue's original; YEAR
     // is non-standard but common. Prefer ORIGINALDATE when both are present —
     // "which year is this music from" is the question analytics asks, and on a
@@ -361,36 +460,51 @@ static Track quickParseFLAC(const std::string& path) {
     return t;
 }
 
-// ── Full scan (original interface, kept for compatibility) ───────────────────
+// ── Directory walk ───────────────────────────────────────────────────────────
 
-std::vector<Album> scanLibrary(const std::string& rootPath) {
-    std::vector<Album> albums;
-    fs::path root = fs::u8path(rootPath);
-    if (!fs::exists(root)) return albums;
-
-    std::map<std::string, std::vector<Track>> byFolder;
-    auto dit = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied);
+// The shared shape of all three scans below: walk `root`, skip hidden
+// directories, and hand every .flac/.wav file to `fn` as (path, lowercased
+// extension). This loop was copy-pasted verbatim three times; the hidden-
+// directory rule in particular is the kind that goes wrong by drifting in one
+// copy only.
+//
+// It also stops asking the same question twice — the original built the
+// filename string twice per directory entry just to test its first character.
+template <typename Fn>
+static void forEachAudioFile(const fs::path& root, Fn&& fn) {
+    auto dit = fs::recursive_directory_iterator(
+        root, fs::directory_options::skip_permission_denied);
     for (auto end = fs::recursive_directory_iterator(); dit != end; ++dit) {
-        auto& entry = *dit;
-        if (entry.is_directory() && !entry.path().filename().u8string().empty() &&
-            entry.path().filename().u8string()[0] == '.') {
-            dit.disable_recursion_pending();  // skip hidden dirs (e.g. a sibling .streamer/)
+        const auto& entry = *dit;
+        if (entry.is_directory()) {
+            const std::string name = entry.path().filename().u8string();
+            if (!name.empty() && name[0] == '.')
+                dit.disable_recursion_pending();  // e.g. a sibling .streamer/
             continue;
         }
         if (!entry.is_regular_file()) continue;
-        auto ext = entry.path().extension().u8string();
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-        std::string folder = entry.path().parent_path().u8string();
-        std::string filePath = entry.path().u8string();
-        if (ext == ".flac")
-            byFolder[folder].push_back(quickParseFLAC(filePath));
-        else if (ext == ".wav")
-            byFolder[folder].push_back(quickParseWAV(filePath));
+        std::string ext = entry.path().extension().u8string();
+        lowerAscii(ext);
+        if (ext != ".flac" && ext != ".wav") continue;
+        fn(entry.path(), ext);
     }
+}
 
-    albums = buildAlbums(byFolder, rootPath);
-    return albums;
+// ── Full scan (original interface, kept for compatibility) ───────────────────
+
+std::vector<Album> scanLibrary(const std::string& rootPath) {
+    const fs::path root = fs::u8path(rootPath);
+    if (!fs::exists(root)) return {};
+
+    std::map<std::string, std::vector<Track>> byFolder;
+    forEachAudioFile(root, [&](const fs::path& path, const std::string& ext) {
+        const std::string folder   = path.parent_path().u8string();
+        const std::string filePath = path.u8string();
+        byFolder[folder].push_back(ext == ".flac" ? quickParseFLAC(filePath)
+                                                  : quickParseWAV(filePath));
+    });
+
+    return buildAlbums(byFolder, rootPath);
 }
 
 // ── Incremental scan ─────────────────────────────────────────────────────────
@@ -400,44 +514,30 @@ IncrementalScanResult scanLibraryIncremental(
     const std::map<std::string, FileCache>& existing)
 {
     IncrementalScanResult result;
-    fs::path root = fs::u8path(rootPath);
+    const fs::path root = fs::u8path(rootPath);
     if (!fs::exists(root)) return result;
 
     std::map<std::string, std::vector<Track>> byFolder;
 
-    auto dit = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied);
-    for (auto end = fs::recursive_directory_iterator(); dit != end; ++dit) {
-        auto& entry = *dit;
-        if (entry.is_directory() && !entry.path().filename().u8string().empty() &&
-            entry.path().filename().u8string()[0] == '.') {
-            dit.disable_recursion_pending();  // skip hidden dirs (e.g. a sibling .streamer/)
-            continue;
-        }
-        if (!entry.is_regular_file()) continue;
-        auto ext = entry.path().extension().u8string();
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-        if (ext != ".flac" && ext != ".wav") continue;
-
-        std::string filePath = entry.path().u8string();
-        std::string folder   = entry.path().parent_path().u8string();
+    forEachAudioFile(root, [&](const fs::path& path, const std::string& ext) {
+        const std::string filePath = path.u8string();
 
         // Check if file is unchanged
-        auto it = existing.find(filePath);
+        const auto it = existing.find(filePath);
         if (it != existing.end()) {
             int64_t sz = 0, mt = 0;
             statSizeAndMtime(filePath, sz, mt);
             if (sz == it->second.fileSize && mt == it->second.fileMtime) {
                 result.filesSkipped++;
-                continue;
+                return;
             }
         }
 
         result.filesScanned++;
-        if (ext == ".flac")
-            byFolder[folder].push_back(quickParseFLAC(filePath));
-        else if (ext == ".wav")
-            byFolder[folder].push_back(quickParseWAV(filePath));
-    }
+        const std::string folder = path.parent_path().u8string();
+        byFolder[folder].push_back(ext == ".flac" ? quickParseFLAC(filePath)
+                                                  : quickParseWAV(filePath));
+    });
 
     result.albums = buildAlbums(byFolder, rootPath);
     return result;
@@ -446,46 +546,36 @@ IncrementalScanResult scanLibraryIncremental(
 // ── Parallel scan ────────────────────────────────────────────────────────────
 
 std::vector<Album> scanLibraryParallel(const std::string& rootPath) {
-    fs::path root = fs::u8path(rootPath);
+    const fs::path root = fs::u8path(rootPath);
     if (!fs::exists(root)) return {};
 
-    // Collect all audio file paths first
-    std::vector<std::pair<std::string, std::string>> files; // (path, ext)
-    auto dit = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied);
-    for (auto end = fs::recursive_directory_iterator(); dit != end; ++dit) {
-        auto& entry = *dit;
-        if (entry.is_directory() && !entry.path().filename().u8string().empty() &&
-            entry.path().filename().u8string()[0] == '.') {
-            dit.disable_recursion_pending();  // skip hidden dirs (e.g. a sibling .streamer/)
-            continue;
-        }
-        if (!entry.is_regular_file()) continue;
-        auto ext = entry.path().extension().u8string();
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-        if (ext == ".flac" || ext == ".wav")
-            files.emplace_back(entry.path().u8string(), ext);
-    }
+    // Collect all audio file paths first. The extension is kept as a bool
+    // rather than a second std::string per file — it only ever answers "FLAC
+    // or WAV", and the walk has already narrowed it to those two.
+    struct Entry { std::string path; bool flac; };
+    std::vector<Entry> files;
+    forEachAudioFile(root, [&](const fs::path& path, const std::string& ext) {
+        files.push_back({path.u8string(), ext == ".flac"});
+    });
 
     // Parse in parallel using hardware concurrency
     unsigned numThreads = std::thread::hardware_concurrency();
     if (numThreads == 0) numThreads = 4;
 
     std::vector<std::future<std::vector<Track>>> futures;
-    size_t chunkSize = (files.size() + numThreads - 1) / numThreads;
+    const size_t chunkSize = (files.size() + numThreads - 1) / numThreads;
 
     for (unsigned i = 0; i < numThreads; i++) {
-        size_t start = i * chunkSize;
-        size_t end   = std::min(start + chunkSize, files.size());
+        const size_t start = i * chunkSize;
+        const size_t end   = std::min(start + chunkSize, files.size());
         if (start >= files.size()) break;
 
         futures.push_back(std::async(std::launch::async, [&files, start, end]() {
             std::vector<Track> tracks;
-            for (size_t j = start; j < end; j++) {
-                if (files[j].second == ".flac")
-                    tracks.push_back(quickParseFLAC(files[j].first));
-                else
-                    tracks.push_back(quickParseWAV(files[j].first));
-            }
+            tracks.reserve(end - start);
+            for (size_t j = start; j < end; j++)
+                tracks.push_back(files[j].flac ? quickParseFLAC(files[j].path)
+                                               : quickParseWAV(files[j].path));
             return tracks;
         }));
     }

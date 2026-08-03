@@ -52,7 +52,10 @@ struct Album {
     // inputs, computed once in buildAlbums() and cached in Db's own albums
     // table (never touches the external streamer db) — see
     // classifyReleaseType()/computeAlbumQualityStats() below.
-    enum class ReleaseType { Album = 0, Ep = 1, Single = 2, Remix = 3 };
+    // Stored as an integer in Db's albums table, so values are APPENDED and
+    // never reordered — renumbering would relabel every row already on disk.
+    enum class ReleaseType { Album = 0, Ep = 1, Single = 2, Remix = 3,
+                             Compilation = 4, Live = 5 };
     ReleaseType releaseType   = ReleaseType::Album;
     int         avgSampleRate = 0;
     bool        hasDsd        = false;
@@ -60,7 +63,7 @@ struct Album {
     void sortTracks();
 };
 
-// classifyReleaseType() (Album/EP/Single/Remix) is declared in
+// classifyReleaseType() (Album/EP/Single/Remix/Compilation) is declared in
 // core/variants.h — it moved there with the rest of the pure name/release
 // logic so core/tests/variants_test.cc could link and test it.
 

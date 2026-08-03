@@ -4,6 +4,7 @@
 // Wayland equivalent (edge-snap, cross-monitor re-fit) vs what does
 // (Complete mode's fullscreen, via xdg_toplevel's set_fullscreen()).
 #include "host.hh"
+#include "app_paths.hh"
 #include "player_view.hh"
 #include "wayland_platform.hh"
 #include "wayland_display.hh"
@@ -40,15 +41,7 @@ public:
         if (seekTimerFd_ >= 0) ::close(seekTimerFd_);
     }
 
-    std::string exeDir() const override {
-        char buf[PATH_MAX];
-        ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-        if (n <= 0) return "./";
-        buf[n] = '\0';
-        std::string path(buf);
-        auto slash = path.rfind('/');
-        return slash == std::string::npos ? "./" : path.substr(0, slash + 1);
-    }
+    std::string exeDir() const override { return app_paths::exeDir(); }
 
     bool init(PlayerWindow* owner, UiMode initialMode) override {
         owner_ = owner;
@@ -218,6 +211,10 @@ public:
                 } else {
                     owner_->onLButtonDown((int)e.x, (int)e.y);
                 }
+            } else if (e.button == 3) {
+                owner_->onNavBack();      // the mouse's back button — see input.hh
+            } else if (e.button == 4) {
+                owner_->onNavForward();
             }
             break;
         case PointerAction::Leave:
@@ -319,18 +316,22 @@ void crashHandler(int sig) {
 }
 
 void openLogFile() {
-    char buf[PATH_MAX];
-    ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-    std::string dir = "./";
-    if (n > 0) {
-        buf[n] = '\0';
-        std::string path(buf);
-        auto slash = path.rfind('/');
-        if (slash != std::string::npos) dir = path.substr(0, slash + 1);
-    }
-    std::string logPath = dir + "matrix_player.log";
+    // app_paths::stateDir() (not the exe's own directory) so a read-only
+    // install still gets a log — see app_paths.hh. Identical to the old path
+    // unless MATRIX_STATE_HOME was defined at build time. This is the FIRST
+    // thing main() does, which is why stateDir() has to be safe to call before
+    // anything else exists: it creates the directory itself and falls back to
+    // the exe's directory rather than failing.
+    std::string logPath = app_paths::stateDir() + "matrix_player.log";
     freopen(logPath.c_str(), "w", stdout);
-    freopen(logPath.c_str(), "a", stderr);
+    // stderr must share stdout's DESCRIPTOR, not merely its path. Opening the
+    // file twice gives the two streams independent offsets: stdout starts at 0
+    // and grows, walking straight over everything stderr appended at EOF. The
+    // whole audio engine logs to stderr — [AlsaSink], [JackSink], every
+    // snd_strerror string — so a log that looked complete was silently missing
+    // exactly the lines that explain a backend failure. That is why a crash
+    // switching JACK -> ALSA left "not even a message".
+    dup2(fileno(stdout), fileno(stderr));
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
 }

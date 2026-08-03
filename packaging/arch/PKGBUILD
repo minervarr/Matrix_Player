@@ -1,0 +1,186 @@
+# Maintainer: nava <nava@noreply.com>
+# Contributor: nava <nava@noreply.com>
+#
+# Matrix Player — Arch package.
+#
+# Builds the latest pushed main. Nothing here is fetched from the working tree,
+# so commit and push (with ./git_wrapper, which pushes SUBMODULES FIRST) before
+# running makepkg — a parent commit pointing at unpushed submodule commits will
+# fail in prepare().
+#
+#   makepkg -si
+#
+# Layout this produces:
+#   /opt/matrix_player/          root-owned, read-only: the exe + fonts/ +
+#                                assets/shaders/ + eq_profiles.json
+#   /usr/bin/matrix_player       symlink — /proc/self/exe resolves through it,
+#                                so no wrapper script is needed
+#   ~/.matrix_player/            the DB, the log and the ~45 MB atlas cache,
+#                                via -DMATRIX_STATE_HOME (see gui/src/app_paths.hh)
+pkgname=matrix-player-git
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Native C++17 music player driving a USB DAC directly, with a Vulkan-rendered UI"
+arch=('x86_64')
+url='https://github.com/minervarr/Matrix_Player'
+license=('custom')
+
+# Only these six are dynamic. Everything else — libFLAC, libmpg123, libusb,
+# soxr, libjpeg-turbo, freetype, msdfgen, sqlite3 — is linked statically into
+# the binary, by design.
+depends=('alsa-lib' 'jack2' 'vulkan-icd-loader' 'wayland' 'libxkbcommon' 'gcc-libs')
+
+# shader-slang-bin: slangc is REQUIRED at build time — no .spv is committed,
+#   and VceShaders.cmake otherwise falls back to a hardcoded Windows path.
+# nasm: libjpeg-turbo's SIMD. Without it JPEG artwork decode silently drops to
+#   the C paths.
+# wayland-protocols + wayland: wayland-scanner generates the xdg-shell and
+#   idle-inhibit glue from the system protocol XML at build time.
+makedepends=('git' 'cmake' 'ninja' 'shader-slang-bin' 'vulkan-headers'
+             'wayland-protocols' 'nasm')
+
+provides=('matrix-player')
+conflicts=('matrix-player')
+options=('!lto' '!debug')
+install="${pkgname}.install"
+
+# libmpg123 is NOT in git — audio_engine's initialize_files.py normally
+# downloads it, which cannot happen inside build(). Fetched here instead so
+# makepkg checksums it. Pin matches initialize_files.py's COMPONENTS table.
+_mpg123ver=1.32.10
+
+source=("matrix_player::git+https://github.com/minervarr/Matrix_Player.git#branch=main"
+        "https://www.mpg123.de/download/mpg123-${_mpg123ver}.tar.bz2"
+        'matrix-player.desktop'
+        'matrix-player.svg')
+sha256sums=('SKIP'
+            '87b2c17fe0c979d3ef38eeceff6362b35b28ac8589fbf1854b5be75c9ab6557c'
+            'SKIP'
+            'SKIP')
+
+# The 124 MB of bundled fonts dominate everything here. zstd -1 keeps the
+# packaging step to seconds; the default level spends noticeably longer for a
+# file that gets installed once and deleted.
+PKGEXT='.pkg.tar.zst'
+COMPRESSZST=(zstd -c -T0 -1 -)
+
+pkgver() {
+    cd "${srcdir}/matrix_player"
+    # No git tags exist; 0.1.0 is manifest.json's version field.
+    printf "0.1.0.r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+    cd "${srcdir}/matrix_player"
+
+    # 10 submodules, 3 levels deep. Writing the full `git config submodule.*.url`
+    # dance for a nested tree this size is not worth it for a package only ever
+    # built locally; this does mean prepare() touches the network, which is a
+    # deliberate deviation from Arch policy and is why this is not AUR-ready.
+    git submodule update --init --recursive
+
+    # ae_mpg123.cmake reads third_party/mpg123/src/{libmpg123,compat,common,
+    # include} and src/version.h. The release tarball has exactly that layout
+    # under its top-level directory, so a symlink is enough — initialize_files.py
+    # only filters that same tree down to a subset.
+    #
+    # Guarded loudly: if this path is ever wrong, core/CMakeLists.txt merely
+    # WARNS about the missing ae_mp3 target and the package silently loses MP3
+    # playback.
+    local _mpg="${srcdir}/mpg123-${_mpg123ver}"
+    [[ -f "${_mpg}/src/libmpg123/libmpg123.c" ]] || {
+        echo "==> ERROR: mpg123 source not where ae_mpg123.cmake expects it" >&2
+        return 1
+    }
+    ln -sfn "${_mpg}" framework/audio_engine/third_party/mpg123
+}
+
+build() {
+    # -DMATRIX_ARCH_LEVEL=native tunes for the build machine (and SIGILLs
+    # elsewhere — this package is not portable, on purpose). The root
+    # CMakeLists appends -ffp-contract=off unconditionally, which is what keeps
+    # the FMA that comes with native from changing the EQ's output; verify with
+    # dsp_null_test after any change here.
+    #
+    # MATRIX_STATE_HOME is what makes a read-only /opt install work at all.
+    cmake -S matrix_player -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DMATRIX_ARCH_LEVEL=native \
+        -DMATRIX_STATE_HOME=.matrix_player \
+        -DVCE_SLANGC="$(command -v slangc || echo /opt/shader-slang-bin/bin/slangc)" \
+        -DAUDIO_ENGINE_BUILD_TOOLS=OFF \
+        -DMATRIX_BUILD_AB_TEST=OFF
+
+    cmake --build build
+}
+
+check() {
+    # The audio path's gate. Debug-only targets are not built in a Release
+    # tree, so this configures a second, minimal tree for the one test that
+    # matters — the flags under test (-march=native, -ffp-contract=off) are the
+    # same ones build() uses.
+    cmake -S matrix_player -B build-check -G Ninja \
+        -DCMAKE_BUILD_TYPE=Debug \
+        -DMATRIX_ARCH_LEVEL=native \
+        -DVCE_SLANGC="$(command -v slangc || echo /opt/shader-slang-bin/bin/slangc)" \
+        -DAUDIO_ENGINE_BUILD_TOOLS=OFF
+    cmake --build build-check --target dsp_null_test variants_test stats_test
+    ./build-check/framework/audio_engine/dsp_null_test
+    ./build-check/core/variants_test
+    ./build-check/core/stats_test
+}
+
+package() {
+    cd "${srcdir}"
+
+    install -dm755 "${pkgdir}/opt/matrix_player"
+    install -Dm755 build/gui/matrix_player      "${pkgdir}/opt/matrix_player/matrix_player"
+    install -Dm644 matrix_player/eq_profiles.json "${pkgdir}/opt/matrix_player/eq_profiles.json"
+
+    # Shaders from the BUILD tree (compiled .spv), fonts from the SOURCE tree.
+    # Deliberately not from build/gui/, where the POST_BUILD steps put copies of
+    # both: a stale ~45 MB *.msdf.cache left in build/gui/fonts/ by a previous
+    # run would be packaged along with them.
+    cp -r build/assets                "${pkgdir}/opt/matrix_player/assets"
+    cp -r matrix_player/assets/fonts  "${pkgdir}/opt/matrix_player/fonts"
+    find "${pkgdir}/opt/matrix_player/assets" "${pkgdir}/opt/matrix_player/fonts" \
+        -type f -exec chmod 644 {} +
+
+    # A symlink, not a wrapper: readlink("/proc/self/exe") resolves it, so
+    # app_paths::exeDir() still reports /opt/matrix_player/.
+    install -dm755 "${pkgdir}/usr/bin"
+    ln -s /opt/matrix_player/matrix_player "${pkgdir}/usr/bin/matrix_player"
+
+    # uaccess for the DAC. The 70- prefix must sort below 73-seat-late.rules —
+    # see the header comment in the rule itself.
+    install -Dm644 matrix_player/scripts/linux/70-matrix-player-usb.rules \
+        "${pkgdir}/usr/lib/udev/rules.d/70-matrix-player-usb.rules"
+
+    install -Dm644 matrix-player.desktop \
+        "${pkgdir}/usr/share/applications/matrix-player.desktop"
+    install -Dm644 matrix-player.svg \
+        "${pkgdir}/usr/share/icons/hicolor/scalable/apps/matrix-player.svg"
+
+    # Static linking pulls these libraries' notices into the binary, so they
+    # ship with it. Paths tolerate a submodule reorganising its license file.
+    local _lic="${pkgdir}/usr/share/licenses/${pkgname}"
+    install -dm755 "${_lic}"
+    install -Dm644 matrix_player/LICENSE "${_lic}/LICENSE"
+    local f
+    for f in \
+        "framework/audio_engine/LICENSE:audio_engine" \
+        "framework/vk_canvas/LICENSE:vk_canvas" \
+        "framework/audio_engine/third_party/flac/COPYING.Xiph:libFLAC" \
+        "framework/audio_engine/third_party/libusb/COPYING:libusb" \
+        "framework/vk_canvas/first_party/vulkan_font_engine/third_party/freetype/LICENSE.TXT:freetype" \
+        "framework/vk_canvas/first_party/vulkan_font_engine/third_party/msdfgen/LICENSE.txt:msdfgen" \
+        "third_party/soxr/COPYING.LGPL:soxr" \
+        "third_party/libjpeg-turbo/LICENSE.md:libjpeg-turbo"
+    do
+        local _src="matrix_player/${f%%:*}" _name="${f##*:}"
+        [[ -f "${_src}" ]] && install -Dm644 "${_src}" "${_lic}/LICENSE.${_name}"
+    done
+    # mpg123 comes from the tarball, not the git tree.
+    install -Dm644 "mpg123-${_mpg123ver}/COPYING" "${_lic}/LICENSE.libmpg123"
+}

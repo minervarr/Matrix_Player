@@ -47,21 +47,87 @@ std::vector<AlsaDeviceInfo> AlsaOutput::enumerateDevices() {
     return out;
 }
 
+// Why snd_pcm_open refused, in ALSA's own words. AlsaSink logs snd_strerror and
+// then returns a bare bool, so the reason is gone by the time the caller can act
+// on it; re-asking costs one failed open on a path that has already failed, and
+// buys the difference between "audio didn't start" and "Device or resource busy"
+// — which, on a PipeWire desktop holding the card, IS the entire diagnosis.
+static std::string describeOpenFailure(const std::string& deviceId) {
+    snd_pcm_t* pcm = nullptr;
+    int err = snd_pcm_open(&pcm, deviceId.c_str(), SND_PCM_STREAM_PLAYBACK, 0);
+    if (err >= 0) {
+        // Freed itself between the two attempts. Say nothing rather than
+        // inventing a reason that no longer holds.
+        snd_pcm_close(pcm);
+        return {};
+    }
+    return std::string(snd_strerror(err)) + " (" + deviceId + ")";
+}
+
 bool AlsaOutput::configure(int rate, int channels, int bitDepth, bool strictBitperfect) {
-    if (!sink_.open(deviceId_)) return false;
+    lastError_.clear();
+    // NOTE: this re-opens the device on EVERY configure — AlsaSink::open()
+    // closes and re-opens if it was already open — so it runs once per track,
+    // not once per session. A card grabbed by something else during a gap
+    // therefore ends playback mid-album; with lastError_ surfaced by
+    // PlayerWindow that now says so instead of stopping silently.
+    if (!sink_.open(deviceId_)) {
+        lastError_ = describeOpenFailure(deviceId_);
+        if (lastError_.empty()) lastError_ = "could not open " + deviceId_;
+        return false;
+    }
     ae::AudioFormat req{};
     req.sampleRate   = rate;
     req.channels     = channels;
     req.bitDepth     = bitDepth;
     req.subslotBytes = (bitDepth + 7) / 8;
-    if (!sink_.configure(req)) return false;
+    if (!sink_.configure(req)) {
+        lastError_ = deviceId_ + " rejected " + std::to_string(rate) + " Hz / " +
+                     std::to_string(channels) + " ch / " + std::to_string(bitDepth) + "-bit";
+        return false;
+    }
     fmt_ = sink_.activeFormat();
     // Bit-perfect requires the exact requested rate; ALSA's set_rate_near can
     // silently snap to the nearest hardware-supported rate otherwise (fine
     // for the Reference-EQ path, which reads the real rate back via
     // getConfiguredRate() regardless of whether it matched the request).
-    if (strictBitperfect && fmt_.sampleRate != rate) return false;
+    if (strictBitperfect && fmt_.sampleRate != rate) {
+        lastError_ = deviceId_ + " runs " + std::to_string(fmt_.sampleRate) +
+                     " Hz, not the requested " + std::to_string(rate) + " Hz";
+        return false;
+    }
     return true;
+}
+
+// The standard PCM ladder, asked one rate at a time. snd_pcm_hw_params_test_rate
+// answers without committing anything, so this neither disturbs nor reserves the
+// device beyond the open itself.
+std::vector<int> AlsaOutput::probeRates(int channels) const {
+    static const unsigned kLadder[] = {
+        44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000
+    };
+    std::vector<int> out;
+
+    snd_pcm_t* pcm = nullptr;
+    // Busy or absent: {} is exactly what the base class returned before this
+    // override existed, so the caller's fallback is unchanged for that case.
+    if (snd_pcm_open(&pcm, deviceId_.c_str(), SND_PCM_STREAM_PLAYBACK, 0) < 0)
+        return out;
+
+    // One params block, re-seeded per rate with hw_params_any — allocating
+    // inside the loop would alloca() eight times down the same stack frame.
+    snd_pcm_hw_params_t* hw = nullptr;
+    snd_pcm_hw_params_alloca(&hw);
+    for (unsigned r : kLadder) {
+        if (snd_pcm_hw_params_any(pcm, hw) < 0) continue;
+        if (snd_pcm_hw_params_set_access(pcm, hw, SND_PCM_ACCESS_RW_INTERLEAVED) < 0) continue;
+        // Channel count narrows what the driver will admit on some cards, so
+        // ask about the layout actually wanted rather than the default.
+        if (channels > 0) snd_pcm_hw_params_set_channels(pcm, hw, (unsigned)channels);
+        if (snd_pcm_hw_params_test_rate(pcm, hw, r, 0) == 0) out.push_back((int)r);
+    }
+    snd_pcm_close(pcm);
+    return out;
 }
 
 bool AlsaOutput::start() { return sink_.start(); }

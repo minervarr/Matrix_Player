@@ -62,7 +62,7 @@ UiMetrics computeUiMetrics(float contentHeight);
 //
 // Clamped at 0 slack: a cell narrower than its art is degenerate, and a
 // negative pad would push the first row off the top of the page.
-inline int gridTopPad(int padXpx, int cellStepX, int artSize) {
+constexpr int gridTopPad(int padXpx, int cellStepX, int artSize) {
     const int slack = cellStepX - artSize;
     return padXpx + (slack > 0 ? slack / 2 : 0);
 }

@@ -26,6 +26,16 @@ public:
 
     bool configure(int rate, int channels, int bitDepth, bool strictBitperfect = false) override;
     bool start() override;
+
+    // Rates this card actually accepts, asked of the driver rather than assumed.
+    // Without it AudioOutput's default returns {} and pickOutputRate() falls
+    // back to a hardcoded 48000 for every device in existence — a guess that
+    // happens to be right often enough to hide that it is a guess.
+    std::vector<int> probeRates(int channels) const override;
+    // ALSA's own words for why configure() failed, e.g. "Device or resource
+    // busy" when PipeWire is holding the card. Shown on screen by PlayerWindow.
+    std::string lastError() const override { return lastError_; }
+
     int  writeFloat32(const float* data, int numSamples) override;
     int  writeInt32(const int32_t* data, int numSamples) override;
     void stop() override;
@@ -43,6 +53,7 @@ public:
 
 private:
     std::string deviceId_;
+    std::string lastError_;
     AlsaSink sink_;
     ae::AudioFormat fmt_{};
     std::vector<uint8_t> wireBuf_;

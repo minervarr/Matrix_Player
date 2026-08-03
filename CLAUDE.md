@@ -36,7 +36,17 @@ matrix_player/
                                  drawing must split names identically) and
                                  classifyReleaseType() (out of library.cpp), plus the
                                  multilingual edition/remix term tables classifyModifier()
-                                 reads. Also trackKey() — the stable identity the
+                                 reads and the compilation table isCompilationAlbum()
+                                 reads — a release type decided by NAME alone, because
+                                 the two obvious signals (year spread, titles reused from
+                                 other records) were measured on the real library and both
+                                 rank ordinary albums ABOVE actual anthologies; see the
+                                 comment on isCompilationAlbum() in core/variants.h.
+                                 isLiveAlbum() is the sixth type and shares the REMIX
+                                 machinery — everyDiscIsMajority(), the per-disc rule the
+                                 Genesys II case forced — because "Edición Especial"
+                                 reissues pair a studio disc with a live bonus disc and
+                                 read 32-48% live when counted flat Also trackKey() — the stable identity the
                                  LISTENING LOG is recorded against, folded from
                                  albumArtist ⨯ album ⨯ title ⨯ disc ⨯ track with
                                  Edition modifiers stripped, so renaming a folder or
@@ -103,6 +113,23 @@ matrix_player/
       theme.hh                  — the color palette; player_view.cc and the panels both
                                   draw from this one place
       color.hh, layout_rect.hh  — portable ColorRef/LayoutRect (replace COLORREF/RECT)
+      app_paths.hh/.cc          — WHERE FILES LIVE, and the one rule about it:
+                                  READ-ONLY data (fonts/, assets/shaders/,
+                                  eq_profiles.json) is exe-relative and stays that way;
+                                  everything WRITTEN (matrix_player.db, the log, the
+                                  ~45 MB atlas cache pruneStaleCaches() also deletes
+                                  from) goes through stateDir(). The two are the same
+                                  directory by default, so a build tree and the
+                                  dist/linux/ tarballs remain one self-contained folder
+                                  you can move anywhere. -DMATRIX_STATE_HOME=.matrix_player
+                                  splits them, sending the writable half to $HOME/<name>/
+                                  — what a system package needs, since /opt is root-owned
+                                  and the atlas cache is per-user regardless (it holds
+                                  whatever scripts the listener's own library contains).
+                                  Deliberately NOT XDG; a plain dotdir, no spec involved.
+                                  Also the single home of exe-directory discovery, which
+                                  had drifted into four copies (both hosts, openLogFile,
+                                  tools/ui_capture)
       ui_metrics.hh/.cc         — the single scale factor: 5 type roles from one ratio,
                                   plus space()/stroke(). Tested by ui_metrics_test.cc
       ui_fonts.hh               — the ONE place the UI face paths and the atlas cache
@@ -258,6 +285,20 @@ identical output. If it fails, the audio changed — that is the whole point.
 Speed on this path comes from removing overhead, never from touching the
 signal; see rule 9 in `framework/audio_engine/CLAUDE.md`.
 
+**`-ffp-contract=off` is why `MATRIX_ARCH_LEVEL` is safe** (root
+`CMakeLists.txt`, next to `-fno-math-errno`). GCC defaults to
+`-ffp-contract=fast`, which fuses `a*b + c` into a single FMA wherever the ISA
+has one. At the generic baseline there is no FMA to fuse into; at v3/v4/native/
+znver4 there is, and the EQ's biquad accumulator then carries a wider
+intermediate than the frozen oracle. Measured, not assumed: `-march=native`
+with contraction at the default **fails** `dsp_null_test` test [2] at
+`dsp_null_test.cpp:481`; with the flag it passes all 15681922 checks. This was
+found while packaging, and it means every `--share` v3/v4/znver4 tarball built
+before this flag existed shipped an EQ that did not match the reference. The
+flag is global rather than scoped to the `ae_*` targets on purpose — the DSP
+primitives are headers, so they compile into consumers like `player_view.cc`
+too, and a per-target flag would miss exactly the copies that matter.
+
 Hardware smoke tests, when a DAC is plugged in:
 
 ```bash
@@ -329,18 +370,21 @@ These things are load-bearing and easy to undo by accident:
    can be asserted to land on an exact local midnight. Range presets belong
    there and not in the GUI, where nothing can test them.
 
-## Headphone profiles (`eq_headphones`)
+## Driver AutoEQ profiles (`eq_headphones`)
 
 `eq_assignments` is keyed by **device** — VID:PID, `"alsa"`, `"jack"`. That was
-never the real relationship: a DAC has no frequency response, headphones do, and
-several pairs take turns in one jack. So the two tables split the job:
+never the real relationship: a DAC has no frequency response, the DRIVERS do, and
+several pairs take turns on one output. So the two tables split the job:
 
 - **`eq_assignments`** — which pair is on *this output* right now. Read by
   `applyDeviceEq()` on every track start; unchanged in shape.
 - **`eq_headphones`** — the listener's inventory, global across outputs. What
-  the sidebar quick-switcher lists.
+  the sidebar quick-switcher lists. (Table and method names still say
+  *headphone*; the UI says **DRIVER'S AUTOEQ**, because the list serves IEMs and
+  speakers too and "drivers" alone would read as an output driver here. Renaming
+  the schema would be a migration bought for nothing.)
 
-Three things here are load-bearing:
+Five things here are load-bearing:
 
 1. **A row is earned, not selected.** `selectEqProfile()` applies a profile
    immediately, but `creditEqHeadphone()` only runs after `kEqCreditMs` (60 s)
@@ -354,10 +398,25 @@ Three things here are load-bearing:
 3. **`creditEqHeadphone()` is two statements, never `INSERT OR REPLACE`.**
    Replacing the row would wipe `pinned` and `use_count`, silently unpinning a
    pair every time it played — and the prune would then be free to evict it.
+4. **`clearEqProfile()` deletes the `"global"` assignment as well as the active
+   device's.** It is the sidebar's `No AutoEQ` row and the EQ panel's `Clear`
+   button, one implementation. `applyDeviceEq()` runs at EVERY track start and
+   falls back to a `"global"` row when the device key has none, so clearing only
+   the device key lets such a row put the profile back on the next song — "off"
+   that un-sticks by itself. Nothing has ever *written* `"global"`
+   (`saveEqAssignment` has one call site and it always passes
+   `getActiveDeviceKey()`), so any such row is legacy.
+5. **The sidebar shows what FITS, and it is not four.** `kEqHpMaxRows` is 4, but
+   the sidebar holds three rows below Settings, so `drawHeadphoneBlock()` clamps
+   the saved list to the space that exists and drops rows from the LIST rather
+   than hiding the block — the header, `No AutoEQ` and `Search more…` are its
+   minimum. Order is pinned → most-used → most-recent (`loadEqHeadphones`), and
+   with that few rows on screen the ordering is what decides reachability.
 
 The prune keeps 12 unpinned rows; pinned rows are exempt and are not counted
 against that budget. Pinning and removing happen only in the EQ panel's
-`My Headphones` tab — the sidebar block is a switcher and nothing else.
+`My Drivers` tab — the sidebar block is a switcher and nothing else, its
+`No AutoEQ` row being a switch position rather than an edit.
 
 ### Schema versioning
 
@@ -392,12 +451,37 @@ Two mechanisms in `db.cpp`, with a strict division of labour:
 - `StartCause::Shuffle` has no producer yet — the app has no shuffle.
   (`StartCause::Playlist` DOES have one now: the Playlists panel, see below.)
 
-## Playlists (`drawPlaylists` in `gui/src/player_view.cc`)
+## Playlists (`drawPlaylistSection` in `gui/src/player_view.cc`)
 
 The consumer of the generated-playlist queries. Three lists — Heavy Rotation,
 Forgotten Favourites, Never Heard — behind one sidebar row.
 
-Two things here are load-bearing:
+**It is a SECTION, not a panel.** `PlayerWindow::NavSection` says which of the
+seven sidebar rows is showing; Albums/EPs/Singles/Compilations/Live/Remixes are
+one section over six release types (`albumTypeFilter_`), Playlists is the
+other. That row order is deliberate and is NOT the enum's order (the enum is
+frozen by the `albums` table); it lives in `recalcLayout()`. It draws into
+the same content area with the same two levels the album section has — a grid
+of tiles, then one of them opened full-page — and everything outside that area
+keeps working.
+
+It used to be `SettingsPanel::Playlists`, borrowing the settings overlay. Do
+not put it back: the panel dispatchers (`onPanelClick`/`onPanelMouseMove`/
+`onPanelWheel`/`onPanelKeyDown`) divert every event before the sidebar or the
+transport bar is hit-tested, so while a playlist was up you could not click
+Singles, could not click Settings, and could not press Space to stop the music.
+Deliberately NOT another `AlbumTypeFilter` value either — that enum is cast
+straight to `Album::ReleaseType`, and a value with no release type behind it
+would empty `gridIndices_`, which `nextAlbumInSection()` also reads.
+
+A tile's artwork is generated (`drawPlaylistTileArt`): for an ordered list a
+2×2 mosaic of its top entries' covers, **quadrant 1 = top-right = first place**,
+then anticlockwise; the fourth quadrant is the fourth record's cover at exactly
+four, and a fade to black past that. Covers are distinct RECORDS, not rows.
+Unordered lists get a flat treatment instead (custom image / solid colour /
+gradient — Never Heard is generated, so it gets the gradient).
+
+Two more things here are load-bearing:
 
 1. **`neverHeard()` takes `limit = 0` meaning UNLIMITED**, the opposite of every
    other query in `Db`, where `limit <= 0` returns nothing. The call sites use
@@ -409,9 +493,22 @@ Two things here are load-bearing:
    excludes, so the generated lists quietly stop learning from real choices.
    Nothing crashes; only the history goes wrong.
 
+3. **A tile's `albums[]` holds album INDICES, so `onScanDone()` has to rebuild
+   it.** Every index into `albums_` dies on a rescan; a stale one paints some
+   other record's cover into a rank quadrant, which looks like working art and
+   is simply wrong. `loadPlaylistCovers()` takes `albumsMu_` itself, so it must
+   run outside the scope that just held it — that lock is not reentrant.
+
 `TopEntry` carries no duration, so each row's key is resolved through
 `trackKeyIndex_` once per load under a single `albumsMu_` lock — never per row
 per frame, since that lock is shared with the gapless thread.
+
+**Playing from a playlist does not move the view.** `onPlay()` retargets the
+album view at whatever started, but never while the listener is in this
+section: starting a track from a list is not a request to leave the list, and
+the transport bar already says what is playing. `applyTrackMetadata()` follows
+the same rule at a gapless boundary — it only re-points the album view when
+that view was already following the music.
 
 ---
 
@@ -448,6 +545,32 @@ headers (`ae_alsa`/`ae_jack` targets exist) — `gui/CMakeLists.txt` checks
 `if(TARGET ae_alsa)` and defines `MATRIX_HAVE_ALSA`/`MATRIX_HAVE_JACK`
 accordingly, so the Audio Settings panel only ever offers backends this build
 actually has.
+
+Three things about switching between them are load-bearing:
+
+1. **A backend is closed by NAME, never by a destructor.**
+   `applyAudioSettingsPanel()` and `shutdown()` call `output_->stop()` +
+   `output_->close()` and then `reset()`. Leaving it to `unique_ptr`'s
+   assignment ran a whole backend's teardown inside a Wayland click callback,
+   and switching JACK → ALSA there killed the app outright. `onStop()` alone is
+   not enough — it stops the output and never closes it.
+2. **A JACK client handle can die while the pointer still looks fine.** When
+   the server goes, libjack frees the client object; `client` is then dangling,
+   every `if (client)` guard still passes, and the next `jack_*` call jumps
+   through a freed vtable. `JackSink::live()` is the only legal way to reach
+   that handle and deliberately **leaks** it once `serverGone` is set — read
+   its comment before "fixing" the missing `jack_client_close()`.
+   `jack_on_shutdown` is registered in `open()`, not `start()`, because a
+   client opened only to enumerate ports (which the settings panel does) must
+   learn about it too.
+3. **An audio failure must reach the screen.** It goes through
+   `audioNotice_` (§8.7 of `UI_DESIGN_SYSTEM.md`) carrying
+   `AudioOutput::lastError()` — the driver's own words. `Host::showErrorMessage`
+   is stderr-only on Linux and is the log-side companion, not the report. And
+   stderr only survives because `openLogFile()` `dup2`s it onto stdout's
+   descriptor: opening the same log path twice gave the two streams independent
+   offsets, and stdout's writes silently erased every `[AlsaSink]`/`[JackSink]`
+   line.
 
 ### Tested device
 
@@ -515,6 +638,14 @@ back into `PlayerWindow`'s public `on*()` methods (`onMouseMove`, `onTimer`,
 switch and `linux_host.cc`'s Wayland callbacks both call into, so
 `player_view.cc`'s layout/drawing/hit-testing code is identical on both
 platforms.
+
+**Mouse back/forward** (the two thumb buttons) reach `PlayerWindow::onNavBack()`
+/ `onNavForward()` from both hosts. Windows needs only `windows_host.cc`
+(`WM_XBUTTONDOWN`), but Linux needed the vk_canvas submodule: `PointerEvent::
+button` only knew left/right/middle, so `input.hh` gained `3 = back, 4 =
+forward` and `wayland_display.cc` gained the `BTN_SIDE`/`BTN_EXTRA` mapping.
+That is a submodule change — commit it with `git_wrapper`, which pushes
+submodules before the parent.
 
 **What has no Wayland equivalent, by design** (documented narrowing, not a
 silent gap): global hotkeys (Alt+F/J/C/U/G/H/L edge-snap/mode-toggle) are

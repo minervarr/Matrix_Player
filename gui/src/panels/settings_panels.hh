@@ -15,15 +15,16 @@ enum class FontStyle : unsigned char;
 // full-page-view pattern (like the album view) rather than a modal popup —
 // Wayland has no child/owned-window primitive matching Win32's modal dialogs.
 
-// Playlists is the odd one out and deliberately so: it is not a settings page
-// at all, it is a music-browsing destination reached from its own sidebar row.
-// It lives in this enum because the four input dispatchers (onPanelClick /
-// onPanelMouseMove / onPanelWheel / onPanelKeyDown) already redirect here
-// BEFORE any grid/album-view guard runs, so borrowing the overlay costs one
-// `case` in each instead of a fifth top-level view state threaded through
-// every one of those guards. The headphone quick-switcher borrows it the same
-// way (see panelFromSidebar_).
-enum class SettingsPanel { None, ManageFolders, AudioSettings, EqSettings, FolderPicker, Playlists };
+// Playlists used to be a sixth value here, borrowing the overlay to draw in.
+// It is NOT one any more, and must not become one again: the same four input
+// dispatchers (onPanelClick / onPanelMouseMove / onPanelWheel /
+// onPanelKeyDown) that make this enum cheap to extend also divert every event
+// to the panel BEFORE the sidebar or the transport bar is hit-tested — which
+// is exactly right for a settings dialog and exactly wrong for a way of
+// browsing music. While Playlists was in here you could not click Singles,
+// could not click Settings, and could not press Space to stop the music. It is
+// a top-level section now (PlayerWindow::NavSection).
+enum class SettingsPanel { None, ManageFolders, AudioSettings, EqSettings, FolderPicker };
 
 // The scrollable/selectable text row list these panels used to draw with a
 // local panels::drawRowList (+ rowRect/hitTestRows) now comes from the

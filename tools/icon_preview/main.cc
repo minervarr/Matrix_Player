@@ -38,6 +38,7 @@
 #include "wayland_platform.hh"
 #include "wayland_window.hh"
 
+#include "app_paths.hh"
 #include "layout_rect.hh"
 #include "theme.hh"
 #include "ui_fonts.hh"
@@ -106,7 +107,7 @@ public:
         const std::string dir = exeDir();
         const std::string fontPath = dir + ui_fonts::regular();
         uiFont_.load(fontPath.c_str());
-        const std::string cachePath = dir + ui_fonts::cacheName();
+        const std::string cachePath = app_paths::stateDir() + ui_fonts::cacheFile();
 
         FileByteReader loader;
         if (!msdfFont_.generate(loader, fontPath.c_str(), cachePath.c_str())) {

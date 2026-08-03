@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Matrix Player
+GenericName=Music Player
+Comment=Bit-perfect USB DAC music player
+Exec=matrix_player
+Icon=matrix-player
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+Keywords=music;audio;flac;dsd;player;dac;
+StartupNotify=false

@@ -46,6 +46,10 @@ public:
     bool   waitForData(int minSamples, int timeoutMs) override;
     int    getPreBufferSamples() const override;
     bool   hasFaulted() const override;
+    // "No running JACK server" and "the server went away mid-playback" are
+    // completely different situations to be in, and both used to surface as
+    // silence. See PlayerWindow's audioNotice_.
+    std::string lastError() const override;
 
 private:
     bool ensureClientOpen();

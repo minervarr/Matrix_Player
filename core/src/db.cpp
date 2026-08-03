@@ -609,7 +609,8 @@ std::vector<EqHeadphone> Db::loadEqHeadphones(int limit) {
     if (!impl_->db) return out;
     const char* sql =
         "SELECT profile_name, profile_source, profile_form, last_used, use_count, pinned "
-        "FROM eq_headphones ORDER BY pinned DESC, last_used DESC, profile_name ASC LIMIT ?;";
+        "FROM eq_headphones "
+        "ORDER BY pinned DESC, use_count DESC, last_used DESC, profile_name ASC LIMIT ?;";
     sqlite3_stmt* stmt = nullptr;
     sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr);
     if (!stmt) return out;

@@ -1,4 +1,5 @@
 #include "art_view.hh"
+#include "app_paths.hh"
 #include "ui_fonts.hh"
 #include "art_texture.hh"
 #include "ui_metrics.hh"
@@ -66,7 +67,7 @@ bool ArtWindow::create(Host*) {
     // Generate the MTSDF atlas (cached to disk, shared with PlayerWindow's own
     // MsdfFont instance — same cache file, so whichever window initializes
     // second gets a cache hit instead of re-rasterizing).
-    std::string cachePath = toUtf8Path(ui_fonts::cacheName().c_str());
+    std::string cachePath = app_paths::stateDir() + ui_fonts::cacheFile();
     FileByteReader loader;
     if (msdfFont_.generate(loader, fontPath.c_str(), cachePath.c_str())) {
         bool addedStyle = false;
@@ -189,7 +190,7 @@ bool ArtWindow::create(Host* host) {
     std::string fontPath = exeDir + ui_fonts::regular();
     uiFont_.load(fontPath.c_str());
 
-    std::string cachePath = exeDir + ui_fonts::cacheName();
+    std::string cachePath = app_paths::stateDir() + ui_fonts::cacheFile();
     FileByteReader loader;
     if (msdfFont_.generate(loader, fontPath.c_str(), cachePath.c_str())) {
         bool addedStyle = false;

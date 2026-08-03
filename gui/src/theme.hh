@@ -101,7 +101,7 @@ struct QualityColor {
 // tile as well; it was dropped — a color per tile said nothing worth the noise
 // on a grid already dense with artwork, and it gets less meaningful still once
 // a tile stands for a set of quality/edition variants (see TODO.md).
-inline QualityColor qualityColorFor(int sampleRate, bool isDsd) {
+constexpr QualityColor qualityColorFor(int sampleRate, bool isDsd) {
     if (isDsd)                return { true, CLR_QUALITY_DSD };
     if (sampleRate >= 352800) return { true, CLR_QUALITY_DXD };
     if (sampleRate >= 64000)  return { true, CLR_QUALITY_HIRES };

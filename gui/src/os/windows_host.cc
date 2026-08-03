@@ -4,6 +4,7 @@
 // computeEssentialWindowRect()/adaptToCurrentMonitor()/snapToEdge() before the
 // host abstraction (see ../host.hh).
 #include "host.hh"
+#include "app_paths.hh"
 #include "player_view.hh"
 #include "win32_platform.hh"
 #include "renderer.hh"
@@ -86,17 +87,7 @@ RECT computeEssentialWindowRect(HMONITOR mon) {
 
 class WindowsHost : public Host {
 public:
-    std::string exeDir() const override {
-        wchar_t exePathW[MAX_PATH];
-        GetModuleFileNameW(nullptr, exePathW, MAX_PATH);
-        std::wstring dirW = exePathW;
-        dirW = dirW.substr(0, dirW.rfind(L'\\') + 1);
-        int len = WideCharToMultiByte(CP_UTF8, 0, dirW.c_str(), -1, nullptr, 0, nullptr, nullptr);
-        std::string dir(len, '\0');
-        WideCharToMultiByte(CP_UTF8, 0, dirW.c_str(), -1, dir.data(), len, nullptr, nullptr);
-        if (!dir.empty() && dir.back() == '\0') dir.pop_back();
-        return dir;
-    }
+    std::string exeDir() const override { return app_paths::exeDir(); }
 
     bool init(PlayerWindow* owner, UiMode initialMode) override {
         owner_ = owner;
@@ -416,6 +407,16 @@ private:
             owner_->onLButtonDblClk(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
             return 0;
 
+        // The two thumb buttons. Unlike every other mouse message these are
+        // multiplexed onto one WM_, with the button in the HIWORD of wParam,
+        // and they want TRUE rather than 0 returned (see the XBUTTON docs).
+        case WM_XBUTTONDOWN: {
+            WORD btn = GET_XBUTTON_WPARAM(wp);
+            if (btn == XBUTTON1)      owner_->onNavBack();
+            else if (btn == XBUTTON2) owner_->onNavForward();
+            return TRUE;
+        }
+
         case WM_MOUSEWHEEL: {
             // WM_MOUSEWHEEL delivers SCREEN coordinates (the one mouse
             // message that does) — convert to client before hit-testing,
@@ -502,11 +503,23 @@ void enableDpiAwareness() {
     SetProcessDPIAware();
 }
 
+// app_paths hands back UTF-8; every file call below stays WIDE. The narrow
+// _s variants would go through the ANSI codepage and mangle any non-ASCII
+// component — and stateDir() can now sit under a user's home directory, where
+// that is a great deal more likely than it ever was beside the executable.
+std::wstring utf8ToWide(const std::string& s) {
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+    if (n <= 0) return {};
+    std::wstring w(static_cast<size_t>(n - 1), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), n);
+    return w;
+}
+
 void openLogFile() {
-    wchar_t exePath[MAX_PATH];
-    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-    std::wstring logPath = exePath;
-    logPath = logPath.substr(0, logPath.rfind(L'\\') + 1) + L"matrix_player.log";
+    // app_paths::stateDir() (not the exe's own directory) so a read-only
+    // install still gets a log — see app_paths.hh. Identical to the old path
+    // unless MATRIX_STATE_HOME was defined at build time.
+    std::wstring logPath = utf8ToWide(app_paths::stateDir()) + L"matrix_player.log";
     FILE* outFp = nullptr; _wfreopen_s(&outFp, logPath.c_str(), L"w", stdout);
     FILE* errFp = nullptr; _wfreopen_s(&errFp, logPath.c_str(), L"a", stderr);
     setvbuf(stdout, nullptr, _IONBF, 0);
@@ -525,10 +538,9 @@ LONG WINAPI crashHandler(EXCEPTION_POINTERS* info) {
            info->ExceptionRecord->ExceptionAddress);
     fflush(stdout);
 
-    wchar_t exePath[MAX_PATH];
-    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-    std::wstring dumpPath = exePath;
-    dumpPath = dumpPath.substr(0, dumpPath.rfind(L'\\') + 1) + L"matrix_player_crash.dmp";
+    // Beside the log, for the same reason — the exe's directory may be
+    // read-only, and a crash dump that cannot be written is no dump at all.
+    std::wstring dumpPath = utf8ToWide(app_paths::stateDir()) + L"matrix_player_crash.dmp";
 
     HANDLE hFile = CreateFileW(dumpPath.c_str(), GENERIC_WRITE, 0, nullptr,
                                 CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);

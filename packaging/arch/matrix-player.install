@@ -1,0 +1,39 @@
+_reload_udev() {
+    # The rule tags the DAC with uaccess; without a reload it only takes effect
+    # after the device is replugged (or the next boot).
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload >/dev/null 2>&1 || true
+        udevadm trigger --subsystem-match=usb >/dev/null 2>&1 || true
+    fi
+}
+
+post_install() {
+    _reload_udev
+    cat <<'EOF'
+
+  Matrix Player is installed to /opt/matrix_player (read-only) and on your
+  PATH as `matrix_player`.
+
+  Your data — library database, log, and the font atlas cache — lives in
+  ~/.matrix_player and is NOT removed by `pacman -R`. Delete it by hand if you
+  want a clean slate.
+
+  The bundled udev rule covers the HiBy FC4 (32bb:0004). For another DAC, add
+  a line to /usr/lib/udev/rules.d/70-matrix-player-usb.rules (a commented
+  template is in the file) — or the change will be lost on the next upgrade,
+  so prefer a copy in /etc/udev/rules.d/ for anything you want to keep.
+
+  First launch re-rasterises the font atlas (~45 MB, a few seconds). Every
+  later launch loads it from cache.
+
+EOF
+}
+
+post_upgrade() {
+    _reload_udev
+}
+
+post_remove() {
+    _reload_udev
+    echo "  ~/.matrix_player was left in place (library database, log, atlas cache)."
+}

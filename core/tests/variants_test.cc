@@ -283,6 +283,121 @@ int main() {
         assert(classifyReleaseType("X", tracksOf({{1,"A"}, {1,"B"},
                                                   {2,"C (Baz Remix)"},
                                                   {2,"D (Qux Remix)"}}))     != RT::Remix);
+
+        // ── Compilations ───────────────────────────────────────────────────
+        // The two real ones in the library, both previously filed as Albums.
+        assert(classifyReleaseType("Antología Audiovisual",
+                                    tracksOf({{0,"a"},{0,"b"},{0,"c"},
+                                              {0,"d"},{0,"e"}}))            == RT::Compilation);
+        assert(classifyReleaseType("Rarezas", tracksOf({{0,"a"},{0,"b"},{0,"c"},
+                                                        {0,"d"},{0,"e"}}))   == RT::Compilation);
+        // Common spellings, accented and not, across the table's languages.
+        assert(isCompilationAlbum("Greatest Hits"));
+        assert(isCompilationAlbum("Grandes Éxitos"));
+        assert(isCompilationAlbum("Grandes Exitos"));       // fold(), same answer
+        assert(isCompilationAlbum("The Best Of Queen"));
+        assert(isCompilationAlbum("Héroes del Silencio - B-Sides"));  // punctuation
+        assert(isCompilationAlbum("Disco de Oro"));
+
+        // NAME BEFORE COUNT: a two-track anthology is still a compilation, not
+        // the EP its length would otherwise make it.
+        assert(classifyReleaseType("Grandes Éxitos", tracksOf({{0,"a"},{0,"b"}}))
+                                                                     == RT::Compilation);
+
+        // NON-REGRESSION. These are the records the rejected heuristics got
+        // wrong, and the ones the name table must not touch either.
+        //   - a career-spanning SPECIAL EDITION (widest ℗-year spread in the
+        //     whole library, and 68% of its titles exist on other records)
+        assert(classifyReleaseType("El Mar No Cesa- Edición Especial",
+                                    tracksOf({{0,"a"},{0,"b"},{0,"c"},
+                                              {0,"d"},{0,"e"}}))            == RT::Album);
+        //   - a LIVE album, whose titles are all re-recordings
+        assert(classifyReleaseType("Parasiempre", tracksOf({{0,"a"},{0,"b"},{0,"c"},
+                                                            {0,"d"},{0,"e"}})) == RT::Album);
+        //   - an ordinary album whose every title also sits on its deluxe twin
+        assert(classifyReleaseType("The End Of Genesys",
+                                    tracksOf({{0,"a"},{0,"b"},{0,"c"},
+                                              {0,"d"},{0,"e"}}))            == RT::Album);
+
+        // Remix wins over Compilation when a name says both.
+        assert(classifyReleaseType("Greatest Hits Remixed", tracksOf({{0,"a"}}))
+                                                                     == RT::Remix);
+
+        // Word boundaries, not substrings — the reason the table is matched on
+        // a space-padded, punctuation-collapsed name.
+        assert(!isCompilationAlbum("The Best Offer"));      // "best of" + "fer"
+        assert(!isCompilationAlbum("Anthologies Of Ash"));  // "anthology" != "anthologies"
+        assert(!isCompilationAlbum(""));
+
+        // Words this table deliberately does NOT carry alone, because
+        // kEditionTerms owns them: an edition is one record re-pressed, not a
+        // collection across many.
+        assert(!isCompilationAlbum("Gold"));
+        assert(!isCompilationAlbum("The Complete Sessions"));
+        assert(!isCompilationAlbum("Definitive Edition"));
+
+        // ── Live records ───────────────────────────────────────────────────
+        // A marker only counts inside a bracket. "Live" is an ordinary word.
+        assert(isLiveTrackTitle("Maldito duende (Directo)"));
+        assert(isLiveTrackTitle("Iberia sumergida (Live)"));
+        assert(isLiveTrackTitle("La herida (En directo)"));
+        assert(isLiveTrackTitle("La chispa adecuada [Directo]"));
+        assert(isLiveTrackTitle("Decadencia (Medley, Live)"));   // not at the front
+        assert(isLiveTrackTitle("Hechizo (Directo"));            // closing bracket optional
+        // A tag truncated mid-marker misses, ON PURPOSE: matching a bare
+        // "direct" would swallow "(Direct to Disc)", a studio mastering credit.
+        assert(!isLiveTrackTitle("Días De Borrasca (Víspera) (Direct"));
+        assert(!isLiveTrackTitle("Sonata (Direct to Disc)"));
+        assert(!isLiveTrackTitle("Take Five (Director's Cut)"));
+        assert(!isLiveTrackTitle("Live and Let Die"));
+        assert(!isLiveTrackTitle("Live Forever"));
+        assert(!isLiveTrackTitle("Alive"));
+        assert(!isLiveTrackTitle("Delivery (Radio Edit)"));
+
+        // PARASIEMPRE: one disc, every title marked. The name says nothing, so
+        // this rests entirely on the title majority.
+        {
+            std::vector<std::pair<int, std::string>> spec;
+            for (const char* t : {"Deshacer el mundo", "Iberia sumergida",
+                                  "Parasiempre", "El camino del exceso",
+                                  "La sirena varada", "Maldito duende",
+                                  "Oración", "Hechizo", "Entre dos tierras"})
+                spec.push_back({1, std::string(t) + " (Directo)"});
+            assert(classifyReleaseType("Parasiempre", tracksOf(spec)) == RT::Live);
+        }
+
+        // THE EDICIÓN ESPECIAL CASE, the live twin of Genesys II. Disc 1 is the
+        // studio album, disc 2 a live bonus disc. Counted flat this library's
+        // Senderos reissue reads 12 of 25 live; per disc, disc 1 answers no.
+        {
+            std::vector<std::pair<int, std::string>> spec;
+            for (int i = 0; i < 6; i++) spec.push_back({1, "Studio " + std::to_string(i)});
+            for (int i = 0; i < 7; i++) spec.push_back({2, "Studio " + std::to_string(i) + " (Directo)"});
+            auto ts = tracksOf(spec);
+            int live = 0;
+            for (auto& t : ts) if (isLiveTrackTitle(t.title)) live++;
+            assert(live * 2 > (int)ts.size());   // the flat rule WOULD have fired
+            assert(classifyReleaseType("Senderos De Traición - Edición Especial", ts)
+                                                                         == RT::Album);
+        }
+
+        // The album name saying so is enough on its own.
+        assert(classifyReleaseType("MTV Unplugged", tracksOf({{0,"a"},{0,"b"},{0,"c"},
+                                                              {0,"d"},{0,"e"}})) == RT::Live);
+        assert(classifyReleaseType("Live At Wembley", tracksOf({{0,"a"}}))  == RT::Live);
+
+        // Live outranks Compilation when a name says both.
+        assert(classifyReleaseType("Grandes Éxitos en Directo", tracksOf({{0,"a"},{0,"b"}}))
+                                                                     == RT::Live);
+        // ...and Remix still outranks Live.
+        assert(classifyReleaseType("Live Remixes", tracksOf({{0,"a"}}))     == RT::Remix);
+
+        // A studio album whose titles merely contain the word stays an album.
+        assert(classifyReleaseType("X", tracksOf({{0,"Live and Let Die"},
+                                                  {0,"Live Forever"},
+                                                  {0,"Alive"},
+                                                  {0,"Living Things"},
+                                                  {0,"Delivery"}}))          == RT::Album);
     }
 
     // ── Remix sets of the same track group together ────────────────────────

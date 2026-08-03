@@ -166,12 +166,19 @@ public:
     void clearEqAssignment(const std::string& deviceKey);
     bool loadEqAssignment(const std::string& deviceKey, EqAssignment& out);
 
-    // ── Headphone inventory ─────────────────────────────────────────────────
-    // Pinned first, then most recent. creditEqHeadphone() both admits a new
-    // pair and refreshes an existing one's recency — it is called once a
-    // profile has survived a minute of real listening, never on mere
-    // selection, so a mis-click can't take a slot. It also prunes the unpinned
-    // tail, keeping the list short enough to stay readable.
+    // ── Driver inventory ────────────────────────────────────────────────────
+    // Pinned first, then MOST USED, with recency only as the tie-break among
+    // equal counts. The sidebar block shows four rows, so the order decides
+    // what is reachable in one click; ranking by recency put whatever was
+    // touched last on top, which is not the same question as "which of these
+    // do I actually use". Pinned still outranks the count, because pinning is
+    // the listener saying "keep this one visible" outright and a use-count
+    // ranking would be free to push it off the four.
+    //
+    // creditEqHeadphone() both admits a new pair and refreshes its counts — it
+    // is called once a profile has survived a minute of real listening, never
+    // on mere selection, so a mis-click can't take a slot. It also prunes the
+    // unpinned tail, keeping the list short enough to stay readable.
     std::vector<EqHeadphone> loadEqHeadphones(int limit);
     void creditEqHeadphone(const std::string& name, const std::string& source,
                            const std::string& form, int64_t whenUnixSec);

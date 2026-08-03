@@ -1,4 +1,5 @@
 #include "player_view.hh"
+#include "app_paths.hh"
 #include "ui_text.hh"
 #include "log_util.h"
 #include "ui_fonts.hh"
@@ -221,7 +222,7 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
     // library's actual track/album/artist text for which non-Latin
     // codepoints it must cover.
     std::string exeDir = host_->exeDir();
-    db_.open(exeDir + "matrix_player.db");
+    db_.open(app_paths::stateDir() + "matrix_player.db");
 
     // Restore library from DB
     {
@@ -272,9 +273,11 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
         fontsDir_ = toUtf8Path("fonts/");
 
         // Drop atlas caches left by an older icon set / font (see ui_fonts.hh):
-        // they are ~45 MB each and would otherwise accumulate forever.
-        pruneStaleCaches(toUtf8Path(ui_fonts::cacheDir()),
-                         toUtf8Path(ui_fonts::cacheName().c_str()));
+        // they are ~45 MB each and would otherwise accumulate forever. Swept
+        // in stateDir(), where they are now written — NOT in fonts/, which is
+        // read-only shipped data a package may install root-owned.
+        pruneStaleCaches(app_paths::stateDir(),
+                         app_paths::stateDir() + ui_fonts::cacheFile());
 
         // Generate the MTSDF atlas from the same OTF (cached to disk for fast
         // reload). generate() always bakes MTSDF — the alpha channel carries a
@@ -283,7 +286,7 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
         // because MsdfFont genuinely handles both variants (isMtsdf() reports
         // which one is live). The cache name carries the icon-set fingerprint
         // so redrawn icons can't be served from a stale bake — see ui_fonts.hh.
-        std::string cachePath = toUtf8Path(ui_fonts::cacheName().c_str());
+        std::string cachePath = app_paths::stateDir() + ui_fonts::cacheFile();
         msdfCachePath_ = cachePath;
 
         FileByteReader loader;
@@ -539,6 +542,34 @@ bool PlayerWindow::bakeFallbackGlyphs() {
         std::vector<uint32_t> cps;
         for (uint32_t cp = 0x0370; cp <= 0x03FF; cp++) cps.push_back(cp);
         for (uint32_t cp = 0x0400; cp <= 0x04FF; cp++) cps.push_back(cp);
+
+        // General Punctuation, the handful of it this app's own UI strings and
+        // real-world metadata actually use. The base atlas bakes ASCII +
+        // Latin-1 + eight maths symbols and stops (see MsdfFont::generate),
+        // so an em dash — the one this UI's prose leans on hardest — came out
+        // as a blank gap wherever it appeared, most visibly in the EQ panel's
+        // bitperfect notice. A gap is worse than a wrong glyph: nothing about
+        // it says a character is missing, so the sentence just reads broken.
+        //
+        // Cheap and bounded (a dozen glyphs), and NewCM covers every one of
+        // them in the same serif as the base face — so this is the right place
+        // for them rather than an edit to the engine's fixed charset.
+        static const uint32_t kPunct[] = {
+            0x2010,  // hyphen
+            0x2013,  // en dash
+            0x2014,  // em dash
+            0x2018, 0x2019,          // single curly quotes (and the apostrophe
+                                     // Unicode-correct metadata uses)
+            0x201C, 0x201D,          // double curly quotes
+            0x2020, 0x2021,          // dagger, double dagger
+            0x2022,  // bullet
+            0x2026,  // ellipsis
+            0x2032, 0x2033,          // prime, double prime
+            0x2039, 0x203A,          // single guillemets (« » are Latin-1)
+            0x2190, 0x2192,          // left/right arrows
+        };
+        cps.insert(cps.end(), std::begin(kPunct), std::end(kPunct));
+
         std::string newcmPath = fontsDir_ + "newcomputermodern/NewCM10-Regular.otf";
         if (msdfFont_.bakeCodepoints(loader, newcmPath.c_str(), cps) > 0)
             anyNew = true;
@@ -911,17 +942,22 @@ void PlayerWindow::drawFrame() {
 
         struct NavItem { const char* label; LayoutRect rc; AlbumTypeFilter filter; };
         NavItem items[] = {
+            // Listed in the order they are DRAWN — each carries its own rect,
+            // so this array is documentation of the reading order, not what
+            // creates it. recalcLayout() is where the rows are placed.
             { "Albums",  rcNavAlbum_,  AlbumTypeFilter::Album  },
             { "EPs",     rcNavEp_,     AlbumTypeFilter::Ep     },
             { "Singles", rcNavSingle_, AlbumTypeFilter::Single },
+            { "Compilations", rcNavCompilation_, AlbumTypeFilter::Compilation },
+            { "Live",    rcNavLive_,   AlbumTypeFilter::Live   },
             { "Remixes", rcNavRemix_,  AlbumTypeFilter::Remix  },
         };
-        // Playlists borrows the settings overlay to draw in, so "settingsOpen_"
-        // is true while it is up — the filter rows must not read that as "a
-        // filter is showing", nor Settings as "Settings is showing".
-        const bool playlistsOpen = (activePanel_ == SettingsPanel::Playlists);
+        // Seven content rows, one rule: a row is active when its section is the
+        // one showing and Settings is not covering it.
+        const bool playlistsOpen = (!settingsOpen_ && navSection_ == NavSection::Playlists);
         for (auto& item : items) {
-            bool active = (!settingsOpen_ && albumTypeFilter_ == item.filter);
+            bool active = (!settingsOpen_ && navSection_ == NavSection::Albums &&
+                           albumTypeFilter_ == item.filter);
             bool hovered = (hoverSidebarItem_ == (int)item.filter && !active);
             Rect r = toRect(item.rc);
             const float pillX = r.x + metrics_.space(4.0f);
@@ -941,10 +977,12 @@ void PlayerWindow::drawFrame() {
                        metrics_.text.body, toColor(active ? CLR_ACCENT : CLR_TEXT_SECONDARY));
         }
 
-        // Playlists — the fifth content row, still above the hairline. Three
-        // generated lists live behind it (see drawPlaylists); it is one row
+        // Playlists — the fifth content row, still above the hairline, and by
+        // now the same KIND of thing as the four above it: a section whose
+        // tiles fill the content area (see drawPlaylistSection). It is one row
         // rather than three because two of the three say nothing on a fresh
-        // install, and a page absorbs that where dead sidebar rows would not.
+        // install, and a grid of three tiles absorbs that where dead sidebar
+        // rows would not.
         {
             bool active  = playlistsOpen;
             bool hovered = (hoverSidebarItem_ == kSidebarPlaylistsHit && !active);
@@ -976,10 +1014,7 @@ void PlayerWindow::drawFrame() {
         canvas.rect((float)rcNavSettings_.left, rcNavSettings_.top - metrics_.space(7.0f),
                     sb.w, metrics_.stroke(1.0f), toColor(CLR_SEPARATOR));
         {
-            // Active only for the REAL settings destinations, never while
-            // Playlists is borrowing the same overlay — otherwise two sidebar
-            // rows would read as selected at once.
-            const bool settingsActive = settingsOpen_ && !playlistsOpen;
+            const bool settingsActive = settingsOpen_;
             bool hovered = (hoverSidebarItem_ == kSidebarSettingsHit && !settingsActive);
             Rect r = toRect(rcNavSettings_);
             const float settPillX = r.x + metrics_.space(4.0f);
@@ -1026,7 +1061,13 @@ void PlayerWindow::drawFrame() {
                               metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
         };
 
-        if (albums_.empty()) {
+        // The fifth section draws into exactly this area, at exactly this
+        // point — it is a sibling of the album grid, not something laid over
+        // it. Everything already drawn (the sidebar) and everything drawn
+        // below (the transport bar) is untouched and stays live.
+        if (navSection_ == NavSection::Playlists) {
+            drawPlaylistSection(canvas, rcGrid_);
+        } else if (albums_.empty()) {
             emptyState("No albums yet. Use the gear icon below to add a music folder.");
         } else if (gridIndices_.empty()) {
             std::string msg;
@@ -1036,7 +1077,10 @@ void PlayerWindow::drawFrame() {
                 const char* filterLabel =
                     albumTypeFilter_ == AlbumTypeFilter::Ep     ? "EPs" :
                     albumTypeFilter_ == AlbumTypeFilter::Single ? "Singles" :
-                    albumTypeFilter_ == AlbumTypeFilter::Remix  ? "Remixes" : "Albums";
+                    albumTypeFilter_ == AlbumTypeFilter::Remix  ? "Remixes" :
+                    albumTypeFilter_ == AlbumTypeFilter::Compilation ? "Compilations" :
+                    albumTypeFilter_ == AlbumTypeFilter::Live   ? "Live records"
+                                                                : "Albums";
                 msg = std::string("No ") + filterLabel + " yet";
             }
             emptyState(msg);
@@ -1722,8 +1766,10 @@ void PlayerWindow::drawFrame() {
         // Right side, minimal: elapsed/total time, then the DSP state tag,
         // baseline-aligned and vertically centered in the bar. Hovering the
         // tag swaps the whole cluster for the full signal-path readout
-        // (source format » DSP stage » output backend). '»' (U+00BB) is in
-        // the baked Latin-1 range; '→' (U+2192) is not, so don't swap it in.
+        // (source format » DSP stage » output backend). '→' (U+2192) IS baked
+        // now (see bakeFallbackGlyphs), so swapping it in is a free choice
+        // rather than a missing glyph — '»' stays because a chevron reads as a
+        // separator at this size where an arrow reads as a claim of direction.
         {
             // Reflects what the chain ACHIEVED (bpState_, set in onPlay), not
             // what the toggle requested — claiming BITPERFECT while silently
@@ -1808,9 +1854,9 @@ void PlayerWindow::drawFrame() {
 
     // (No on-screen mode toggle — Alt+L switches Essential/Complete.)
 
-    // ── Bitperfect warning banner (non-modal, both platforms) ─────────────
-    if (!bitperfectWarning_.empty()) {
-        Rect w = toRect(rcBitperfectWarning_);
+    // ── Audio notice strip (non-modal, both platforms) — see audioNotice_ ──
+    if (!audioNotice_.empty()) {
+        Rect w = toRect(rcAudioNotice_);
         canvas.rect(w.x, w.y, w.w, w.h, toColor(CLR_WARNING, UI_SELECT_TINT_ALPHA));
         const float hair = metrics_.stroke(1.0f);
         canvas.rect(w.x, w.y, w.w, hair, toColor(CLR_WARNING));                // top hairline
@@ -1824,7 +1870,7 @@ void PlayerWindow::drawFrame() {
 
         float textX = iconRc.right + metrics_.space(8.0f);
         float textY = w.y + w.h * 0.5f - metrics_.text.secondary * 0.5f;
-        canvas.text(bitperfectWarning_, textX, textY, metrics_.text.secondary, toColor(CLR_WARNING));
+        canvas.text(audioNotice_, textX, textY, metrics_.text.secondary, toColor(CLR_WARNING));
     }
 
     renderer_->draw(frameCurves_, /*overlay_rotation_deg=*/0, frameImages_, frameImagesFg_, msdfQuads_, frameShapes_);
@@ -1965,7 +2011,12 @@ void PlayerWindow::recalcLayout() {
     // Track rows likewise scale with their text.
     trackRowHeight_ = (int)metrics_.space(SP_XL);
 
-    int albumRows = ((int)gridIndices_.size() + gridCols_ - 1) / gridCols_;
+    // Tile count is whichever section is showing — the Playlists section draws
+    // its three tiles on this same geometry, so the scroll extent has to come
+    // from the same place or the wheel would clamp against the album grid's.
+    int tileCount = (navSection_ == NavSection::Playlists)
+                        ? 3 : (int)gridIndices_.size();
+    int albumRows = (tileCount + gridCols_ - 1) / gridCols_;
     gridTotalHeight_ = albumRows * (gridTileSize_ + gridRowGap_) + gridPadYpx_;
 
     // Sidebar items — search box sits between the brand and the nav. All
@@ -1976,16 +2027,24 @@ void PlayerWindow::recalcLayout() {
     rcSearch_      = { searchInset, (int)metrics_.space(94.0f),
                        sidebarW - searchInset, (int)metrics_.space(147.0f) };
     float navRowH = metrics_.space(65.3556f), navTop = metrics_.space(166.6568f);
+    // ROW ORDER IS NOT ENUM ORDER, and the two must not be conflated. The enum
+    // values are frozen — they are stored as integers in Db's albums table — so
+    // the reading order of the sidebar lives here and only here. It runs:
+    // original material by descending size (Albums, EPs, Singles), then the
+    // artist's own material re-presented (Compilations, Live), then other
+    // people's reworkings of it (Remixes).
     rcNavAlbum_  = { 0, (int)(navTop),               sidebarW, (int)(navTop + navRowH) };
     rcNavEp_     = { 0, (int)(navTop + navRowH),     sidebarW, (int)(navTop + navRowH * 2) };
     rcNavSingle_ = { 0, (int)(navTop + navRowH * 2), sidebarW, (int)(navTop + navRowH * 3) };
-    rcNavRemix_  = { 0, (int)(navTop + navRowH * 3), sidebarW, (int)(navTop + navRowH * 4) };
+    rcNavCompilation_ = { 0, (int)(navTop + navRowH * 3), sidebarW, (int)(navTop + navRowH * 4) };
+    rcNavLive_   = { 0, (int)(navTop + navRowH * 4), sidebarW, (int)(navTop + navRowH * 5) };
+    rcNavRemix_  = { 0, (int)(navTop + navRowH * 5), sidebarW, (int)(navTop + navRowH * 6) };
     // Playlists sits ABOVE the hairline, with the content filters: it is a way
     // of browsing music, not a setting. Settings therefore moves down a slot.
-    rcNavPlaylists_ = { 0, (int)(navTop + navRowH * 4), sidebarW, (int)(navTop + navRowH * 5) };
+    rcNavPlaylists_ = { 0, (int)(navTop + navRowH * 6), sidebarW, (int)(navTop + navRowH * 7) };
     const float settOffset = metrics_.space(13.0711f);
-    rcNavSettings_ = { 0, (int)(navTop + navRowH * 5 + settOffset),
-                          sidebarW, (int)(navTop + navRowH * 6 + settOffset) };
+    rcNavSettings_ = { 0, (int)(navTop + navRowH * 7 + settOffset),
+                          sidebarW, (int)(navTop + navRowH * 8 + settOffset) };
 
     // Transport sub-regions — proportional to the (scaled) bar height.
     int tTop = rcTransport_.top;
@@ -1997,7 +2056,7 @@ void PlayerWindow::recalcLayout() {
     // the transport bar. Doesn't reserve/shrink grid space — this is a rare,
     // transient event, not worth a permanent layout dependency.
     int warnH = (int)metrics_.space(45.0f);
-    rcBitperfectWarning_ = { 0, tTop - warnH, W, tTop };
+    rcAudioNotice_ = { 0, tTop - warnH, W, tTop };
 
     // Center buttons: the app's primary interactive elements (44px at the
     // reference window; scaled like everything else). Three of them:
@@ -2228,6 +2287,23 @@ void PlayerWindow::openAlbumView(int albumIdx) {
     trackPanelOpen_ = true;
     trackScrollY_ = 0;
     hoverTrackIdx_ = -1;
+
+    // The album view belongs to the section that CONTAINS this release, and it
+    // is reached from places that know nothing about the sidebar: the "other
+    // versions" strip, and onPlay() retargeting the page at whatever started.
+    // Without this, leaving the view dropped the listener into whichever
+    // section happened to be selected before — a single playing under Remixes
+    // put them back in Remixes, a section its own album is not in. Realigning
+    // here means Escape always lands where the album actually lives.
+    if (albumIdx >= 0 && albumIdx < (int)albums_.size()) {
+        auto want = (AlbumTypeFilter)(int)albums_[albumIdx].releaseType;
+        if (navSection_ != NavSection::Albums || albumTypeFilter_ != want) {
+            navSection_      = NavSection::Albums;
+            albumTypeFilter_ = want;
+            rebuildGridIndices();
+            gridScrollY_ = 0;
+        }
+    }
     // Layout first: loadTrackPanelArtTexture() sizes its texture from
     // rcTrackPanel_, which recalcLayout() just grew to the full page.
     recalcLayout();
@@ -2534,6 +2610,12 @@ void PlayerWindow::rebuildGridIndices() {
 
 int PlayerWindow::gridHitTest(int x, int y) const {
     if (trackPanelOpen_) return -1;  // grid is hidden behind the album view
+    // The Playlists section stands on the SAME geometry (see
+    // playlistTileHitTest), so without this a click meant for a playlist tile
+    // would resolve to whichever album occupies that cell in the section that
+    // is not showing — including from onLButtonDblClk, which hit-tests the
+    // grid directly rather than going through the section dispatch.
+    if (navSection_ == NavSection::Playlists) return -1;
     if (x < rcGrid_.left || x >= rcGrid_.right || y < rcGrid_.top || y >= rcGrid_.bottom)
         return -1;
     int tileStepX = gridStepX_;
@@ -2602,13 +2684,16 @@ int PlayerWindow::sidebarHitTest(int x, int y) const {
     if (ptInRect(rcNavAlbum_, x, y))  return (int)AlbumTypeFilter::Album;
     if (ptInRect(rcNavEp_, x, y))     return (int)AlbumTypeFilter::Ep;
     if (ptInRect(rcNavSingle_, x, y)) return (int)AlbumTypeFilter::Single;
+    if (ptInRect(rcNavCompilation_, x, y)) return (int)AlbumTypeFilter::Compilation;
+    if (ptInRect(rcNavLive_, x, y))   return (int)AlbumTypeFilter::Live;
     if (ptInRect(rcNavRemix_, x, y))  return (int)AlbumTypeFilter::Remix;
     if (ptInRect(rcNavPlaylists_, x, y)) return kSidebarPlaylistsHit;
     if (ptInRect(rcNavSettings_, x, y)) return kSidebarSettingsHit;
-    // Headphone block. hpRows_/hpMoreRc_ are empty in bitperfect mode (and
-    // whenever the block didn't fit), so this costs nothing when hidden.
+    // AutoEQ block. hpRows_/hpNoneRc_/hpMoreRc_ are empty in bitperfect mode
+    // (and whenever the block didn't fit), so this costs nothing when hidden.
     for (int i = 0; i < (int)hpRows_.size(); i++)
         if (ptInRect(hpRows_[i].rc, x, y)) return kSidebarHpRowBase + i;
+    if (ptInRect(hpNoneRc_, x, y)) return kSidebarHpNoneHit;
     if (ptInRect(hpMoreRc_, x, y)) return kSidebarHpMoreHit;
     return -1;
 }
@@ -2659,6 +2744,7 @@ void PlayerWindow::onMouseMove(int x, int y) {
     int oldHoverTransBtn = hoverTransportBtn_;
     int oldHoverSettings = hoverSettingsItem_;
     bool oldHoverDsp = hoverDspBadge_;
+    int oldPlRow = plHoverRow_, oldPlTile = plHoverTile_, oldPlTab = plHoverRangeTab_;
 
     hoverAlbumIdx_ = -1;
     hoverTrackIdx_ = -1;
@@ -2667,7 +2753,10 @@ void PlayerWindow::onMouseMove(int x, int y) {
     hoverTransportBtn_ = -1;
     hoverSettingsItem_ = -1;
     hoverDspBadge_ = false;
-
+    // Cleared here with the rest, not inside the section's own hit-test, so a
+    // pointer that leaves the content area for the sidebar drops this hover
+    // too — the same reason every line above it is written this way.
+    plHoverRow_ = plHoverTile_ = plHoverRangeTab_ = -1;
 
     if (ptInRect(rcSidebar_, x, y)) {
         hoverSidebarItem_ = sidebarHitTest(x, y);
@@ -2681,13 +2770,18 @@ void PlayerWindow::onMouseMove(int x, int y) {
         // the same way rcSearch_ beats the sidebar rows in cursorForPoint().
         hoverTrackIdx_   = hoverVariantIdx_ >= 0 ? -1 : trackPanelHitTest(x, y);
     } else if (ptInRect(rcGrid_, x, y)) {
-        if (!settingsOpen_)
-            hoverAlbumIdx_ = gridHitTest(x, y);
-        else
+        if (settingsOpen_)
             hoverSettingsItem_ = settingsHitTest(x, y);
+        else if (navSection_ == NavSection::Playlists)
+            onPlaylistsMouseMove(x, y);
+        else
+            hoverAlbumIdx_ = gridHitTest(x, y);
     }
 
-    bool changed = (hoverAlbumIdx_ != oldHoverAlbum ||
+    bool changed = (plHoverRow_ != oldPlRow ||
+                    plHoverTile_ != oldPlTile ||
+                    plHoverRangeTab_ != oldPlTab ||
+                    hoverAlbumIdx_ != oldHoverAlbum ||
                     hoverTrackIdx_ != oldHoverTrack ||
                     hoverVariantIdx_ != oldHoverVariant ||
                     hoverSidebarItem_ != oldHoverSidebar ||
@@ -2717,8 +2811,8 @@ CursorShape PlayerWindow::cursorForPoint(int x, int y) const {
     if (hoverVariantIdx_    >= 0) return CursorShape::Hand;
     if (hoverAlbumIdx_      >= 0) return CursorShape::Hand;
     if (hoverSettingsItem_  >= 0) return CursorShape::Hand;
-    if (activePanel_ == SettingsPanel::Playlists &&
-        (plHoverRow_ >= 0 || plHoverChooserRow_ >= 0 || plHoverRangeTab_ >= 0 || plHoverClose_))
+    if (navSection_ == NavSection::Playlists && !settingsOpen_ &&
+        (plHoverRow_ >= 0 || plHoverTile_ >= 0 || plHoverRangeTab_ >= 0))
         return CursorShape::Hand;
 
     // Artwork opens the fullscreen view; the artist photo does too.
@@ -2753,6 +2847,7 @@ void PlayerWindow::onMouseLeave() {
     hoverSettingsItem_ = -1;
     hoverDspBadge_ = false;
     hoverEssentialBtn_ = -1;
+    plHoverRow_ = plHoverTile_ = plHoverRangeTab_ = -1;
     invalidate();
 }
 
@@ -2777,8 +2872,8 @@ void PlayerWindow::onLButtonDown(int x, int y) {
     }
 
     // Bitperfect warning banner: click anywhere on it dismisses.
-    if (!bitperfectWarning_.empty() && ptInRect(rcBitperfectWarning_, x, y)) {
-        bitperfectWarning_.clear();
+    if (!audioNotice_.empty() && ptInRect(rcAudioNotice_, x, y)) {
+        audioNotice_.clear();
         invalidate();
         return;
     }
@@ -2845,6 +2940,8 @@ void PlayerWindow::onLButtonDown(int x, int y) {
                     selectEqProfile({ h.name, h.source, h.form });
                 }
             }
+        } else if (nav == kSidebarHpNoneHit) {
+            clearEqProfile();
         } else if (nav == kSidebarHpMoreHit) {
             onEqSettings();            // clears panelFromSidebar_, as openers do
             // The panel only draws under settingsOpen_, so borrow it — but the
@@ -2855,18 +2952,37 @@ void PlayerWindow::onLButtonDown(int x, int y) {
             settingsOpen_     = true;
             panelFromSidebar_ = true;
         } else if (nav == kSidebarPlaylistsHit) {
-            onPlaylists();
+            // The seven content rows all obey one rule: a click takes you to
+            // that section's ROOT — its grid of tiles — from wherever you are,
+            // unless you are already standing there, in which case it does
+            // nothing rather than throw away your scroll position. That
+            // "unless" used to read "unless the filter already matches", which
+            // meant clicking Singles from inside a single's album view did
+            // nothing at all.
+            const bool atRoot = !settingsOpen_ &&
+                                navSection_ == NavSection::Playlists &&
+                                plKind_ == PlaylistKind::None;
+            if (!atRoot) {
+                openPlaylistSection();
+                navForwardValid_ = false;
+            }
         } else if (nav == kSidebarSettingsHit) {
-            if (!settingsOpen_) { settingsOpen_ = true; invalidate(); }
-        } else if (nav >= 0 &&
-                   (settingsOpen_ || albumTypeFilter_ != (AlbumTypeFilter)nav)) {
-            settingsOpen_ = false;
-            trackPanelOpen_ = false;
-            albumTypeFilter_ = (AlbumTypeFilter)nav;
-            rebuildGridIndices();
-            gridScrollY_ = 0;
-            recalcLayout();
-            invalidate();
+            if (!settingsOpen_) { settingsOpen_ = true; navForwardValid_ = false; invalidate(); }
+        } else if (nav >= 0) {
+            const bool atRoot = !settingsOpen_ && !trackPanelOpen_ &&
+                                navSection_ == NavSection::Albums &&
+                                albumTypeFilter_ == (AlbumTypeFilter)nav;
+            if (!atRoot) {
+                settingsOpen_ = false;
+                trackPanelOpen_ = false;
+                navSection_ = NavSection::Albums;
+                albumTypeFilter_ = (AlbumTypeFilter)nav;
+                rebuildGridIndices();
+                gridScrollY_ = 0;
+                navForwardValid_ = false;
+                recalcLayout();
+                invalidate();
+            }
         }
         return;
     }
@@ -2894,6 +3010,13 @@ void PlayerWindow::onLButtonDown(int x, int y) {
             currentTrack_ = track;
             onPlay();
         }
+        return;
+    }
+
+    // Playlists section — the same content area, the same two levels (tile
+    // grid, then one list opened) as the album grid immediately below.
+    if (!settingsOpen_ && navSection_ == NavSection::Playlists && ptInRect(rcGrid_, x, y)) {
+        onPlaylistsClick(x, y);
         return;
     }
 
@@ -2982,6 +3105,17 @@ void PlayerWindow::onMouseWheel(int x, int y, int delta) {
         int panelH = rcTrackPanel_.bottom - rcTrackPanel_.top;
         trackScrollY_ = std::clamp(trackScrollY_, 0,
                                    std::max(0, albumViewContentH_ - panelH));
+        invalidate();
+        return;
+    }
+
+    // An opened playlist scrolls its own list; the tile grid falls through to
+    // the grid scroll below, which is sized for it (see recalcLayout).
+    if (!settingsOpen_ && navSection_ == NavSection::Playlists &&
+        plKind_ != PlaylistKind::None && ptInRect(rcGrid_, x, y)) {
+        int listH = plListArea_.bottom - plListArea_.top;
+        int contentH = (int)plEntries_.size() * plRowH_;
+        plScrollY_ = std::clamp(plScrollY_ - delta, 0, std::max(0, contentH - listH));
         invalidate();
         return;
     }
@@ -3184,10 +3318,6 @@ void PlayerWindow::drawActivePanel(Canvas& canvas, const LayoutRect& area) {
         drawFolderPicker(canvas, area);
         closeRc = &fpCloseRc_; hoverClose = fpHoverClose_;
         break;
-    case SettingsPanel::Playlists:
-        drawPlaylists(canvas, area);
-        closeRc = &plCloseRc_; hoverClose = plHoverClose_;
-        break;
     case SettingsPanel::None:
         break;
     }
@@ -3245,9 +3375,6 @@ void PlayerWindow::onPanelMouseMove(int x, int y) {
         if (row != fpHoverRow_) { fpHoverRow_ = row; changed = true; }
         break;
     }
-    case SettingsPanel::Playlists:
-        changed = onPlaylistsMouseMove(x, y);
-        break;
     case SettingsPanel::None:
         break;
     }
@@ -3362,11 +3489,7 @@ void PlayerWindow::onPanelClick(int x, int y) {
             return;
         }
         if (ptInRect(eqBtnClear_, x, y)) {
-            db_.clearEqAssignment(eqDeviceKey_);
-            eqManager_.clear();
-            eqCurrent_ = {};
-            eqCurrentTentative_ = false;
-            invalidate();
+            clearEqProfile();
             return;
         }
         int row = hitTestListRows(eqListRows_, x, y);
@@ -3391,9 +3514,6 @@ void PlayerWindow::onPanelClick(int x, int y) {
         invalidate();
         return;
     }
-    case SettingsPanel::Playlists:
-        onPlaylistsClick(x, y);
-        return;
     case SettingsPanel::None:
         break;
     }
@@ -3420,15 +3540,6 @@ void PlayerWindow::onPanelWheel(int x, int y, int delta) {
         int listH = fpListArea_.bottom - fpListArea_.top;
         int contentH = rowCount * kPanelRowH;
         fpScrollY_ = std::clamp(fpScrollY_ - delta, 0, std::max(0, contentH - listH));
-        invalidate();
-        return;
-    }
-    case SettingsPanel::Playlists: {
-        // The chooser never scrolls — only a loaded list does.
-        if (plKind_ == PlaylistKind::None) return;
-        int listH = plListArea_.bottom - plListArea_.top;
-        int contentH = (int)plEntries_.size() * plRowH_;
-        plScrollY_ = std::clamp(plScrollY_ - delta, 0, std::max(0, contentH - listH));
         invalidate();
         return;
     }
@@ -3543,8 +3654,20 @@ void PlayerWindow::onAudioSettings() {
 #ifdef MATRIX_HAVE_JACK
     asBackendOptions_.push_back(AudioBackend::Jack);
     {
-        JackOutput probe;
-        asJackPorts_ = probe.enumeratePorts();   // opens a throwaway client just to query the graph
+        // Ask the LIVE client when there already is one. A second libjack
+        // client in the same process is the condition jack2 handles worst, and
+        // there is no reason to open one to read a graph the playback client is
+        // already attached to.
+        if (audioBackend_ == AudioBackend::Jack && output_) {
+            asJackPorts_ = static_cast<JackOutput*>(output_.get())->enumeratePorts();
+        } else {
+            // Throwaway client purely to query the graph — closed HERE, not
+            // left to the end of scope, so the one call that can touch a dead
+            // handle is written down where it happens.
+            JackOutput probe;
+            asJackPorts_ = probe.enumeratePorts();
+            probe.close();
+        }
     }
     asJackSel_ = 0;
     {
@@ -3723,6 +3846,19 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
 void PlayerWindow::applyAudioSettingsPanel() {
     onStop();
 
+    // Close the OUTGOING backend here, by name, before the new one replaces it.
+    // This used to be left to the unique_ptr assignment below — so a backend's
+    // entire teardown ran inside a destructor inside a mouse-click callback,
+    // which is where a JACK client whose server had already died took the whole
+    // app down with no message (see JackSink::live()). onStop() only stops the
+    // output; nothing called close() at all. Safe for every backend:
+    // UsbAudioOutput::close() is a no-op by design (audio_output.h).
+    if (output_) {
+        output_->stop();
+        output_->close();
+    }
+    output_.reset();
+
     AudioBackend sel = asBackendOptions_.empty() ? AudioBackend::Usb : asBackendOptions_[asBackendSelIdx_];
     audioBackend_ = sel;
 
@@ -3789,6 +3925,7 @@ void PlayerWindow::applyAudioSettingsPanel() {
 void PlayerWindow::onEqSettings() {
     panelFromSidebar_ = false;   // the sidebar path re-arms this after calling
     eqDeviceKey_ = getActiveDeviceKey();
+    markEqAssignmentDirty();     // the device just changed under the header line
     eqBitperfectActive_ = bitperfectMode_.load();
     eqSearch_.clear();
     eqSearchFocused_ = false;
@@ -3813,7 +3950,7 @@ void PlayerWindow::eqRefilter() {
     for (auto& ch : needle) ch = (char)std::tolower((unsigned char)ch);
     auto& all = eqProfiles_.getAll();
     for (int i = 0; i < (int)all.size(); i++) {
-        // "My headphones" is a filter over the SAME list and the same
+        // "My Drivers" is a filter over the SAME list and the same
         // selection, not a second list — one selection means Pin/Remove can
         // never act on a row other than the visibly highlighted one.
         if (eqShowMine_ &&
@@ -3849,16 +3986,24 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     // Mono, because "32BB:0004" is an identifier, not a name. The family
     // already carries a face that says so, and it is the one with the most
     // legibility headroom of the four (9.14px floor against the serif's
-    // 18.29px — see min_text_size in the root CMakeLists). Headphone and album
+    // 18.29px — see min_text_size in the root CMakeLists). Driver and album
     // names stay serif: the rule is about what the string IS, not where it sits.
-    canvas.textStyled("Device: " + eqDeviceKey_, c.x + pad, y, metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Math);
+    // Both header lines come from the cache: the assignment is a database read,
+    // and re-running it per frame bought nothing — see eqAssignLineDirty_.
+    if (eqAssignLineDirty_) {
+        eqDeviceLine_ = "Device: " + eqDeviceKey_;
+        EqAssignment assign;
+        if (db_.loadEqAssignment(eqDeviceKey_, assign) || db_.loadEqAssignment("global", assign))
+            eqAssignLine_ = "Current EQ: " + assign.name;
+        else
+            eqAssignLine_ = "No EQ assigned";
+        eqAssignLineDirty_ = false;
+    }
+
+    canvas.textStyled(eqDeviceLine_, c.x + pad, y, metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Math);
     y += metrics_.text.secondary * 1.6f;
 
-    EqAssignment assign;
-    std::string assignLine = "No EQ assigned";
-    if (db_.loadEqAssignment(eqDeviceKey_, assign) || db_.loadEqAssignment("global", assign))
-        assignLine = "Current EQ: " + assign.name;
-    canvas.textStyled(assignLine, c.x + pad, y, metrics_.text.secondary, toColor(CLR_ACCENT), FontStyle::Roman);
+    canvas.textStyled(eqAssignLine_, c.x + pad, y, metrics_.text.secondary, toColor(CLR_ACCENT), FontStyle::Roman);
     y += metrics_.text.secondary * 1.8f;
 
     if (eqBitperfectActive_) {
@@ -3894,7 +4039,7 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
                               toColor(active ? CLR_ACCENT : CLR_TEXT_SECONDARY),
                               FontStyle::Roman);
         };
-        tab(eqTabMine_, "My Headphones", eqShowMine_,  eqHoverTabMine_);
+        tab(eqTabMine_, "My Drivers", eqShowMine_,  eqHoverTabMine_);
         tab(eqTabAll_,  "All Profiles",  !eqShowMine_, eqHoverTabAll_);
         y += tabH + metrics_.space(SP_SM);
     }
@@ -3938,9 +4083,9 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
         // someone who has assigned a profile and not yet listened to it.
         const char* msg = eqShowMine_
             ? (eqSearch_.empty()
-                 ? "No headphones saved yet \xE2\x80\x94 pick a profile under All Profiles "
+                 ? "No drivers saved yet \xE2\x80\x94 pick a profile under All Profiles "
                    "and listen for a minute."
-                 : "No saved headphones match.")
+                 : "No saved drivers match.")
             : "No profiles match.";
         canvas.textStyled(msg, a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
                           metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
@@ -3977,12 +4122,18 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     }
 }
 
-// ── Playlists panel ─────────────────────────────────────────────────────────
+// ── Playlists section ───────────────────────────────────────────────────────
 //
 // Three generated lists, each of which IS its query (see core/include/core/db.h):
-// nothing is stored, so nothing can drift from the listening log. The panel has
-// two screens — a chooser and a list — held in plKind_ rather than in two more
-// SettingsPanel values, because chooser-vs-list is this panel's own business.
+// nothing is stored, so nothing can drift from the listening log.
+//
+// This is a SECTION, not a panel — the fifth sidebar row, drawn into the same
+// content area and with the same two levels the album section has: a grid of
+// tiles, and one of them opened full-page. Everything outside the content area
+// keeps working while it is up, which is the whole point of the change: as a
+// borrowed settings overlay it swallowed every click and key in the window, so
+// the four sibling rows, the Settings row and the play/stop key were all dead
+// while a playlist was on screen.
 
 namespace {
 // Heavy Rotation and Forgotten Favourites are rankings and take a cap. Never
@@ -4018,23 +4169,73 @@ const char* PlayerWindow::playlistTitle(PlaylistKind k) {
     return "Playlists";
 }
 
-void PlayerWindow::onPlaylists() {
-    activePanel_      = SettingsPanel::Playlists;
-    plKind_           = PlaylistKind::None;
+// A playlist's own subtitle — what the list MEANS, one line, the same text the
+// tile prints under its art and the row list used to print in the chooser.
+static const char* playlistSubtitle(int kindIdx) {
+    switch (kindIdx) {
+    case 0: return "What you have chosen and finished, most often.";
+    case 1: return "Loved once, untouched for a while.";
+    default: return "Everything you have never played.";
+    }
+}
+
+void PlayerWindow::openPlaylistSection() {
+    // Exactly what clicking Albums/EPs/Singles/Remixes does, plus the tiles'
+    // artwork: leave whatever was showing, land on this section's grid.
+    navSection_     = NavSection::Playlists;
+    settingsOpen_   = false;
+    trackPanelOpen_ = false;
+    plKind_         = PlaylistKind::None;
     plEntries_.clear();
     plDurationMs_.clear();
     plListRows_.clear();
-    plScrollY_        = 0;
-    plHoverRow_       = -1;
-    plHoverChooserRow_ = -1;
-    plHoverRangeTab_  = -1;
-    // Borrow the settings overlay to draw in — the panel only draws under
-    // settingsOpen_ — but remember it was NOT reached by walking into
-    // Settings, so closeActivePanel() hands the view back instead of stranding
-    // the listener there. Same trick as the sidebar's headphone switcher.
-    settingsOpen_     = true;
-    panelFromSidebar_ = true;
+    plScrollY_       = 0;
+    plHoverRow_      = -1;
+    plHoverTile_     = -1;
+    plHoverRangeTab_ = -1;
+    gridScrollY_     = 0;
+    loadPlaylistCovers();
+    recalcLayout();
     invalidate();
+}
+
+void PlayerWindow::loadPlaylistCovers() {
+    for (auto& c : plCovers_) c = PlaylistCover{};
+
+    const int64_t now = (int64_t)time(nullptr);
+    StatsRange range = rangeFor(plRangePreset_, now, localUtcOffsetMinutes(now));
+
+    // Only the RANKED lists get a mosaic — a quadrant is a standing, and Never
+    // Heard has none to give (see PlaylistCover's comment).
+    const std::vector<TopEntry> ranked[2] = {
+        db_.heavyRotation(range, kPlaylistLimit),
+        db_.forgottenFavourites(kPlaylistLimit, kForgottenMinPlays,
+                                now - kForgottenStaleSec),
+    };
+
+    // ONE lock for both lists, for the same reason loadPlaylist() takes one for
+    // its whole resolve pass: albumsMu_ is the lock the gapless thread and
+    // onPlay() contend for, and this runs on the UI thread.
+    std::lock_guard<std::mutex> lk(albumsMu_);
+    for (int k = 0; k < 2; k++) {
+        PlaylistCover& cov = plCovers_[k];
+        cov.ranked = true;
+        for (const TopEntry& e : ranked[k]) {
+            auto it = trackKeyIndex_.find(e.key);
+            if (it == trackKeyIndex_.end()) continue;   // no copy on disk any more
+            int ai = it->second.first;
+            if (ai < 0 || ai >= (int)albums_.size()) continue;
+            if (albums_[ai].artPath.empty()) continue;
+            // Distinct RECORDS, not distinct rows: five tracks off one album
+            // are five rows of the list but one cover, and painting it four
+            // times would say the list is four albums deep when it is one.
+            bool seen = false;
+            for (int i = 0; i < cov.count && !seen; i++) seen = (cov.albums[i] == ai);
+            if (seen) continue;
+            if (cov.count == 4) { cov.more = true; break; }  // a fifth record: there IS more
+            cov.albums[cov.count++] = ai;
+        }
+    }
 }
 
 void PlayerWindow::loadPlaylist(PlaylistKind kind) {
@@ -4091,6 +4292,135 @@ void PlayerWindow::loadPlaylist(PlaylistKind kind) {
     invalidate();
 }
 
+// The 2x2 mosaic a RANKED playlist's tile wears instead of a cover it does not
+// have. Quadrant numbering is the mathematical one the listener asked for, not
+// reading order: quadrant 1 is TOP-RIGHT and holds first place, and the rest
+// run anticlockwise — top-left, bottom-left, bottom-right. (drawVariantMosaic
+// numbers its quadrants left-to-right instead; a remix group has no ranking to
+// express, so nothing there points at a particular corner.)
+//
+// The fourth quadrant is the one that carries information: with exactly four
+// records behind the list it is the fourth record's cover, and past that it
+// fades to black — three covers plus "and there is more", rather than an
+// arbitrary fourth pretending to be the whole list. Empty quadrants stay flat
+// CLR_TILE_PLACEHOLDER, so absence reads as absence and not as a broken image.
+void PlayerWindow::drawPlaylistTileArt(Canvas& canvas, int kindIdx,
+                                       float x, float y, float a) {
+    const PlaylistCover& cov = plCovers_[kindIdx];
+
+    if (!cov.ranked) {
+        // An UNORDERED list: a gradient, because there is no first place to put
+        // in a corner. See PlaylistCover — a hand-made list would offer a
+        // custom image or a solid colour here instead; a generated one has
+        // nobody to ask.
+        canvas.rectGradient(x, y, a, a,
+                            toColor(CLR_TILE_PLACEHOLDER), toColor(CLR_BG_MAIN),
+                            Canvas::GradientDir::Vertical);
+        return;
+    }
+
+    const float half = a * 0.5f;
+    // Rank order -> quadrant origin. Index is the rank (0 = first place).
+    const float qx[4] = { x + half, x,        x,        x + half };
+    const float qy[4] = { y,        y,        y + half, y + half };
+    // Four records exactly: the fourth quadrant is the fourth cover. More than
+    // four: it is the fade, and only three covers are drawn.
+    const int covers = cov.more ? std::min(cov.count, 3) : cov.count;
+
+    for (int q = 0; q < 4; q++) {
+        if (q < covers) {
+            // Half-size decode, not the tile texture scaled down — there is no
+            // mip chain here (see onArtDecoded), so a 2:1 minification aliases.
+            TextureHandle tex = getGridArtTexture(cov.albums[q], ArtHalf);
+            if (tex != kInvalidTexture) {
+                canvas.imageFg(tex, qx[q], qy[q], half, half);
+                continue;
+            }
+            // Not decoded yet: the placeholder below, replaced on the next frame.
+        }
+        if (q == 3 && cov.more) {
+            canvas.rectGradient(qx[q], qy[q], half, half,
+                                toColor(CLR_TILE_PLACEHOLDER), toColor(CLR_BG_MAIN),
+                                Canvas::GradientDir::Vertical);
+        } else {
+            canvas.rect(qx[q], qy[q], half, half, toColor(CLR_TILE_PLACEHOLDER));
+        }
+    }
+}
+
+// One tile per generated list, laid out on the album grid's own geometry
+// (gridStepX_/gridArtSize_/gridPad*) so a playlist tile is the same object in
+// the same place as an album tile — which is the point.
+void PlayerWindow::drawPlaylistGrid(Canvas& canvas, const LayoutRect& area) {
+    Rect g = toRect(area);
+    canvas.setClip(g.x, g.y, g.w, g.h);
+
+    const int tileStepX = gridStepX_;
+    const int tileStepY = gridTileSize_ + gridRowGap_;
+
+    for (int i = 0; i < 3; i++) {
+        int col = i % gridCols_, row = i / gridCols_;
+        float x = (float)(area.left + gridPadXpx_ + col * tileStepX
+                          + (tileStepX - gridArtSize_) / 2);
+        float y = (float)(area.top + gridPadYpx_ + row * tileStepY - gridScrollY_);
+        float a = (float)gridArtSize_;
+
+        if (plHoverTile_ == i)
+            canvas.rect(x - metrics_.space(SP_XS), y - metrics_.space(SP_XS),
+                        a + metrics_.space(12.0f), a + metrics_.space(12.0f),
+                        toColor(CLR_HOVER), UI_CORNER_RADIUS);
+
+        drawPlaylistTileArt(canvas, i, x, y, a);
+
+        // Same text block as an album tile: name over one dim second line,
+        // centred and confined to the art's width.
+        float adv = titleArtistAdvance(metrics_.text.body);
+        float ty  = y + a + metrics_.space(16.0f);
+        auto centered = [&](const std::string& s, float yy, float sz,
+                            ColorRef clr, FontStyle st) {
+            float w = canvas.textWidthStyled(s, sz, st);
+            canvas.textStyled(s, x + std::max(0.0f, (a - w) * 0.5f), yy,
+                              sz, toColor(clr), st);
+        };
+        const char* name = playlistTitle((PlaylistKind)(i + 1));
+        std::string l1, l2;
+        splitTwoLines(canvas, name, a, metrics_.text.body, FontStyle::Bold, l1, l2);
+        centered(l1, ty, metrics_.text.body, CLR_TEXT_ALBUM_TITLE, FontStyle::Bold);
+        if (!l2.empty())
+            centered(l2, ty + adv, metrics_.text.body, CLR_TEXT_ALBUM_TITLE, FontStyle::Bold);
+        centered(truncateToWidth(canvas, playlistSubtitle(i), a,
+                                 metrics_.text.secondary, FontStyle::Italic),
+                 ty + adv * 2, metrics_.text.secondary, CLR_TEXT_SECONDARY, FontStyle::Italic);
+    }
+
+    canvas.clearClip();
+}
+
+// Same art-only target rule as gridHitTest(): the gaps and the text block below
+// are dead space.
+int PlayerWindow::playlistTileHitTest(int x, int y) const {
+    if (x < rcGrid_.left || x >= rcGrid_.right || y < rcGrid_.top || y >= rcGrid_.bottom)
+        return -1;
+    const int tileStepX = gridStepX_;
+    const int tileStepY = gridTileSize_ + gridRowGap_;
+    int col = (x - rcGrid_.left - gridPadXpx_) / tileStepX;
+    int row = (y - rcGrid_.top - gridPadYpx_ + gridScrollY_) / tileStepY;
+    if (col < 0 || col >= gridCols_ || row < 0) return -1;
+    int i = row * gridCols_ + col;
+    if (i < 0 || i >= 3) return -1;
+
+    int artX = rcGrid_.left + gridPadXpx_ + col * tileStepX + (tileStepX - gridArtSize_) / 2;
+    int artY = rcGrid_.top + gridPadYpx_ + row * tileStepY - gridScrollY_;
+    if (x < artX || x >= artX + gridArtSize_ ||
+        y < artY || y >= artY + gridArtSize_) return -1;
+    return i;
+}
+
+void PlayerWindow::drawPlaylistSection(Canvas& canvas, const LayoutRect& area) {
+    if (plKind_ == PlaylistKind::None) drawPlaylistGrid(canvas, area);
+    else                               drawPlaylists(canvas, area);
+}
+
 void PlayerWindow::playPlaylistFrom(int row) {
     if (row < 0 || row >= (int)plEntries_.size()) return;
     std::vector<std::string> keys;
@@ -4103,46 +4433,18 @@ void PlayerWindow::playPlaylistFrom(int row) {
     if (startQueue(keys, row)) onPlay();
 }
 
+// One opened list, full-page — the album view's counterpart on this side. Only
+// ever called with plKind_ != None (drawPlaylistSection draws the tile grid for
+// None), and it draws no Close affordance for the same reason the album view
+// draws none: going back is Escape, or the mouse's back button.
 void PlayerWindow::drawPlaylists(Canvas& canvas, const LayoutRect& area) {
+    LayoutRect unusedCloseRc{};
     LayoutRect content = panels::drawHeader(canvas, area, playlistTitle(plKind_),
-                                            metrics_.scale, metrics_.text.header, plCloseRc_);
+                                            metrics_.scale, metrics_.text.header,
+                                            unusedCloseRc);
     Rect c = toRect(content);
     float pad = metrics_.space(SP_LG);
     float y = c.y + pad;
-
-    // ── Chooser ─────────────────────────────────────────────────────────────
-    if (plKind_ == PlaylistKind::None) {
-        static const char* kSub[3] = {
-            "What you have chosen and finished, most often.",
-            "Loved once, untouched for a while.",
-            "Everything in your library you have never played.",
-        };
-        float rowH   = metrics_.space(84.0f);
-        float rowStep = rowH + metrics_.space(22.0f);
-        float rowW   = std::min(c.w - pad * 2.0f, metrics_.space(718.0f));
-        for (int i = 0; i < 3; i++) {
-            float ry = y + i * rowStep;
-            plChooserRc_[i] = { (int)(c.x + pad), (int)ry,
-                                (int)(c.x + pad + rowW), (int)(ry + rowH) };
-            Rect r = toRect(plChooserRc_[i]);
-            if (plHoverChooserRow_ == i)
-                canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
-            canvas.rect(r.x, r.y, r.w, metrics_.stroke(1.0f), toColor(CLR_SEPARATOR));
-            canvas.rect(r.x, r.y + r.h - metrics_.stroke(1.0f), r.w,
-                        metrics_.stroke(1.0f), toColor(CLR_SEPARATOR));
-            canvas.rect(r.x, r.y, metrics_.stroke(1.0f), r.h, toColor(CLR_SEPARATOR));
-            canvas.rect(r.x + r.w - metrics_.stroke(1.0f), r.y, metrics_.stroke(1.0f),
-                        r.h, toColor(CLR_SEPARATOR));
-            const char* label = playlistTitle((PlaylistKind)(i + 1));
-            canvas.textStyled(label, r.x + metrics_.space(26.0f),
-                              r.y + r.h * 0.32f - metrics_.text.body * 0.5f,
-                              metrics_.text.body, toColor(CLR_TEXT_PRIMARY), FontStyle::Bold);
-            canvas.textStyled(kSub[i], r.x + metrics_.space(26.0f),
-                              r.y + r.h * 0.68f - metrics_.text.secondary * 0.5f,
-                              metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Italic);
-        }
-        return;
-    }
 
     // ── A list ──────────────────────────────────────────────────────────────
     // Range tabs, and ONLY for Heavy Rotation: it is the one query that takes a
@@ -4184,6 +4486,9 @@ void PlayerWindow::drawPlaylists(Canvas& canvas, const LayoutRect& area) {
     plRowH_ = (int)(metrics_.text.body * 1.3f + metrics_.text.secondary * 1.35f
                     + metrics_.space(20.0f));
 
+    // A bottom margin the height of a button row. It used to BE a button row
+    // (the panel's Close); the list keeps the gap because running the last row
+    // flush into the transport bar reads as truncation.
     float btnH = metrics_.space(58.0f);
     // Capped reading measure, the same rule (and the same number) as the album
     // view's track list: unbounded, a wide window puts a title a full screen
@@ -4312,42 +4617,31 @@ void PlayerWindow::drawPlaylists(Canvas& canvas, const LayoutRect& area) {
     canvas.clearClip();
 }
 
-bool PlayerWindow::onPlaylistsMouseMove(int x, int y) {
-    bool changed = false;
-    bool hc = ptInRect(plCloseRc_, x, y);
-    if (hc != plHoverClose_) { plHoverClose_ = hc; changed = true; }
-
+// Writes this section's hover state ONLY. onMouseMove has already cleared it,
+// exactly as it clears hoverAlbumIdx_/hoverSidebarItem_/... before hit-testing,
+// and it compares against the values it saved to decide whether to redraw — so
+// there is nothing to report back from here.
+void PlayerWindow::onPlaylistsMouseMove(int x, int y) {
     if (plKind_ == PlaylistKind::None) {
-        int row = -1;
-        for (int i = 0; i < 3; i++)
-            if (ptInRect(plChooserRc_[i], x, y)) { row = i; break; }
-        if (row != plHoverChooserRow_) { plHoverChooserRow_ = row; changed = true; }
-        if (plHoverRow_ != -1) { plHoverRow_ = -1; changed = true; }
-    } else {
-        int tab = -1;
-        if (plKind_ == PlaylistKind::HeavyRotation)
-            for (int i = 0; i < 5; i++)
-                if (ptInRect(plRangeTabRc_[i], x, y)) { tab = i; break; }
-        if (tab != plHoverRangeTab_) { plHoverRangeTab_ = tab; changed = true; }
-        int row = hitTestListRows(plListRows_, x, y);
-        if (row != plHoverRow_) { plHoverRow_ = row; changed = true; }
-        if (plHoverChooserRow_ != -1) { plHoverChooserRow_ = -1; changed = true; }
+        plHoverTile_ = playlistTileHitTest(x, y);
+        return;
     }
-    // The other four panels never update the cursor (a documented gap); this
-    // one does, so a clickable row reads as clickable.
-    applyCursorFor(x, y);
-    return changed;
+    if (plKind_ == PlaylistKind::HeavyRotation)
+        for (int i = 0; i < 5; i++)
+            if (ptInRect(plRangeTabRc_[i], x, y)) { plHoverRangeTab_ = i; break; }
+    plHoverRow_ = hitTestListRows(plListRows_, x, y);
 }
 
 void PlayerWindow::onPlaylistsClick(int x, int y) {
-    if (ptInRect(plCloseRc_, x, y)) { closeActivePanel(); return; }
-
     if (plKind_ == PlaylistKind::None) {
-        for (int i = 0; i < 3; i++)
-            if (ptInRect(plChooserRc_[i], x, y)) {
-                loadPlaylist((PlaylistKind)(i + 1));
-                return;
-            }
+        int tile = playlistTileHitTest(x, y);
+        if (tile >= 0) {
+            loadPlaylist((PlaylistKind)(tile + 1));
+            // A new destination: whatever the last goBack() remembered is no
+            // longer reachable forward from here.
+            navForwardValid_ = false;
+            recalcLayout();
+        }
         return;
     }
 
@@ -4357,6 +4651,9 @@ void PlayerWindow::onPlaylistsClick(int x, int y) {
                 if (plRangePreset_ != kRangeTabs[i].preset) {
                     plRangePreset_ = kRangeTabs[i].preset;
                     loadPlaylist(plKind_);   // the range IS the query
+                    // ...and the tile behind it is that query's top four, so
+                    // the grid would still be showing the old range's covers.
+                    loadPlaylistCovers();
                 }
                 return;
             }
@@ -4543,14 +4840,15 @@ bool PlayerWindow::isKnownHeadphone(const EqAssignment& a) const {
     return false;
 }
 
-// Bottom-anchored inside the sidebar: a header, up to kEqHpMaxRows saved pairs
-// (plus the on-trial one, which is extra rather than displacing a saved row),
-// and a link into the full catalogue. Rects are computed here and cached for
-// hit-testing — the same contract eqListRows_ uses — so the block follows the
-// mode toggle and the list contents without anything hanging off
-// recalcLayout().
+// Bottom-anchored inside the sidebar: a header, the "No AutoEQ" row, up to
+// kEqHpMaxRows saved pairs (plus the on-trial one, which is extra rather than
+// displacing a saved row), then a link into the full catalogue. Rects are
+// computed here and cached for hit-testing — the same contract eqListRows_
+// uses — so the block follows the mode toggle and the list contents without
+// anything hanging off recalcLayout().
 void PlayerWindow::drawHeadphoneBlock(Canvas& canvas, const LayoutRect& sidebar) {
     hpRows_.clear();
+    hpNoneRc_ = {};
     hpMoreRc_ = {};
 
     // Nothing to pick a profile FOR in bitperfect mode — the signal path is
@@ -4560,32 +4858,60 @@ void PlayerWindow::drawHeadphoneBlock(Canvas& canvas, const LayoutRect& sidebar)
 
     Rect sb = toRect(sidebar);
     const float pad     = metrics_.space(SP_SM);
-    const float rowH    = metrics_.space(48.0f);
+    // space(36), not the 48 this block was authored with. Below Settings the
+    // sidebar has room for three rows at 48 and four at 36 (the nav above is
+    // eight space(65.36) rows), so at the authored height the "No AutoEQ" row
+    // would have been paid for by a saved pair. At secondary-sized text this is
+    // still 2.0x leading — the same order as the header's 2.2x — and it keeps
+    // two saved pairs reachable in one click, which is the point of the block.
+    const float rowH    = metrics_.space(36.0f);
     const float headerH = metrics_.text.secondary * 2.2f;
-
-    // The on-trial profile takes the first row and does NOT count against the
-    // budget: it is what the listener just picked, so hiding it to preserve a
-    // saved row would hide the one thing they are looking for.
-    const bool showTrial = eqCurrentTentative_ && !eqCurrent_.name.empty();
-    int saved = (int)eqHeadphones_.size();
-    if (saved > kEqHpMaxRows) saved = kEqHpMaxRows;
-    const int totalRows = saved + (showTrial ? 1 : 0);
-    // An empty list still occupies one row ("None yet"), so the height budget
-    // has to count it or the block overflows past the bottom of the sidebar.
-    const int listRows  = totalRows > 0 ? totalRows : 1;
-
-    // Header + rows + the "Search more…" row + padding above and below.
-    const float blockH = headerH + (listRows + 1) * rowH + pad * 2.0f;
-    float y = sb.y + sb.h - blockH;
 
     // The nav must win if the window is short enough for the two to meet —
     // browsing the library is the app's primary job, EQ housekeeping is not.
-    if (y < rcNavSettings_.bottom + metrics_.space(SP_MD)) return;
+    // But what gives way is the SAVED LIST, not the whole block: the header,
+    // "No AutoEQ" and "Search more…" are the minimum, because a pair that
+    // doesn't fit is still one click away under the latter while the off switch
+    // has nowhere else to live. Clamping here instead of bailing is what stops the
+    // block from disappearing outright precisely when the list is full: with a
+    // full four saved pairs the old all-or-nothing test failed its budget and
+    // drew NOTHING — no switcher, no way off, at the one moment the listener
+    // has the most to switch between.
+    const float avail =
+        (sb.y + sb.h) - (rcNavSettings_.bottom + metrics_.space(SP_MD));
+    const int listCapacity =
+        (int)((avail - headerH - pad * 2.0f) / rowH) - 2;   // less No AutoEQ + Search more…
+    if (listCapacity < 1) return;
+
+    // The on-trial profile heads the SAVED LIST (below "No AutoEQ", above the
+    // earned rows) and does NOT count against kEqHpMaxRows: it is what the
+    // listener just picked, so hiding it to preserve a saved row would hide the
+    // one thing they are looking for. It does count against the space that
+    // actually exists, though.
+    const bool showTrial = eqCurrentTentative_ && !eqCurrent_.name.empty();
+    int saved = (int)eqHeadphones_.size();
+    if (saved > kEqHpMaxRows) saved = kEqHpMaxRows;
+    if (saved > listCapacity - (showTrial ? 1 : 0))
+        saved = listCapacity - (showTrial ? 1 : 0);
+    if (saved < 0) saved = 0;
+    const int totalRows = saved + (showTrial ? 1 : 0);
+    // An empty list still occupies one row ("Nothing saved yet"), so the height
+    // budget has to count it or the block overflows past the bottom of the
+    // sidebar.
+    const int listRows  = totalRows > 0 ? totalRows : 1;
+
+    // Header + the two fixed rows ("No AutoEQ", "Search more…") + the list +
+    // padding above and below. Fits by construction now.
+    const float blockH = headerH + (listRows + 2) * rowH + pad * 2.0f;
+    float y = sb.y + sb.h - blockH;
 
     canvas.rect(sb.x, y, sb.w, metrics_.stroke(1.0f), toColor(CLR_SEPARATOR));
     y += pad;
 
-    canvas.textStyled("HEADPHONES", sb.x + metrics_.space(20.0f), y,
+    // Deliberately NOT truncated: a section header that quietly loses its tail
+    // hides a fit failure. "DRIVER'S AUTOEQ" is measured against space(277)
+    // minus the space(20) inset in the capture shot, not assumed to fit.
+    canvas.textStyled("DRIVER'S AUTOEQ", sb.x + metrics_.space(20.0f), y,
                       metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Bold);
     y += headerH;
 
@@ -4623,6 +4949,21 @@ void PlayerWindow::drawHeadphoneBlock(Canvas& canvas, const LayoutRect& sidebar)
     const int rowLeft  = sidebar.left;
     const int rowRight = sidebar.right;
 
+    // The OFF position of the switch, at the HEAD of the block — the radio-list
+    // convention, where "none of these" is the first choice rather than a
+    // footnote after them. It is never scrolled or clamped away: the saved list
+    // below is what gives way when the sidebar runs short.
+    //
+    // Active whenever nothing is assigned, so "no AutoEQ" is a state the block
+    // SHOWS rather than the absence of any highlight at all.
+    {
+        const bool none    = eqCurrent_.name.empty();
+        const bool hovered = (hoverSidebarItem_ == kSidebarHpNoneHit) && !none;
+        drawRow("No AutoEQ", /*active=*/none, /*trial=*/false, hovered, y);
+        hpNoneRc_ = { rowLeft, (int)y, rowRight, (int)(y + rowH) };
+        y += rowH;
+    }
+
     int rowIdx = 0;
     if (showTrial) {
         const bool hovered = (hoverSidebarItem_ == kSidebarHpRowBase + rowIdx);
@@ -4644,7 +4985,11 @@ void PlayerWindow::drawHeadphoneBlock(Canvas& canvas, const LayoutRect& sidebar)
     }
 
     if (totalRows == 0) {
-        canvas.textStyled("None yet", textX, y + rowH * 0.5f - metrics_.text.secondary * 0.5f,
+        // "Nothing saved yet", not "None yet": the row directly above is the
+        // OFF switch, and two adjacent lines both starting "None" read as a
+        // pair of choices rather than a control and a placeholder.
+        canvas.textStyled("Nothing saved yet", textX,
+                          y + rowH * 0.5f - metrics_.text.secondary * 0.5f,
                           metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Italic);
         y += rowH;
     }
@@ -4669,6 +5014,7 @@ void PlayerWindow::selectEqProfile(const EqAssignment& a) {
     if (!profile) return;
 
     db_.saveEqAssignment(getActiveDeviceKey(), a.name, a.source, a.form);
+    markEqAssignmentDirty();
     eqCurrent_ = a;
     eqCurrentTentative_ = !isKnownHeadphone(a);
 
@@ -4696,10 +5042,31 @@ void PlayerWindow::selectEqProfile(const EqAssignment& a) {
     invalidate();
 }
 
+// The other half of selectEqProfile(): the sidebar's "No AutoEQ" row and the EQ
+// panel's Clear button, one implementation.
+//
+// The "global" delete is the load-bearing line. applyDeviceEq() runs at EVERY
+// track start and falls back to a "global" assignment when the active device has
+// none — so clearing the device key alone would let such a row resurrect the
+// profile on the next song, and "No AutoEQ" would look broken rather than wrong.
+// Nothing in this app has ever WRITTEN "global" (saveEqAssignment has exactly one
+// call site, selectEqProfile, and it always passes getActiveDeviceKey()), so a
+// row under that key can only be legacy: deleting it destroys nothing the UI is
+// able to recreate.
+void PlayerWindow::clearEqProfile() {
+    db_.clearEqAssignment(getActiveDeviceKey());
+    db_.clearEqAssignment("global");
+    markEqAssignmentDirty();
+    eqManager_.clear();
+    eqCurrent_ = {};
+    eqCurrentTentative_ = false;
+    invalidate();
+}
+
 void PlayerWindow::onPlay(StartCause cause) {
     // A fresh play attempt always dismisses a stale bitperfect warning,
     // including the stale-selection early-return path just below.
-    bitperfectWarning_.clear();
+    audioNotice_.clear();
     // Likewise the achieved-state badge: it must never describe a past track.
     bpState_ = BpState::Off;
     bpDetail_.clear();
@@ -4789,8 +5156,14 @@ void PlayerWindow::onPlay(StartCause cause) {
         loadTransportArtTexture(albums_[currentAlbum_].artPath);
     }
 
-    // Focus the album view on what's now playing
-    if (selectedAlbumIdx_ != currentAlbum_)
+    // Focus the album view on what's now playing — but never yank the page out
+    // from under someone who is BROWSING. Playing a track from a playlist is
+    // not a request to leave the playlist, any more than playing a track from
+    // an album view is a request to leave it; the transport bar already says
+    // what is playing. This was the whole shape of the old complaint: start a
+    // track from a list and the app jumped to that track's album, so leaving
+    // the list twice put you somewhere you had never navigated to.
+    if (selectedAlbumIdx_ != currentAlbum_ && navSection_ != NavSection::Playlists)
         openAlbumView(currentAlbum_);
 
     invalidate();
@@ -4820,16 +5193,26 @@ void PlayerWindow::onPlay(StartCause cause) {
         if (isBitperfect) {
             printf("[Bitperfect][ERROR] DAC does not support native sample rate %d Hz, aborting\n", fileSr);
             fflush(stdout);
-            bitperfectWarning_ = "DAC does not support native sample rate " + std::to_string(fileSr) +
+            audioNotice_ = "DAC does not support native sample rate " + std::to_string(fileSr) +
                                   " Hz — Bitperfect playback aborted.";
             bpState_  = BpState::Degraded;
             bpDetail_ = "Device cannot run " + std::to_string(fileSr) + " Hz natively";
             invalidate();
         } else {
-            printf("[Audio][ERROR] Output failed to configure at %d Hz\n", fileSr);
+            // Say WHICH backend and WHY. The old message named neither, and on
+            // Linux it only reached stderr — so an ALSA card held by PipeWire
+            // looked exactly like the app ignoring the click. audioNotice_ puts
+            // it on screen; lastError() carries the driver's own words.
+            const std::string why = output_ ? output_->lastError() : std::string();
+            printf("[Audio][ERROR] %s output failed to configure at %d Hz%s%s\n",
+                   audioBackendLabel().c_str(), fileSr,
+                   why.empty() ? "" : ": ", why.c_str());
             fflush(stdout);
-            host_->showErrorMessage("Audio configure failed",
-                "Audio output failed to configure.\nCheck Audio Settings.");
+            audioNotice_ = audioBackendLabel() + " output failed to start" +
+                           (why.empty() ? std::string(" at ") + std::to_string(fileSr) + " Hz."
+                                        : std::string(" \xE2\x80\x94 ") + why + ".");
+            host_->showErrorMessage("Audio configure failed", audioNotice_);
+            invalidate();
         }
         active_->stop();
         isPlaying_ = false;
@@ -5479,12 +5862,20 @@ void PlayerWindow::onTimer() {
     if (!isPlaying_) return;
 
     if (output_ && output_->hasFaulted()) {
-        printf("[Audio][ERROR] Audio device fault detected, stopping playback\n");
+        const std::string why = output_->lastError();
+        printf("[Audio][ERROR] %s device fault detected, stopping playback%s%s\n",
+               audioBackendLabel().c_str(), why.empty() ? "" : ": ", why.c_str());
         fflush(stdout);
         onStop();
-        host_->showErrorMessage("Audio device error",
-            "Audio device error (driver fault).\n"
-            "Playback stopped. Try unplugging/replugging the DAC.");
+        // Release the faulted backend rather than leaving it half-alive for a
+        // later destructor to trip over — for JACK, "faulted" can mean the
+        // server died, and that handle must be let go now (see JackSink::live).
+        output_->close();
+        audioNotice_ = audioBackendLabel() + " output stopped" +
+                       (why.empty() ? " \xE2\x80\x94 device fault."
+                                    : std::string(" \xE2\x80\x94 ") + why + ".");
+        host_->showErrorMessage("Audio device error", audioNotice_);
+        invalidate();
         return;
     }
 
@@ -5555,6 +5946,7 @@ void PlayerWindow::applyTrackMetadata(int album, int track) {
     // IS_AFFINITY exists to prevent. See db_stats.cpp.
     gaplessStartCause_ = queueActive() ? StartCause::Playlist
                                        : StartCause::Gapless;
+    const int prevDisplayAlbum = displayAlbum_;
     displayAlbum_   = album;
     displayTrack_   = track;
     currentTitle_  = nt.title;
@@ -5562,8 +5954,14 @@ void PlayerWindow::applyTrackMetadata(int album, int track) {
     seekTotalMs_    = nt.durationMs > 0 ? nt.durationMs : 0;
     seekPosMs_      = 0;
     loadTransportArtTexture(albums_[album].artPath);
-    selectedAlbumIdx_ = album;
-    loadTrackPanelArtTexture(album);
+    // Follow the music only where the page was already following it. A queue
+    // crossing into another record while the listener is reading a DIFFERENT
+    // album's page would swap that page out from under them mid-sentence —
+    // same rule as onPlay()'s: the transport bar is what says what is playing.
+    if (!trackPanelOpen_ || selectedAlbumIdx_ == prevDisplayAlbum) {
+        selectedAlbumIdx_ = album;
+        loadTrackPanelArtTexture(album);
+    }
     invalidate();
 }
 
@@ -5677,6 +6075,15 @@ void PlayerWindow::onScanDone() {
         std::lock_guard<std::mutex> lk(albumsMu_);
         reresolveQueueLocked();
     }
+    // A playlist tile holds ALBUM INDICES, which every index above just
+    // invalidated — stale ones would paint some other record's cover into a
+    // rank quadrant. Rebuilt from the queries, same as the grid above.
+    // (loadPlaylistCovers takes albumsMu_ itself, so it must run outside the
+    // scope that just held it — the lock is not reentrant.)
+    if (navSection_ == NavSection::Playlists) {
+        loadPlaylistCovers();
+        if (plKind_ != PlaylistKind::None) loadPlaylist(plKind_);
+    }
     recalcLayout();
     invalidate();
 
@@ -5740,26 +6147,144 @@ void PlayerWindow::onPanelChar(uint32_t codepoint) {
 bool PlayerWindow::onPanelKeyDown(int keyCode) {
     if (activePanel_ == SettingsPanel::None) return false;
     if (keyCode == key::Escape) {
-        // Playlists is two screens deep, so Escape steps back one level before
-        // it closes: a listener who opened a list meant to leave the LIST, not
-        // the section.
-        if (activePanel_ == SettingsPanel::Playlists && plKind_ != PlaylistKind::None) {
-            plKind_ = PlaylistKind::None;
-            plEntries_.clear();
-            plDurationMs_.clear();
-            plListRows_.clear();
-            plScrollY_ = 0;
-            plHoverRow_ = -1;
-            invalidate();
-            return true;
-        }
         closeActivePanel();
         return true;
     }
-    return true;  // swallow every other key while a panel is open — no
-                  // play/stop or search-box interaction bleeding through to
-                  // the main view behind it (mirrors the native dialogs'
-                  // EnableWindow(false) modal behavior).
+    // Play/stop is NOT part of what a settings panel owns. Everything else is
+    // swallowed (no search-box interaction bleeding through to the view behind
+    // it — the native dialogs' EnableWindow(false) behaviour), but stopping
+    // the music is a transport action, the transport bar is right there and
+    // still drawn, and a dialog that takes the key away leaves a listener with
+    // no way to silence the room without first closing it. The one exception
+    // is a panel with a text field focused, where the space is a character.
+    if (keyCode == key::Space && !eqSearchFocused_) return false;
+    return true;
+}
+
+// ONE step out. Escape and the mouse's back button both come through here, so
+// the two cannot describe different shapes of "back". Order is outermost
+// first: the thing most recently laid over the view is the thing that leaves.
+bool PlayerWindow::goBack() {
+    ViewState before = captureViewState();
+    bool moved = false;
+    // ViewState describes the five sections and the two views inside them, not
+    // which settings panel was open — so closing a panel is a step back that
+    // has no forward. Recording one would send the forward button to the
+    // Settings PAGE the panel was borrowing, which is not where it came from.
+    bool recordForward = true;
+
+    if (activePanel_ != SettingsPanel::None) {
+        closeActivePanel();
+        moved = true;
+        recordForward = false;
+    } else if (searchFocused_ || !searchQuery_.empty()) {
+        // Leave the box and clear the filter — the grid underneath is a
+        // different grid while a query is live, so this IS a step back.
+        searchFocused_ = false;
+        searchQuery_.clear();
+        rebuildGridIndices();
+        gridScrollY_ = 0;
+        recalcLayout();
+        invalidate();
+        moved = true;
+    } else if (settingsOpen_) {
+        // Settings replaces the content area, so leaving it hands back
+        // whichever section was underneath — exactly what closeActivePanel()
+        // does for a panel the sidebar opened.
+        settingsOpen_ = false;
+        recalcLayout();
+        invalidate();
+        moved = true;
+    } else if (navSection_ == NavSection::Playlists && plKind_ != PlaylistKind::None) {
+        // Two levels deep, same as the album section: leaving the LIST is not
+        // leaving the section.
+        plKind_ = PlaylistKind::None;
+        plEntries_.clear();
+        plDurationMs_.clear();
+        plListRows_.clear();
+        plScrollY_  = 0;
+        plHoverRow_ = -1;
+        recalcLayout();
+        invalidate();
+        moved = true;
+    } else if (trackPanelOpen_) {
+        trackPanelOpen_ = false;
+        recalcLayout();
+        invalidate();
+        moved = true;
+    }
+
+    if (moved && recordForward) {
+        navForward_      = before;
+        navForwardValid_ = true;
+    } else if (moved) {
+        navForwardValid_ = false;
+    }
+    return moved;
+}
+
+PlayerWindow::ViewState PlayerWindow::captureViewState() const {
+    ViewState s;
+    s.section        = navSection_;
+    s.filter         = albumTypeFilter_;
+    s.settingsOpen   = settingsOpen_;
+    s.trackPanelOpen = trackPanelOpen_;
+    s.selectedAlbum  = selectedAlbumIdx_;
+    s.plKind         = plKind_;
+    return s;
+}
+
+void PlayerWindow::applyViewState(const ViewState& s) {
+    navSection_   = s.section;
+    settingsOpen_ = s.settingsOpen;
+
+    if (s.section == NavSection::Playlists) {
+        trackPanelOpen_ = false;
+        if (s.plKind != plKind_) {
+            if (s.plKind == PlaylistKind::None) {
+                plKind_ = PlaylistKind::None;
+                plEntries_.clear();
+                plDurationMs_.clear();
+                plListRows_.clear();
+                plScrollY_ = 0;
+            } else {
+                loadPlaylist(s.plKind);   // the query IS the list; re-run it
+            }
+        }
+        if (plKind_ == PlaylistKind::None) loadPlaylistCovers();
+        recalcLayout();
+        invalidate();
+        return;
+    }
+
+    if (s.filter != albumTypeFilter_) {
+        albumTypeFilter_ = s.filter;
+        rebuildGridIndices();
+        gridScrollY_ = 0;
+    }
+    // The album may have gone (a rescan between the back and the forward) —
+    // then there is nothing to re-enter, and the grid is the honest landing.
+    if (s.trackPanelOpen && s.selectedAlbum >= 0 &&
+        s.selectedAlbum < (int)albums_.size()) {
+        openAlbumView(s.selectedAlbum);
+    } else {
+        trackPanelOpen_ = false;
+        recalcLayout();
+        invalidate();
+    }
+}
+
+void PlayerWindow::onNavBack() {
+    if (uiMode_ == UiMode::Essential) return;   // nothing to go back FROM
+    goBack();
+}
+
+void PlayerWindow::onNavForward() {
+    if (uiMode_ == UiMode::Essential) return;
+    if (!navForwardValid_) return;
+    ViewState s = navForward_;
+    navForwardValid_ = false;   // one step forward, then the stack is spent
+    applyViewState(s);
 }
 
 void PlayerWindow::onKeyDownPortable(int keyCode) {
@@ -5770,19 +6295,7 @@ void PlayerWindow::onKeyDownPortable(int keyCode) {
         if (isPlaying_) onStop(); else if (currentAlbum_ >= 0) onPlay();
         return;
     case key::Escape:
-        if (searchFocused_ || !searchQuery_.empty()) {
-            // First Escape: leave the box and clear the filter.
-            searchFocused_ = false;
-            searchQuery_.clear();
-            rebuildGridIndices();
-            gridScrollY_ = 0;
-            recalcLayout();
-            invalidate();
-        } else if (trackPanelOpen_) {
-            trackPanelOpen_ = false;
-            recalcLayout();
-            invalidate();
-        }
+        goBack();
         return;
     }
 }
@@ -5804,6 +6317,13 @@ void PlayerWindow::shutdown() {
     // never touches the Renderer, but a decode completing after this point
     // would notify a dying window.
     stopArtDecodeThread();
+    // Same rule as applyAudioSettingsPanel(): close the backend by name rather
+    // than leaving it to ~PlayerWindow, so teardown order is stated here.
+    if (output_) {
+        output_->stop();
+        output_->close();
+    }
+    output_.reset();
     usbDriver_.close();
 
     // Texture caches must be torn down before the Renderer that owns their
@@ -5866,10 +6386,25 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
         onMouseMove(x, y);       // hover first — the real pointer always does
         onLButtonDown(x, y);
     };
+    // A playlist tile lives on the album grid's geometry and is only a rect
+    // while it draws, so there is nothing stored to click — the same math the
+    // draw and the hit-test share (see drawPlaylistGrid/playlistTileHitTest).
+    auto clickPlaylistTile = [&](int i) {
+        int tileStepX = gridStepX_, tileStepY = gridTileSize_ + gridRowGap_;
+        int col = i % gridCols_, row = i / gridCols_;
+        int x = rcGrid_.left + gridPadXpx_ + col * tileStepX
+                + (tileStepX - gridArtSize_) / 2 + gridArtSize_ / 2;
+        int y = rcGrid_.top + gridPadYpx_ + row * tileStepY - gridScrollY_
+                + gridArtSize_ / 2;
+        onMouseMove(x, y);
+        onLButtonDown(x, y);
+    };
     auto reset = [&] {
         activePanel_    = SettingsPanel::None;
         settingsOpen_   = false;
         trackPanelOpen_ = false;
+        navSection_     = NavSection::Albums;
+        plKind_         = PlaylistKind::None;
         searchFocused_  = false;
         searchQuery_.clear();
         rebuildGridIndices();
@@ -5881,9 +6416,11 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
     if (state == "10-grid-albums")  { click(rcNavAlbum_);  return true; }
     if (state == "11-grid-eps")     { click(rcNavEp_);     return true; }
     if (state == "12-grid-singles") { click(rcNavSingle_); return true; }
-    if (state == "13-grid-remixes") { click(rcNavRemix_);  return true; }
+    if (state == "13-grid-compilations") { click(rcNavCompilation_); return true; }
+    if (state == "14-grid-live")    { click(rcNavLive_);   return true; }
+    if (state == "15-grid-remixes") { click(rcNavRemix_);  return true; }
 
-    if (state == "14-grid-hover") {
+    if (state == "16-grid-hover") {
         // The grid tile hover state — one of the few pieces of the visual
         // language that never appears in a static shot otherwise.
         click(rcNavAlbum_);
@@ -5919,7 +6456,7 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
         return true;
     }
     if (state == "34-eq-all-profiles") {
-        // The panel opens on "My Headphones" (33 above), so this is the other
+        // The panel opens on "My Drivers" (33 above), so this is the other
         // tab: the full 8600-profile catalogue, which is the state that shows
         // what a long list looks like in this design.
         click(rcNavSettings_); drawFrame();
@@ -5937,30 +6474,30 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
         return true;
     }
 
-    // The chooser, then each list. Reaching a list means clicking through the
-    // chooser, so the rects have to have been drawn once first — the same
-    // draw-then-click order the EQ tabs need.
+    // The tile grid, then each list. Reaching a list means clicking a tile, so
+    // the grid has to have been drawn once first — the same draw-then-click
+    // order the EQ tabs need.
     if (state == "36-playlists") { click(rcNavPlaylists_); return true; }
     if (state == "37-playlists-heavy-rotation") {
         click(rcNavPlaylists_); drawFrame();
-        click(plChooserRc_[0]);
+        clickPlaylistTile(0);
         return true;
     }
     if (state == "38-playlists-forgotten-favourites") {
         click(rcNavPlaylists_); drawFrame();
-        click(plChooserRc_[1]);
+        clickPlaylistTile(1);
         return true;
     }
     if (state == "39-playlists-never-heard") {
         click(rcNavPlaylists_); drawFrame();
-        click(plChooserRc_[2]);
+        clickPlaylistTile(2);
         return true;
     }
     if (state == "3a-playlists-row-hover") {
         // The hover pill is the one thing a static shot cannot show, and it is
         // exactly where a wrong fitWidth collapses the highlight to a sliver.
         click(rcNavPlaylists_); drawFrame();
-        click(plChooserRc_[2]);          // Never Heard — the list with rows on a fresh log
+        clickPlaylistTile(2);            // Never Heard — the list with rows on a fresh log
         drawFrame();
         if (plListRows_.empty()) return false;
         const auto& r = plListRows_[0];

@@ -390,7 +390,7 @@ struct FrameReader {
 } // namespace
 
 void Decoder::decodeLoop(PcmCallback cb) {
-    static const int CHUNK_FRAMES = 4096;
+    constexpr int CHUNK_FRAMES = 4096;
 
     // END-OF-STREAM IS NOT THE SAME AS STOPPED. doneCallback_ is what drives
     // the gapless coordinator (PlayerWindow::startGaplessCoordinator), and
@@ -442,7 +442,7 @@ void Decoder::decodeLoop(PcmCallback cb) {
 }
 
 void Decoder::decodeLoopInt32(PcmS32Callback cb) {
-    static const int CHUNK_FRAMES = 4096;
+    constexpr int CHUNK_FRAMES = 4096;
 
     // See decodeLoop(): only a genuine end-of-stream may fire doneCallback_.
     bool reachedEos = false;

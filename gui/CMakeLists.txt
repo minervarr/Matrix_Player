@@ -4,8 +4,27 @@
 # (os/windows_host.cc or os/linux_host.cc — see src/host.hh).
 # ---------------------------------------------------------------------------
 
+# Where the app writes its database, log and font-atlas cache.
+#
+# Empty (the default) keeps every one of them beside the executable, which is
+# what a build tree and the self-contained tarballs in dist/linux/ have always
+# been — move the folder anywhere and it still works. Set it to a directory
+# NAME (not a path) and those three move to $HOME/<name>/ instead, which is
+# what a system package needs: /opt/matrix_player is installed root-owned, and
+# the ~45 MB atlas cache is per-user regardless, since bakeFallbackGlyphs()
+# bakes whatever scripts the listener's own library happens to contain.
+#
+#   cmake -B build -DMATRIX_STATE_HOME=.matrix_player
+#
+# Deliberately not an XDG lookup — see the comment in src/app_paths.hh.
+# Read-only data (fonts/, assets/shaders/, eq_profiles.json) is NOT affected
+# and stays beside the executable in every configuration.
+set(MATRIX_STATE_HOME "" CACHE STRING
+    "Directory name under $HOME for the DB/log/atlas cache (e.g. .matrix_player). Empty = write beside the executable.")
+
 set(MATRIX_PLAYER_PORTABLE_SOURCES
     src/gui_main.cc
+    src/app_paths.cc
     src/player_view.cc
     src/art_view.cc
     src/ui_metrics.cc
@@ -120,6 +139,16 @@ else()
         Threads::Threads)
 endif()
 
+# Applied to matrix_player ONLY. icon_preview and matrix_ui_capture are
+# Debug-only dev tools that must keep writing beside their own binary —
+# matrix_ui_capture's determinism depends on reading the matrix_player.db
+# sitting next to it, and both deliberately share the player's atlas cache
+# in a build tree.
+if(MATRIX_STATE_HOME)
+    target_compile_definitions(matrix_player PRIVATE
+        MATRIX_STATE_HOME="${MATRIX_STATE_HOME}")
+endif()
+
 # Copy EQ profiles JSON next to the executable
 add_custom_command(TARGET matrix_player POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -195,6 +224,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     if(NOT WIN32)
         add_executable(icon_preview
             ${CMAKE_SOURCE_DIR}/tools/icon_preview/main.cc
+            src/app_paths.cc
             src/ui_icons.cc
             src/ui_icons_draw.cc
             src/ui_metrics.cc)
@@ -228,6 +258,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     if(NOT WIN32)
         add_executable(matrix_ui_capture
             ${CMAKE_SOURCE_DIR}/tools/ui_capture/main.cc
+            src/app_paths.cc
             src/player_view.cc
             src/art_view.cc
             src/ui_metrics.cc

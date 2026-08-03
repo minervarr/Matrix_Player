@@ -113,6 +113,14 @@ size_t JackOutput::ringAvailable() const { return sink_.ringAvailable(); }
 
 bool JackOutput::hasFaulted() const { return sink_.hasFaulted(); }
 
+std::string JackOutput::lastError() const {
+    if (sink_.serverIsGone())
+        return "the JACK server shut down";
+    if (!clientOpen_)
+        return "no running JACK server (jackd is not started)";
+    return {};
+}
+
 int JackOutput::pendingPlaybackMs() const {
     const int rate = sink_.activeFormat().sampleRate;
     if (rate <= 0) return 0;

@@ -117,6 +117,13 @@ public:
     void onLButtonDown(int x, int y);
     void onLButtonDblClk(int x, int y);
     void onMouseWheel(int x, int y, int delta);
+    // The two extra buttons on the side of a mouse (Win32 XBUTTON1/XBUTTON2,
+    // evdev BTN_SIDE/BTN_EXTRA). Back is Escape by another name — the same
+    // one-step-out that a browser's back button performs; forward re-enters
+    // exactly what the last back left. Public for the same reason the rest of
+    // this block is: Host dispatches straight into them.
+    void onNavBack();
+    void onNavForward();
 
     void onTimer();  // periodic playback-position tick, see host_->startTimer()
 
@@ -214,6 +221,10 @@ private:
     // "write the assignment, apply the coefficients, restart the trial clock"
     // can't drift apart between the two call sites.
     void selectEqProfile(const EqAssignment& a);
+    // ...and its opposite, for the same reason: the sidebar's "No AutoEQ" row
+    // and the EQ panel's Clear button are one implementation. It clears the
+    // legacy "global" assignment too — see the comment on the definition.
+    void clearEqProfile();
     void reloadEqHeadphones();
     bool isKnownHeadphone(const EqAssignment& a) const;
     // Bottom-anchored inside the sidebar. Draws nothing in bitperfect mode:
@@ -354,8 +365,8 @@ private:
     LayoutRect rcBtnNext_       = {};
     LayoutRect rcDspBadge_      = {};
     // Non-modal bitperfect-mismatch warning strip, drawn above the transport
-    // bar when bitperfectWarning_ is non-empty. See draw()/onLButtonDown().
-    LayoutRect rcBitperfectWarning_ = {};
+    // bar when audioNotice_ is non-empty. See draw()/onLButtonDown().
+    LayoutRect rcAudioNotice_ = {};
 
     // Sidebar items
     LayoutRect rcBrand_       = {};
@@ -363,6 +374,8 @@ private:
     LayoutRect rcNavEp_       = {};
     LayoutRect rcNavSingle_   = {};
     LayoutRect rcNavRemix_    = {};
+    LayoutRect rcNavCompilation_ = {};
+    LayoutRect rcNavLive_     = {};
     LayoutRect rcNavPlaylists_ = {};
     LayoutRect rcNavSettings_ = {};
 
@@ -429,6 +442,16 @@ private:
     int  eqScrollY_     = 0;
     std::string eqDeviceKey_;
     bool eqBitperfectActive_ = false;
+    // The panel's two header lines, cached. drawEqSettings() used to run TWO
+    // sqlite queries and rebuild both strings on EVERY frame the panel was up —
+    // sixty times a second to redraw text that only changes when the assignment
+    // does. Refreshed via markEqAssignmentDirty() from the three places that can
+    // change it: onEqSettings() (which also re-reads the device), the Clear
+    // button, and selectEqProfile() — the single funnel every save goes through.
+    std::string eqDeviceLine_;
+    std::string eqAssignLine_;
+    bool eqAssignLineDirty_ = true;
+    void markEqAssignmentDirty() { eqAssignLineDirty_ = true; }
     LayoutRect eqSearchRc_ = {}, eqListArea_ = {}, eqCloseRc_ = {}, eqBtnAssign_ = {}, eqBtnClear_ = {};
     bool eqHoverClose_ = false, eqHoverAssign_ = false, eqHoverClear_ = false;
     std::vector<widgets::ListRow> eqListRows_;  // cached during draw, read by hit-test
@@ -608,7 +631,7 @@ private:
     // Settings gear is open (replaces the whole content area). They're
     // deliberately separate state: leaving Settings returns to whichever
     // type filter was active, never hardcoded back to Albums.
-    enum class AlbumTypeFilter { Album, Ep, Single, Remix };
+    enum class AlbumTypeFilter { Album, Ep, Single, Remix, Compilation, Live };
     // rebuildGridIndices() compares this against Album::ReleaseType via a
     // plain (int) cast — these static_asserts make a future reorder of
     // either enum a build error instead of a silently wrong filter.
@@ -616,28 +639,55 @@ private:
     static_assert((int)AlbumTypeFilter::Ep     == (int)Album::ReleaseType::Ep,     "AlbumTypeFilter/Album::ReleaseType value mismatch");
     static_assert((int)AlbumTypeFilter::Single == (int)Album::ReleaseType::Single, "AlbumTypeFilter/Album::ReleaseType value mismatch");
     static_assert((int)AlbumTypeFilter::Remix  == (int)Album::ReleaseType::Remix,  "AlbumTypeFilter/Album::ReleaseType value mismatch");
+    static_assert((int)AlbumTypeFilter::Compilation == (int)Album::ReleaseType::Compilation, "AlbumTypeFilter/Album::ReleaseType value mismatch");
+    static_assert((int)AlbumTypeFilter::Live   == (int)Album::ReleaseType::Live,   "AlbumTypeFilter/Album::ReleaseType value mismatch");
     AlbumTypeFilter albumTypeFilter_ = AlbumTypeFilter::Album;
+
+    // Which of the sidebar's SEVEN content rows is showing. Albums/EPs/Singles/
+    // Remixes/Compilations/Live are one section browsing six release types
+    // (albumTypeFilter_ says which); Playlists is the seventh, and it is a
+    // section in exactly the same sense — a grid of tiles in the content area,
+    // with the sidebar, the
+    // transport bar and Settings all still live behind it. It used to borrow
+    // the settings OVERLAY instead, which made it the one row you could not
+    // click your way out of: every mouse and key event was diverted to the
+    // panel dispatchers before the sidebar was ever hit-tested.
+    //
+    // Deliberately NOT another AlbumTypeFilter value: that enum is cast
+    // straight to Album::ReleaseType (see the static_asserts above), and a
+    // value with no release type behind it would empty gridIndices_ — which
+    // onNext()/nextAlbumInSection() and the grid both read.
+    enum class NavSection { Albums, Playlists };
+    NavSection      navSection_      = NavSection::Albums;
     bool            settingsOpen_    = false;
     // True while a panel is only borrowing the settings overlay to draw in —
     // opened from the sidebar's headphone switcher, not by walking into
     // Settings. closeActivePanel() restores the previous view when it is set.
     bool            panelFromSidebar_ = false;
-    // sidebarHitTest() sentinels. The first four values are AlbumTypeFilter
+    // sidebarHitTest() sentinels. The first SIX values are AlbumTypeFilter
     // casts, so everything else starts above them — and onLButtonDown() must
     // test these BEFORE its `nav >= 0` branch, which would otherwise cast a
     // sentinel straight into an out-of-range AlbumTypeFilter.
-    static constexpr int kSidebarSettingsHit  = 4;  // the Settings row
-    static constexpr int kSidebarHpMoreHit    = 5;  // the headphone block's "Search more…"
-    static constexpr int kSidebarPlaylistsHit = 6;  // the Playlists row
+    //
+    // These numbers move every time a release type is added: they started at
+    // 4, and Compilation taking 4 would have made a click on it read as a
+    // click on Settings. The static_assert below is what makes that a build
+    // error rather than a mystery in the UI.
+    static constexpr int kSidebarSettingsHit  = 6;  // the Settings row
+    static constexpr int kSidebarHpMoreHit    = 7;  // the AutoEQ block's "Search more…"
+    static constexpr int kSidebarPlaylistsHit = 8;  // the Playlists row
+    static constexpr int kSidebarHpNoneHit    = 9;  // the AutoEQ block's "No AutoEQ"
+    static_assert(kSidebarSettingsHit > (int)AlbumTypeFilter::Live,
+                  "sidebarHitTest sentinels must start above the last AlbumTypeFilter");
     static constexpr int kSidebarHpRowBase   = 100;  // + row index within hpRows_
 
     // ── Playlists ───────────────────────────────────────────────────────────
     // Three generated lists, each of which IS its query (core/db.h) — nothing
     // is stored, so nothing can drift from the listening log. plKind_ is the
-    // second level of state INSIDE SettingsPanel::Playlists: None draws the
-    // chooser, anything else draws that list. Deliberately not three more
-    // SettingsPanel values — the chooser/detail pair is this panel's own
-    // business, exactly as activePanel_ == None vs a panel is one level up.
+    // second level of state INSIDE NavSection::Playlists, and it mirrors the
+    // album section exactly: None draws the TILE GRID (one tile per list, the
+    // grid's own geometry), anything else draws that list full-page — the same
+    // two levels the album grid and the album view already are.
     enum class PlaylistKind { None, HeavyRotation, ForgottenFavourites, NeverHeard };
     PlaylistKind plKind_ = PlaylistKind::None;
     // Loaded once per kind-chosen / range-changed, never per frame: the query
@@ -658,21 +708,66 @@ private:
     int  plRowH_      = 0;
     int  plScrollY_   = 0;
     int  plHoverRow_  = -1;
-    bool plHoverClose_ = false;
-    int  plHoverChooserRow_ = -1;
+    int  plHoverTile_       = -1;   // 0..2, the tile grid's hovered list
     int  plHoverRangeTab_   = -1;
-    LayoutRect plListArea_ = {}, plCloseRc_ = {};
-    LayoutRect plChooserRc_[3] = {};
+    LayoutRect plListArea_ = {};
     LayoutRect plRangeTabRc_[5] = {};
     std::vector<widgets::ListRow> plListRows_;  // cached during draw, read by hit-test
 
+    // What a playlist tile WEARS, since a generated list has no artwork of its
+    // own. For an ORDERED list the tile is a 2x2 mosaic of the covers behind
+    // its top entries, in rank order — see drawPlaylistTileArt() for the
+    // quadrant numbering and the fourth-quadrant rule. `albums` holds album
+    // indices (distinct: two rows off the same record must not paint the same
+    // cover twice), `count` how many of the four are filled, and `more`
+    // whether the list runs past them.
+    //
+    // An UNORDERED list has no "first place" to put in a quadrant, so it wears
+    // a flat treatment instead — a solid colour or a gradient, or a custom
+    // image the listener picks. Never Heard is the only unordered list today
+    // and it is generated, so there is nobody to pick an image FOR it: it gets
+    // the gradient. The custom-image and solid-colour arms of that choice
+    // belong to hand-made playlists, which do not exist yet (see TODO.md).
+    struct PlaylistCover {
+        int  albums[4] = { -1, -1, -1, -1 };
+        int  count     = 0;
+        bool more      = false;
+        bool ranked    = false;
+    };
+    PlaylistCover plCovers_[3];
+
     static const char* playlistTitle(PlaylistKind k);
-    void onPlaylists();                       // sidebar row -> chooser
+    void openPlaylistSection();               // sidebar row -> the tile grid
+    void loadPlaylistCovers();                // the three tiles' mosaic sources
     void loadPlaylist(PlaylistKind kind);     // runs the query + resolves durations
+    void drawPlaylistSection(Canvas& canvas, const LayoutRect& area);
+    void drawPlaylistGrid(Canvas& canvas, const LayoutRect& area);
+    void drawPlaylistTileArt(Canvas& canvas, int kindIdx, float x, float y, float a);
+    int  playlistTileHitTest(int x, int y) const;   // 0..2, or -1
     void drawPlaylists(Canvas& canvas, const LayoutRect& area);
     void onPlaylistsClick(int x, int y);
-    bool onPlaylistsMouseMove(int x, int y);  // true when a hover state changed
+    void onPlaylistsMouseMove(int x, int y);  // writes this section's hover state
     void playPlaylistFrom(int row);
+
+    // ── Going back ──────────────────────────────────────────────────────────
+    // ONE definition of "one step out", shared by Escape and the mouse's back
+    // button so the two can never drift apart. Returns false when there is
+    // nothing left to leave. navForward_ remembers exactly the state the last
+    // goBack() left, and nothing else writes it — any other navigation clears
+    // it, the same way following a link in a browser drops the forward stack.
+    struct ViewState {
+        NavSection      section        = NavSection::Albums;
+        AlbumTypeFilter filter         = AlbumTypeFilter::Album;
+        bool            settingsOpen   = false;
+        bool            trackPanelOpen = false;
+        int             selectedAlbum  = -1;
+        PlaylistKind    plKind         = PlaylistKind::None;
+    };
+    bool      goBack();
+    ViewState captureViewState() const;
+    void      applyViewState(const ViewState& s);
+    ViewState navForward_;
+    bool      navForwardValid_ = false;
 
     // Last-played album (persisted via Db::saveSetting/loadSetting, matched
     // by name+artist rather than index since the list reorders across
@@ -824,10 +919,18 @@ private:
     std::unique_ptr<AudioOutput> output_;
     AudioBackend     audioBackend_  = AudioBackend::Usb;
     std::atomic<bool> bitperfectMode_{false};
-    // Empty = hidden. Set on a bitperfect-mismatch playback failure (see
-    // onPlay()); cleared at the top of the next onPlay() attempt or on
-    // click. Plain string, not atomic — only touched from the UI thread.
-    std::string bitperfectWarning_;
+    // The app's ONE on-screen channel for "the audio path could not do what you
+    // asked". Empty = hidden; cleared at the top of the next onPlay() attempt
+    // or on click. Plain string, not atomic — only touched from the UI thread.
+    //
+    // It was `bitperfectWarning_` and wired to exactly one cause, which left
+    // the visibility inverted: a bit-perfect rate mismatch drew a banner, while
+    // an ALSA device that would not open at all (PipeWire holding the card, say)
+    // failed through Host::showErrorMessage — stderr only on Linux, so nothing
+    // on screen and, until the log fix in linux_host.cc, nothing in the log
+    // either. Every audio failure goes through here now, carrying the backend's
+    // own reason rather than "check Audio Settings".
+    std::string audioNotice_;
 
     // What the signal path ACTUALLY achieved for the playing track, as opposed
     // to what the mode toggle asked for. The DSP badge used to read
@@ -879,12 +982,17 @@ private:
     EqProfileStore   eqProfiles_;
     EqManager        eqManager_;
 
-    // ── Headphone quick-switcher ────────────────────────────────────────────
-    // A DAC has no frequency response; headphones do, and several take turns
-    // in one jack — so "one profile per device" was the wrong shape. The
-    // sidebar block is the fast way to swap, and eq_headphones (core/db.h) is
-    // the inventory it lists. EqManager double-buffers its coefficients, so a
-    // swap takes effect on the next audio chunk rather than the next track.
+    // ── DRIVER'S AUTOEQ quick-switcher ──────────────────────────────────────
+    // A DAC has no frequency response; the DRIVERS do — headphones, IEMs and
+    // speakers alike — and several take turns on one output, so "one profile
+    // per device" was the wrong shape. (The sidebar says DRIVER'S AUTOEQ for
+    // that reason: "headphones" excluded half of what the list is for, and
+    // "drivers" alone would read as an output driver in an app whose primary
+    // path is a USB DAC.) The block is the fast way to swap, eq_headphones
+    // (core/db.h) is the inventory it lists, and its last row is the OFF
+    // position — see clearEqProfile(). EqManager double-buffers its
+    // coefficients, so a swap takes effect on the next audio chunk rather
+    // than the next track.
     //
     // A profile is applied the instant it is picked but only EARNS a row after
     // kEqCreditMs of real listening. Until then it shows as "on trial" and
@@ -903,6 +1011,7 @@ private:
     // Computed during draw, read by hit-test — same contract as eqListRows_.
     struct HpRow { LayoutRect rc; int headphoneIdx; };  // -1 = the on-trial row
     std::vector<HpRow> hpRows_;
+    LayoutRect hpNoneRc_ = {};   // "No AutoEQ" — the off position of the switch
     LayoutRect hpMoreRc_ = {};
 
     FolderWatcher        watcher_;

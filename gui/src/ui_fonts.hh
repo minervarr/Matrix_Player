@@ -26,22 +26,25 @@ inline const char* mono()    { return "fonts/newcomputermodern/NewCMMono10-Regul
 // The icon font, baked into the same atlas (see ui_icons.hh).
 inline const char* icons()   { return "fonts/icons/matrix-icons.otf"; }
 
-// Cache filename, fingerprinted by the icon geometry.
+// Cache filename, fingerprinted by the icon geometry. BARE — no directory
+// component: unlike the faces above (which are read-only and ship beside the
+// executable), this file is WRITTEN, so it lives in app_paths::stateDir()
+// instead. Every caller joins it there; see app_paths.hh for why the two
+// halves are separate at all.
 //
 // The bake is gated on MsdfFont::hasCodepoint(), which cannot tell that an
 // icon's ARTWORK changed — only whether the codepoint exists. Folding the
 // fingerprint into the filename makes any icon edit miss the old cache and
 // re-bake, instead of silently drawing glyphs at their previous size. Cache
 // files for superseded fingerprints are pruned by pruneStaleCaches().
-inline std::string cacheName() {
-    return std::string("fonts/ui-atlas.") + kIconSetFingerprint + ".msdf.cache";
+inline std::string cacheFile() {
+    return std::string("ui-atlas.") + kIconSetFingerprint + ".msdf.cache";
 }
 
-// What pruneStaleCaches() sweeps. Deliberately just the suffix, not a
-// "ui-atlas." prefix: that also catches caches written under the OLD naming
-// (lmroman10-regular.msdf.cache), which would otherwise sit there at ~45 MB
-// forever. Nothing else in fonts/ uses this extension.
-inline const char* cacheDir()    { return "fonts/"; }
+// What pruneStaleCaches() sweeps (in stateDir()). Deliberately just the
+// suffix, not a "ui-atlas." prefix: that also catches caches written under the
+// OLD naming (lmroman10-regular.msdf.cache), which would otherwise sit there
+// at ~45 MB forever. Nothing else written there uses this extension.
 inline const char* cacheSuffix() { return ".msdf.cache"; }
 
 }  // namespace ui_fonts
