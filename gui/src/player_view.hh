@@ -388,7 +388,13 @@ private:
 
     // ── Settings panels state (Phase 7) ──────────────────────────────────
     SettingsPanel activePanel_ = SettingsPanel::None;
+    // Authored at the 1080 reference height, same convention as every other
+    // panel dimension (see ui_metrics.hh) — MUST go through panelRowH(), never
+    // used bare, or list rows stop scaling with the rest of the panel chrome
+    // above ~1080p (a fixed-size row next to metrics_.space()-scaled headers/
+    // buttons/padding reads as squashed proportions at e.g. 8K).
     static constexpr int kPanelRowH = 44;
+    float panelRowH() const { return metrics_.space((float)kPanelRowH); }
 
     // Manage Folders
     std::vector<std::string> mfRoots_;

@@ -3523,14 +3523,14 @@ void PlayerWindow::onPanelWheel(int x, int y, int delta) {
     switch (activePanel_) {
     case SettingsPanel::ManageFolders: {
         int listH = mfListArea_.bottom - mfListArea_.top;
-        int contentH = (int)mfRoots_.size() * kPanelRowH;
+        int contentH = (int)((float)mfRoots_.size() * panelRowH());
         mfScrollY_ = std::clamp(mfScrollY_ - delta, 0, std::max(0, contentH - listH));
         invalidate();
         return;
     }
     case SettingsPanel::EqSettings: {
         int listH = eqListArea_.bottom - eqListArea_.top;
-        int contentH = (int)eqFilteredIndices_.size() * kPanelRowH;
+        int contentH = (int)((float)eqFilteredIndices_.size() * panelRowH());
         eqScrollY_ = std::clamp(eqScrollY_ - delta, 0, std::max(0, contentH - listH));
         invalidate();
         return;
@@ -3538,7 +3538,7 @@ void PlayerWindow::onPanelWheel(int x, int y, int delta) {
     case SettingsPanel::FolderPicker: {
         int rowCount = (int)fpEntries_.size() + (fpHasParent_ ? 1 : 0);
         int listH = fpListArea_.bottom - fpListArea_.top;
-        int contentH = rowCount * kPanelRowH;
+        int contentH = (int)((float)rowCount * panelRowH());
         fpScrollY_ = std::clamp(fpScrollY_ - delta, 0, std::max(0, contentH - listH));
         invalidate();
         return;
@@ -3562,7 +3562,7 @@ void PlayerWindow::onPanelWheel(int x, int y, int delta) {
         default: break;
         }
         int listH = asDeviceListArea_.bottom - asDeviceListArea_.top;
-        int contentH = rowCount * kPanelRowH;
+        int contentH = (int)((float)rowCount * panelRowH());
         asDeviceScrollY_ = std::clamp(asDeviceScrollY_ - delta, 0, std::max(0, contentH - listH));
         invalidate();
         return;
@@ -3594,10 +3594,11 @@ void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
     LayoutRect listArea = { content.left, (int)(content.top + pad),
                             content.right, (int)(content.bottom - (btnH + pad * 2)) };
     mfListArea_ = listArea;
+    float mfRowH = panelRowH();
     mfListRows_ = widgets::drawScrollList(canvas, toRect(listArea), mfRoots_,
-                                          mfSelectedRow_, (float)mfScrollY_, (float)kPanelRowH,
+                                          mfSelectedRow_, (float)mfScrollY_, mfRowH,
                                           mfHoverRow_, widgets::kTextFree, matrixListStyle());
-    panels::drawScrollbar(canvas, listArea, (int)mfRoots_.size() * kPanelRowH, mfScrollY_, metrics_.scale);
+    panels::drawScrollbar(canvas, listArea, (int)((float)mfRoots_.size() * mfRowH), mfScrollY_, metrics_.scale);
     if (mfRoots_.empty()) {
         Rect a = toRect(listArea);
         canvas.textStyled("No music folders added yet.", a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
@@ -3737,11 +3738,12 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     if (sel == AudioBackend::Wasapi)             // the Mode radios sit below the list
         listBottomLimit -= metrics_.space(SP_MD) + metrics_.text.body * 1.6f + 2.0f * rowH + metrics_.space(SP_MD);
 #endif
+    float listRowH = panelRowH();
     // 3-row floor keeps the empty-state messages below readable.
     auto listHeightFor = [&](int rowCount) {
-        float minH  = 3.0f * kPanelRowH;
+        float minH  = 3.0f * listRowH;
         float avail = std::max(listBottomLimit - listTop, minH);
-        return std::clamp((float)rowCount * kPanelRowH, minH, avail);
+        return std::clamp((float)rowCount * listRowH, minH, avail);
     };
 
     if (sel == AudioBackend::Usb) {
@@ -3752,9 +3754,9 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         float listH = listHeightFor((int)labels.size());
         asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
         asDeviceListRows_ = widgets::drawScrollList(canvas, toRect(asDeviceListArea_), labels,
-                                                    asUsbSel_, (float)asDeviceScrollY_, (float)kPanelRowH,
+                                                    asUsbSel_, (float)asDeviceScrollY_, listRowH,
                                                     asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
-        panels::drawScrollbar(canvas, asDeviceListArea_, (int)labels.size() * kPanelRowH,
+        panels::drawScrollbar(canvas, asDeviceListArea_, (int)((float)labels.size() * listRowH),
                               asDeviceScrollY_, metrics_.scale);
         if (labels.empty()) {
             Rect a = toRect(asDeviceListArea_);
@@ -3773,9 +3775,9 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         float listH = listHeightFor((int)labels.size());
         asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
         asDeviceListRows_ = widgets::drawScrollList(canvas, toRect(asDeviceListArea_), labels,
-                                                    asWasapiSel_, (float)asDeviceScrollY_, (float)kPanelRowH,
+                                                    asWasapiSel_, (float)asDeviceScrollY_, listRowH,
                                                     asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
-        panels::drawScrollbar(canvas, asDeviceListArea_, (int)labels.size() * kPanelRowH,
+        panels::drawScrollbar(canvas, asDeviceListArea_, (int)((float)labels.size() * listRowH),
                               asDeviceScrollY_, metrics_.scale);
         y += listH + metrics_.space(SP_MD);
 
@@ -3805,9 +3807,9 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         float listH = listHeightFor((int)labels.size());
         asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
         asDeviceListRows_ = widgets::drawScrollList(canvas, toRect(asDeviceListArea_), labels,
-                                                    asAlsaSel_, (float)asDeviceScrollY_, (float)kPanelRowH,
+                                                    asAlsaSel_, (float)asDeviceScrollY_, listRowH,
                                                     asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
-        panels::drawScrollbar(canvas, asDeviceListArea_, (int)labels.size() * kPanelRowH,
+        panels::drawScrollbar(canvas, asDeviceListArea_, (int)((float)labels.size() * listRowH),
                               asDeviceScrollY_, metrics_.scale);
         y += listH + metrics_.space(SP_MD);
     }
@@ -3822,9 +3824,9 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         float listH = listHeightFor((int)labels.size());
         asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
         asDeviceListRows_ = widgets::drawScrollList(canvas, toRect(asDeviceListArea_), labels,
-                                                    asJackSel_, (float)asDeviceScrollY_, (float)kPanelRowH,
+                                                    asJackSel_, (float)asDeviceScrollY_, listRowH,
                                                     asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
-        panels::drawScrollbar(canvas, asDeviceListArea_, (int)labels.size() * kPanelRowH,
+        panels::drawScrollbar(canvas, asDeviceListArea_, (int)((float)labels.size() * listRowH),
                               asDeviceScrollY_, metrics_.scale);
         if (asJackPorts_.empty()) {
             Rect a = toRect(asDeviceListArea_);
@@ -4072,10 +4074,11 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
         }
         labels.push_back(label);
     }
+    float eqRowH = panelRowH();
     eqListRows_ = widgets::drawScrollList(canvas, toRect(listArea), labels,
-                                          eqSelectedRow_, (float)eqScrollY_, (float)kPanelRowH,
+                                          eqSelectedRow_, (float)eqScrollY_, eqRowH,
                                           eqHoverRow_, widgets::kTextFree, matrixListStyle());
-    panels::drawScrollbar(canvas, listArea, (int)labels.size() * kPanelRowH, eqScrollY_, metrics_.scale);
+    panels::drawScrollbar(canvas, listArea, (int)((float)labels.size() * eqRowH), eqScrollY_, metrics_.scale);
     if (labels.empty()) {
         Rect a = toRect(listArea);
         // The saved view's empty state explains the rule rather than just
@@ -4735,10 +4738,11 @@ void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
     if (fpHasParent_) labels.push_back(".. (parent folder)");
     labels.insert(labels.end(), fpEntries_.begin(), fpEntries_.end());
 
+    float fpRowH = panelRowH();
     fpListRows_ = widgets::drawScrollList(canvas, toRect(listArea), labels,
-                                          -1, (float)fpScrollY_, (float)kPanelRowH,
+                                          -1, (float)fpScrollY_, fpRowH,
                                           fpHoverRow_, widgets::kTextFree, matrixListStyle());
-    panels::drawScrollbar(canvas, listArea, (int)labels.size() * kPanelRowH, fpScrollY_, metrics_.scale);
+    panels::drawScrollbar(canvas, listArea, (int)((float)labels.size() * fpRowH), fpScrollY_, metrics_.scale);
     if (labels.empty()) {
         Rect a = toRect(listArea);
         canvas.textStyled("No subfolders here.", a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
