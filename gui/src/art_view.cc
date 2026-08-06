@@ -285,9 +285,8 @@ void ArtWindow::openFonts(const std::string& boldPath, const std::string& italic
     std::vector<uint32_t> cps;
     for (uint32_t cp = 0x0020; cp <= 0x00FF; cp++) cps.push_back(cp);
     const int body = (int)(computeUiMetrics((float)renderer_->height()).text.body + 0.5f);
-    msdfFont_.ensureGlyphs(cps, {body});
-
-    renderer_->initMsdf(msdfFont_);
+    if (msdfFont_.ensureGlyphs(cps, {body}) > 0 || !renderer_->msdfReady())
+        renderer_->initMsdf(msdfFont_);
 }
 
 
@@ -356,6 +355,15 @@ void ArtWindow::renderIfDirty() {
 
 void ArtWindow::drawFrame() {
     if (!renderer_) return;
+
+    // Before any quad is built, not after — see PlayerWindow::drawFrame() for
+    // why the ordering matters (a bake between quad-building and the draw
+    // re-normalises the sheet under quads that already carry old UVs).
+    if (msdfFont_.hasMisses() && msdfFont_.bakeMisses() > 0) {
+        renderer_->initMsdf(msdfFont_);
+        markDirty();
+    }
+
     frameCurves_.clear();
     frameShapes_.clear();
     frameImages_.clear();
@@ -394,14 +402,6 @@ void ArtWindow::drawFrame() {
         canvas.textCentered("No artwork", canvas.w() * 0.5f, canvas.h() * 0.5f,
                             computeUiMetrics(canvas.h()).text.body, toColor(CLR_TEXT_DIM));
     }
-    // Bake anything this frame asked the glyph cache for and did not have,
-    // before the draw that would otherwise show a gap. One frame late is the
-    // contract; see RasterFont::hasMisses().
-    if (msdfFont_.hasMisses() && msdfFont_.bakeMisses() > 0) {
-        renderer_->initMsdf(msdfFont_);
-        markDirty();
-    }
-
     renderer_->draw(frameCurves_, /*overlay_rotation_deg=*/0, frameImages_, {}, msdfQuads_,
                     frameShapes_);
 }

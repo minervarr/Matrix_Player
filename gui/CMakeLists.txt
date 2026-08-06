@@ -160,10 +160,21 @@ add_custom_command(TARGET matrix_player POST_BUILD
 # exe's own directory (single-target build), but here the exe lives one
 # level down in gui/, so FileAssetReader (which reads <exe dir>/assets/...)
 # wouldn't find them without this copy.
-add_custom_command(TARGET matrix_player POST_BUILD
+#
+# Its own target, not a POST_BUILD on matrix_player. A POST_BUILD only runs
+# when the executable RELINKS, so editing a .slang and rebuilding recompiled
+# the SPIR-V and then left the stale copy sitting next to the exe — the shader
+# change simply did not reach the running program, and nothing said so. That
+# cost a verification pass that reported "no pixels changed" about a build
+# whose shaders had not been updated at all. Every consumer of the copy now
+# depends on the copy, and the copy depends on the compile.
+add_custom_target(copy_shader_assets ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_BINARY_DIR}/assets
-        $<TARGET_FILE_DIR:matrix_player>/assets)
+        $<TARGET_FILE_DIR:matrix_player>/assets
+    DEPENDS compile_shared_shaders compile_vk_canvas_shaders
+    COMMENT "Copying compiled shaders next to the executables")
+add_dependencies(copy_shader_assets matrix_player)
 
 # Copy bundled fonts (Latin Modern + multi-script fallback faces) next to the executable
 add_custom_command(TARGET matrix_player POST_BUILD

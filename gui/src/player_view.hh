@@ -307,6 +307,11 @@ private:
     // Un Batang (Korean). No system fonts involved on either platform.
     void refreshGlyphs();
 
+    // The role sizes the glyph cache was last baked for. When these change —
+    // which is every resize — the cache is reset rather than grown, so a long
+    // session cannot accumulate the cells of every size it has ever been.
+    std::vector<int> glyphSizes_;
+
     // Bake whatever the last frame asked for and did not have. A per-size
     // cache cannot know every size up front (icon boxes come from layout
     // geometry, the art window has its own scale), so it learns them from what

@@ -33,7 +33,7 @@ pkgname=('matrix-player-universal'
          'matrix-player-v3'
          'matrix-player-v4'
          'matrix-player-zen4')
-pkgver=0.1.0.r66.g74dcb76
+pkgver=0.1.0.r84.gf1fcf0f
 pkgrel=1
 arch=('x86_64')
 url='https://github.com/minervarr/Matrix_Player'

@@ -592,6 +592,22 @@ void PlayerWindow::refreshGlyphs() {
         (int)(t.header    + 0.5f),
     };
 
+    // A resize changes every role size, and cells are keyed by size — so
+    // without this the old set stays baked forever and each resize adds
+    // another. Start the sheet over instead; the sizes that are actually being
+    // drawn are re-baked immediately below, and anything else comes back
+    // through the miss path the first time it is asked for.
+    if (sizes != glyphSizes_) {
+        if (!glyphSizes_.empty()) msdfFont_.reset();
+        glyphSizes_ = sizes;
+    }
+
+    // Deduplicate: the library scan above yields the same codepoint once per
+    // track that uses it. Every duplicate costs a hash probe per style per
+    // size, and a Latin letter appears in essentially every title.
+    std::sort(cps.begin(), cps.end());
+    cps.erase(std::unique(cps.begin(), cps.end()), cps.end());
+
     if (msdfFont_.ensureGlyphs(cps, sizes) > 0 || !renderer_->msdfReady())
         renderer_->initMsdf(msdfFont_);
 }
@@ -858,6 +874,19 @@ static std::string formatQualityBadge(int sampleRate, int bitDepth) {
 }
 
 void PlayerWindow::drawFrame() {
+    // Bake what the LAST frame asked the glyph cache for and did not have —
+    // icon boxes and the art window draw at sizes the type roles do not
+    // enumerate. One frame late is the contract; see RasterFont::hasMisses().
+    //
+    // This runs BEFORE any quad is built, and that ordering is load-bearing.
+    // It used to run at the end, immediately before renderer_->draw(): a bake
+    // there grows the atlas and re-uploads a taller image, while every quad
+    // already in msdfQuads_ had its V normalised against the OLD height — so
+    // the entire frame sampled the wrong rows of the sheet. It also put a
+    // vkDeviceWaitIdle and a vkQueueWaitIdle between scene-building and
+    // submit, which is the worst possible place for them.
+    bakeGlyphMisses();
+
     frameCurves_.clear();
     frameShapes_.clear();
     frameImages_.clear();
@@ -1885,11 +1914,6 @@ void PlayerWindow::drawFrame() {
         float textY = w.y + w.h * 0.5f - metrics_.text.secondary * 0.5f;
         canvas.text(audioNotice_, textX, textY, metrics_.text.secondary, toColor(CLR_WARNING));
     }
-
-    // Bake anything this frame's layout asked the glyph cache for and did not
-    // have — icon boxes and the art window draw at sizes the type roles do not
-    // enumerate. One frame late by contract; see RasterFont::hasMisses().
-    bakeGlyphMisses();
 
     renderer_->draw(frameCurves_, /*overlay_rotation_deg=*/0, frameImages_, frameImagesFg_, msdfQuads_, frameShapes_);
 }
@@ -6432,10 +6456,18 @@ bool PlayerWindow::captureFrame(std::vector<uint8_t>& rgba, uint32_t& w, uint32_
     // the next draw finally has them. Without this loop every screenshot shows
     // the placeholder rectangles — which is to say, none of the artwork the
     // grid is built around.
+    //
+    // Glyphs settle here too, and explicitly. A cell the layout asks for and
+    // does not have is baked by the NEXT drawFrame() (see the top of it), so
+    // the loop has to keep going until the cache has stopped asking — not
+    // merely until the artwork has landed. This used to rest on the single
+    // trailing drawFrame() below happening to be enough, which is true only
+    // when a scenario needs exactly one bake and no more.
     for (int i = 0; i < 250; i++) {
         drawFrame();
         onArtDecoded();
-        if (artDecodePending_.empty()) break;
+        if (artDecodePending_.empty() && !msdfFont_.hasMisses()) break;
+        if (artDecodePending_.empty()) continue;   // glyphs only: no need to sleep
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     drawFrame();
