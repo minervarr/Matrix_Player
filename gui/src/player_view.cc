@@ -342,12 +342,26 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
     // Glyph rasterization in compute. Brought up before the first bake so the
     // cache knows which path it is on from the start; if it fails, nothing is
     // enabled and everything stays on FreeType.
-    // Glyph rasterization in compute, on by default. MATRIX_CPU_GLYPHS=1 goes
-    // back to FreeType, which is both the fallback for a device that cannot
-    // create the pipelines and the reference the GPU path is measured against
-    // — keeping the switch is what makes a future regression bisectable in one
-    // run.
-    if (!std::getenv("MATRIX_CPU_GLYPHS") && renderer_ &&
+    // Glyph rasterization in compute — CORRECT, and currently SLOWER, so it is
+    // off by default.
+    //
+    // Measured end to end at 8K (startup bake only, `--only zzzz`): FreeType
+    // ~945 ms, compute ~1450 ms. The earlier "213 -> 159 ms" claim was not a
+    // like-for-like measurement — that timer lives inside ensureGlyphs() and
+    // stops before runGlyphBaker() is even called, so in GPU mode it timed
+    // outline extraction and none of the GPU work.
+    //
+    // It is not shader throughput: the Intel iGPU and the RTX 3050 come out the
+    // same to within noise, which rules out compute speed. The cost is
+    // structural — the atlas is baked TWICE at 8K because growing it recreates
+    // the image, plus a per-batch vkQueueWaitIdle and a serial per-edge upload.
+    // Raising the batch budget to make it one dispatch was tried and made it
+    // worse (1950 ms), so batch count is not it either.
+    //
+    // MATRIX_GPU_GLYPHS=1 turns it on. Quality is not the issue and never was:
+    // area_raster_test holds the two rasterizers to within 4/255 on identical
+    // geometry, and the rendered difference is 0.07% of pixels.
+    if (std::getenv("MATRIX_GPU_GLYPHS") && renderer_ &&
         glyphBaker_.init(renderer_->vkDevice(),
                                       renderer_->vkPhysicalDevice(),
                                       host_->assetReader(),
