@@ -39,6 +39,7 @@
 #include "texture.hh"
 #include "font.hh"
 #include "raster_font.hh"
+#include "glyph_baker.hh"
 #include "theme.hh"
 #include "ui_metrics.hh"
 #include "panels/settings_panels.hh"
@@ -317,6 +318,7 @@ private:
     // geometry, the art window has its own scale), so it learns them from what
     // is actually drawn — see RasterFont::hasMisses().
     void bakeGlyphMisses();
+    void runGlyphBaker();
     int  gridHitTest(int x, int y) const;
     int  trackPanelHitTest(int x, int y) const;
     // Album index of the "OTHER VERSIONS" thumbnail under (x,y), or -1.
@@ -1057,6 +1059,14 @@ private:
     // silently baked NOTHING. The member name is unchanged only because it is
     // spelled into a lot of call sites; the type is what matters.
     RasterFont           msdfFont_;
+
+    // Glyph rasterization in compute. When it comes up, RasterFont keeps
+    // flattened outlines instead of coverage and this writes the atlas image
+    // directly — see GlyphBaker. If it fails to initialise, nothing is enabled
+    // and the cache stays on its FreeType path, which is also the reference
+    // the GPU one was measured against.
+    GlyphBaker           glyphBaker_;
+    VkImage              bakedAtlas_ = VK_NULL_HANDLE;  // what gpuBakedCount() refers to
     std::vector<float>   msdfQuads_;
     // Set once in create(); exe-relative "fonts/" dir, reused by
     // refreshGlyphs() to find the bundled fallback-script font files.

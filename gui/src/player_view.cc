@@ -339,6 +339,24 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
         }
     }
 
+    // Glyph rasterization in compute. Brought up before the first bake so the
+    // cache knows which path it is on from the start; if it fails, nothing is
+    // enabled and everything stays on FreeType.
+    // OFF BY DEFAULT. The compute path is wired end to end and produces an
+    // EMPTY atlas — with it enabled the UI renders with no text at all, so it
+    // is not a thing to ship. The FreeType bake stays the default and the
+    // shipping look is unchanged. MATRIX_GPU_GLYPHS=1 turns it on to work on
+    // it. area_raster_test still proves the arithmetic, so the fault is in the
+    // dispatch, the descriptors or the buffer plumbing, not in the algorithm.
+    if (std::getenv("MATRIX_GPU_GLYPHS") && renderer_ &&
+        glyphBaker_.init(renderer_->vkDevice(),
+                                      renderer_->vkPhysicalDevice(),
+                                      host_->assetReader(),
+                                      renderer_->vkCommandPool(),
+                                      renderer_->vkQueue())) {
+        msdfFont_.useGpuBake(true);
+    }
+
     artWin_.create(host_.get());
     recalcLayout();
     // Needs metrics_, which recalcLayout() just computed: the sizes to bake at
@@ -610,6 +628,46 @@ void PlayerWindow::refreshGlyphs() {
 
     if (msdfFont_.ensureGlyphs(cps, sizes) > 0 || !renderer_->msdfReady())
         renderer_->initMsdf(msdfFont_);
+
+    runGlyphBaker();
+}
+
+// Rasterize whatever the cache placed but has not yet drawn, in compute,
+// straight into the atlas image.
+//
+// Ordering is load-bearing: initMsdf() must have created (or recreated) the
+// image first, because the baker writes INTO it. And when the atlas grows a
+// page the image is a new one and therefore empty — every cell baked into the
+// old handle is gone — so a changed handle means bake everything again rather
+// than only what is new. That is why RasterFont keeps its outlines.
+void PlayerWindow::runGlyphBaker() {
+    if (!renderer_ || !glyphBaker_.ready() || !msdfFont_.atlasOnGpu()) return;
+    const VkImage atlas = renderer_->msdfAtlasImage();
+    if (atlas == VK_NULL_HANDLE) return;
+
+    if (atlas != bakedAtlas_) {
+        msdfFont_.setGpuBakedCount(0);
+        bakedAtlas_ = atlas;
+    }
+    const uint32_t layers = renderer_->msdfAtlasLayers();
+
+    uint32_t sp = 0, sx = 0, sy = 0, sn = 0;
+    if (msdfFont_.takeSolidCell(sp, sx, sy, sn)) {
+        std::vector<uint8_t> opaque((size_t)sn * sn, 0xFF);
+        glyphBaker_.blit(opaque.data(), sn, sn, sp, sx, sy, atlas, layers);
+    }
+
+    const auto& cells = msdfFont_.gpuCells();
+    const size_t from = msdfFont_.gpuBakedCount();
+    if (from >= cells.size()) return;
+
+    std::vector<GlyphBaker::Job> jobs;
+    jobs.reserve(cells.size() - from);
+    for (size_t i = from; i < cells.size(); ++i)
+        jobs.push_back(GlyphBaker::Job{&cells[i].glyph, cells[i].page,
+                                       cells[i].x, cells[i].y});
+    glyphBaker_.bake(jobs, atlas, layers);
+    msdfFont_.setGpuBakedCount(cells.size());
 }
 
 // Drain whatever the last frame asked for and did not have. See
@@ -620,6 +678,7 @@ void PlayerWindow::bakeGlyphMisses() {
     if (!renderer_ || !msdfFont_.hasMisses()) return;
     if (msdfFont_.bakeMisses() > 0) {
         renderer_->initMsdf(msdfFont_);
+        runGlyphBaker();
         markDirty();          // redraw now that the glyphs exist
     }
 }
