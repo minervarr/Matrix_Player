@@ -74,6 +74,82 @@ int main() {
         assert(gridTopPad(32, 300, 314) == 32);
     }
 
+    // ── Grid scroll survives a resize ───────────────────────────────────────
+    //
+    // The reported bug: narrow the window, scroll the album grid to the
+    // bottom, then widen it — the grid drew NOTHING. More columns pack the
+    // same albums into fewer rows, so the content got shorter while the pixel
+    // offset stayed put, landing past the end. drawFrame()'s firstRow then
+    // started beyond the last tile and emitted no quads, and because
+    // gridIndices_ was not empty the empty-state message did not draw either.
+    // Just background.
+    {
+        const int stepY = 400;   // tile + row gap
+
+        // Same geometry in and out: the anchor round-trips exactly.
+        assert(gridScrollForAnchor(gridAnchorTile(1200, stepY, 4), stepY, 4) == 1200);
+
+        // A partial row scrolls back to that row's start, never forward past
+        // it — the anchor tile must be fully visible, not clipped at the top.
+        assert(gridScrollForAnchor(gridAnchorTile(1250, stepY, 4), stepY, 4) == 1200);
+
+        // THE REPORTED CASE, and why BOTH steps are needed. 47 albums at 3
+        // columns (a half-width window) is 16 rows; scrolled near the bottom.
+        // Widening to 6 columns halves the row count to 8.
+        {
+            const int viewH       = 1080;
+            const int narrowScroll = 5200;                  // near the bottom of 16 rows
+            const int wideContentH = 8 * stepY;             // 47 over 6 cols -> 8 rows
+            const int wideMax      = wideContentH - viewH;  // 2120
+
+            const int anchor = gridAnchorTile(narrowScroll, stepY, 3);
+            assert(anchor == 39);                           // row 13 * 3 columns
+
+            const int reScroll = gridScrollForAnchor(anchor, stepY, 6);
+            assert(reScroll == 2400);                       // tile 39 -> row 6
+
+            // Anchoring alone is NOT enough: row 6 of 8 is still past the end
+            // of a viewport 1080 tall. Preserving what the listener was
+            // looking at says nothing about whether it still fits.
+            assert(reScroll > wideMax);
+
+            // Which is why the clamp follows it. Together they land at the
+            // bottom of the new grid — the closest legal position to the
+            // albums that were on screen.
+            const int finalScroll =
+                (int)clampScroll((float)reScroll, (float)wideContentH, (float)viewH);
+            assert(finalScroll == wideMax);
+            assert(finalScroll >= 0 && finalScroll <= wideMax);
+
+            // The bug, stated as a number: without any of this the offset
+            // stays at 5200, which is 3080px past the last row. firstRow then
+            // starts beyond the last tile and the grid draws nothing at all.
+            assert(narrowScroll > wideMax);
+            assert(narrowScroll / stepY > (wideContentH / stepY) - 1);
+        }
+
+        // Narrowing (the other direction) pushes the anchor further down, and
+        // stays a legal offset for the taller grid it produces.
+        {
+            const int anchor = gridAnchorTile(2400, stepY, 6);    // tile 36
+            assert(gridScrollForAnchor(anchor, stepY, 3) == 4800); // row 12
+        }
+
+        // Degenerate inputs: recalcLayout() runs once before any real layout
+        // exists, with zero columns and a zero step.
+        assert(gridAnchorTile(0, 0, 0) == 0);
+        assert(gridAnchorTile(500, 0, 4) == 0);
+        assert(gridAnchorTile(500, stepY, 0) == 0);
+        assert(gridScrollForAnchor(0, stepY, 4) == 0);
+        assert(gridScrollForAnchor(40, 0, 4) == 0);
+        assert(gridScrollForAnchor(40, stepY, 0) == 0);
+
+        // Top of the grid stays the top at any width — the case that never
+        // reproduced the bug, and must not start moving now.
+        for (int cols = 1; cols <= 8; cols++)
+            assert(gridScrollForAnchor(gridAnchorTile(0, stepY, 3), stepY, cols) == 0);
+    }
+
     std::printf("ui_metrics_test: all assertions passed\n");
     return 0;
 }

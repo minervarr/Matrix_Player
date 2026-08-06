@@ -1709,6 +1709,24 @@ void PlayerWindow::drawFrame() {
             }
             albumViewContentH_ = (int)(sectY + scroll - tp.y + pad);
 
+            // The third instance of the scroll invariant (see recalcLayout()
+            // for the grid). It has to live HERE, at the tail of the draw,
+            // because albumViewContentH_ is measured by the draw itself —
+            // recalcLayout() only ever sees the previous frame's value, and
+            // this page's content height genuinely changes with the panel
+            // width (the title block wraps, variant tiles reflow).
+            //
+            // So this one self-heals in a single frame instead of zero:
+            // resizing taller can leave trackScrollY_ past the end for the
+            // frame that discovers it, and markDirty() schedules the repaint
+            // that puts it right. Without it the tracklist stays scrolled off
+            // the top until the listener touches the wheel.
+            const int panelH = rcTrackPanel_.bottom - rcTrackPanel_.top;
+            const int clamped = (int)clampScroll((float)trackScrollY_,
+                                                 (float)albumViewContentH_,
+                                                 (float)panelH);
+            if (clamped != trackScrollY_) { trackScrollY_ = clamped; markDirty(); }
+
             canvas.clearClip();
         }
 
@@ -1880,6 +1898,26 @@ void PlayerWindow::drawFrame() {
 
 void PlayerWindow::recalcLayout() {
     int W = (int)renderer_->width(), H = (int)renderer_->height();
+
+    // WHICH TILE IS AT THE TOP-LEFT, read while the members still describe the
+    // OLD layout. Restored at the bottom of this function, once the new column
+    // count is known.
+    //
+    // Without it a resize is measured in pixels, and a pixel offset means a
+    // different row the moment gridCols_ changes — so widening the window
+    // teleported the listener somewhere else in the library. Worse, nothing
+    // re-clamped the offset at all: packing the same albums into more columns
+    // shrinks gridTotalHeight_, leaving gridScrollY_ past the end, and
+    // drawFrame()'s firstRow then started beyond the last tile and emitted
+    // NOTHING — a blank content area with no empty-state message either
+    // (gridIndices_ is not empty, so that branch is not taken). It looked like
+    // the library had vanished until the next scroll re-clamped it.
+    //
+    // Only the tile-COUNT changing was ever guarded, by resetting to 0 after
+    // rebuildGridIndices() (search, section switch, filter, rescan).
+    const int anchorTile = gridAnchorTile(gridScrollY_,
+                                          gridTileSize_ + gridRowGap_,
+                                          gridCols_);
 
     // Type roles + geometry factor, both from the window's content height.
     metrics_ = computeUiMetrics((float)H);
@@ -2099,6 +2137,21 @@ void PlayerWindow::recalcLayout() {
     rcSettingsAudio_      = settRow(2);
     rcSettingsEq_         = settRow(3);
     rcSettingsBitperfect_ = settRow(4);
+
+    // Put the anchor tile back at the top-left, now that gridCols_ and
+    // gridTotalHeight_ are final, and clamp — because the new grid may be
+    // shorter than the old one, and an offset past the end draws nothing at
+    // all (see the anchor capture at the top of this function).
+    //
+    // Both numbers are current here: rcGrid_ and gridTotalHeight_ are both
+    // assigned above. clampScroll() is vk_canvas's (core/layout.hh), the same
+    // one core/tests/layout_test.cc already pins for the past-the-bottom case
+    // — this bug was a missing call, not missing arithmetic.
+    gridScrollY_ = gridScrollForAnchor(anchorTile,
+                                       gridTileSize_ + gridRowGap_, gridCols_);
+    gridScrollY_ = (int)clampScroll((float)gridScrollY_,
+                                    (float)gridTotalHeight_,
+                                    (float)(rcGrid_.bottom - rcGrid_.top));
 }
 
 // ── UI mode (Essential/Complete) ─────────────────────────────────────────────
@@ -4505,6 +4558,14 @@ void PlayerWindow::drawPlaylists(Canvas& canvas, const LayoutRect& area) {
                                  (int)metrics_.space(820.0f));
     plListArea_ = { content.left, (int)y, content.left + plListW,
                     (int)(content.bottom - (btnH + pad)) };
+
+    // Same invariant the album grid needs, enforced here rather than in
+    // recalcLayout() because this list's row height and viewport are measured
+    // during the draw, a few lines up. A resize taller shrinks the maximum
+    // scroll, and an offset past the end scrolls every row off the top.
+    plScrollY_ = (int)clampScroll((float)plScrollY_,
+                                  (float)(plEntries_.size() * (size_t)plRowH_),
+                                  (float)(plListArea_.bottom - plListArea_.top));
 
     if (plEntries_.empty()) {
         plListRows_.clear();
