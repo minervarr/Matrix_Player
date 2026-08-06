@@ -1066,7 +1066,7 @@ private:
     // and the cache stays on its FreeType path, which is also the reference
     // the GPU one was measured against.
     GlyphBaker           glyphBaker_;
-    VkImage              bakedAtlas_ = VK_NULL_HANDLE;  // what gpuBakedCount() refers to
+    uint32_t             bakedAtlasGen_ = 0;   // which atlas image gpuBakedCount() refers to
     std::vector<float>   msdfQuads_;
     // Set once in create(); exe-relative "fonts/" dir, reused by
     // refreshGlyphs() to find the bundled fallback-script font files.

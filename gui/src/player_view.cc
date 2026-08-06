@@ -342,13 +342,12 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
     // Glyph rasterization in compute. Brought up before the first bake so the
     // cache knows which path it is on from the start; if it fails, nothing is
     // enabled and everything stays on FreeType.
-    // OFF BY DEFAULT. The compute path is wired end to end and produces an
-    // EMPTY atlas — with it enabled the UI renders with no text at all, so it
-    // is not a thing to ship. The FreeType bake stays the default and the
-    // shipping look is unchanged. MATRIX_GPU_GLYPHS=1 turns it on to work on
-    // it. area_raster_test still proves the arithmetic, so the fault is in the
-    // dispatch, the descriptors or the buffer plumbing, not in the algorithm.
-    if (std::getenv("MATRIX_GPU_GLYPHS") && renderer_ &&
+    // Glyph rasterization in compute, on by default. MATRIX_CPU_GLYPHS=1 goes
+    // back to FreeType, which is both the fallback for a device that cannot
+    // create the pipelines and the reference the GPU path is measured against
+    // — keeping the switch is what makes a future regression bisectable in one
+    // run.
+    if (!std::getenv("MATRIX_CPU_GLYPHS") && renderer_ &&
         glyphBaker_.init(renderer_->vkDevice(),
                                       renderer_->vkPhysicalDevice(),
                                       host_->assetReader(),
@@ -645,9 +644,15 @@ void PlayerWindow::runGlyphBaker() {
     const VkImage atlas = renderer_->msdfAtlasImage();
     if (atlas == VK_NULL_HANDLE) return;
 
-    if (atlas != bakedAtlas_) {
+    // A GENERATION, not the handle. Vulkan recycles VkImage handles, so
+    // destroying the 2-page atlas and creating the 3-page one gave back the
+    // same value — the check said "same image", the re-bake was skipped, and
+    // every glyph baked into the old one was gone. That read on screen as the
+    // whole UI losing its text while the album art stayed perfect.
+    const uint32_t gen = renderer_->msdfAtlasGeneration();
+    if (gen != bakedAtlasGen_) {
         msdfFont_.setGpuBakedCount(0);
-        bakedAtlas_ = atlas;
+        bakedAtlasGen_ = gen;
     }
     const uint32_t layers = renderer_->msdfAtlasLayers();
 
@@ -6484,6 +6489,8 @@ void PlayerWindow::shutdown() {
     // Destroy the Vulkan swapchain/renderer while the host's native window
     // still exists — host_ (and the SurfaceProvider it owns) is torn down
     // after this returns.
+    // Before the device goes: the baker owns pipelines and ~150 MB of scratch.
+    glyphBaker_.destroy();
     renderer_.reset();
 }
 
