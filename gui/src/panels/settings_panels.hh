@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <utility>
 #include <vector>
 #include "layout_rect.hh"
 #include "color.hh"
@@ -56,5 +57,39 @@ LayoutRect drawHeader(Canvas& canvas, const LayoutRect& area, const std::string&
 // and unreachable-looking. Every panel that scrolls should draw this.
 void drawScrollbar(Canvas& canvas, const LayoutRect& listArea,
                    int contentH, int scrollY, float scale);
+
+// ── Width-responsive bottom action-button rows ───────────────────────────────
+//
+// Every panel's fixed-pixel action buttons used to be anchored independently
+// from an edge with no check against each other or the panel bounds — fine at
+// the widths the app is normally seen at, but they overlapped or ran past the
+// panel edges once the window narrowed (a tiling WM tiling other windows
+// alongside it, e.g. i3). drawButton's drawFitButton already shrinks/
+// ellipsizes a LABEL to whatever rect it's given, so these two helpers only
+// need to fix up the RECTS: ideal width first, then shrink width to
+// kMinActionBtnW, then shrink the gap, then (only if both floors are
+// exhausted) an unconditional split — so returned rects never overlap each
+// other or cross content's left/right edges, and at any width where today's
+// layout already fits, the output is unchanged (the shrink branches simply
+// aren't entered).
+constexpr float kMinActionBtnW = 130.0f;   // authored at 1080 ref height, like every other panels:: constant
+
+// A cluster of `count` buttons stacked from one edge of `content`. alignRight
+// picks which edge slot 0 anchors to: true for "primary sits hard right"
+// (EQ's action buttons, Audio Settings' Apply), false for a strip growing
+// rightward from the left edge (EQ's tab strip).
+std::vector<LayoutRect> layoutButtonRow(const LayoutRect& content, float pad,
+                                        int count, float idealBtnW, float gap,
+                                        float minBtnW, int by, int height,
+                                        bool alignRight = true);
+
+// A pair of buttons pinned to OPPOSITE edges of `content` (left first, right
+// second) with open space between at rest — Manage Folders' Remove Selected/
+// Done and the folder picker's Cancel/Select This Folder, both of which sit
+// at opposite corners rather than clustered together like layoutButtonRow.
+std::pair<LayoutRect, LayoutRect> layoutEdgePair(
+    const LayoutRect& content, float pad,
+    float leftIdealW, float rightIdealW, float minBtnW, float minGap,
+    int by, int height);
 
 } // namespace panels

@@ -37,8 +37,17 @@ static int pickOutputRate(int inRate, const std::vector<int>& supported) {
 // must continue across callbacks, not restart every buffer.
 static ae::TpdfQuantizer s_quantizer;
 
-static void ditherAndQuantize(const double* in, int32_t* out, int n, int bits) {
-    s_quantizer.process(in, out, n, bits);
+// First-order noise-shaped dither, used only for 16-bit output (see below) —
+// the depth where the dither/quantization step is largest relative to the
+// signal and shaping's noise-floor benefit is actually audible. 24/32-bit
+// keep using the flat TpdfQuantizer above, unchanged: 32-bit skips dither
+// entirely (error already below any DAC's noise floor) and 24-bit's error is
+// small enough that shaping isn't worth its own state/oracle for this app.
+static ae::NoiseShapedQuantizer s_shapedQuantizer;
+
+static void ditherAndQuantize(const double* in, int32_t* out, int n, int bits, int channels) {
+    if (bits == 16) s_shapedQuantizer.process(in, out, n, bits, channels);
+    else            s_quantizer.process(in, out, n, bits);
 }
 
 #ifdef _WIN32
@@ -3607,8 +3616,11 @@ void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
 
     float btnW = metrics_.space(277.0f);
     int by = (int)(content.bottom - (btnH + pad));
-    mfBtnRemove_ = { content.left + (int)pad, by, (int)(content.left + pad + btnW), (int)(by + btnH) };
-    mfBtnDone_   = { (int)(content.right - pad - btnW), by, content.right - (int)pad, (int)(by + btnH) };
+    auto mfRects = panels::layoutEdgePair(
+        content, pad, btnW, btnW,
+        metrics_.space(panels::kMinActionBtnW), metrics_.space(SP_MD), by, (int)btnH);
+    mfBtnRemove_ = mfRects.first;
+    mfBtnDone_   = mfRects.second;
     panels::drawButton(canvas, mfBtnRemove_, "Remove Selected", mfHoverRemove_, metrics_.text.body);
     panels::drawButton(canvas, mfBtnDone_, "Done", mfHoverDone_, metrics_.text.body, true);
 }
@@ -3839,9 +3851,10 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
 #endif
 #endif
 
-    float btnW = metrics_.space(196.0f);   // btnH declared above — the list is sized against it
-    int by = (int)(content.bottom - (btnH + pad));
-    asBtnApply_ = { (int)(content.right - pad - btnW), by, content.right - (int)pad, (int)(by + btnH) };
+    int by = (int)(content.bottom - (btnH + pad));   // btnH declared above — the list is sized against it
+    auto asRects = panels::layoutButtonRow(content, pad, 1, metrics_.space(196.0f), 0.0f,
+                                           metrics_.space(panels::kMinActionBtnW), by, (int)btnH);
+    asBtnApply_ = asRects[0];
     panels::drawButton(canvas, asBtnApply_, "Apply", asHoverApply_, metrics_.text.body, true);
 }
 
@@ -4019,10 +4032,11 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     // block stays a pure switcher, with no room for a per-row × at space(277).
     {
         float tabH = metrics_.space(52.0f);
-        float tabW = metrics_.space(200.0f);
-        eqTabMine_ = { (int)(c.x + pad), (int)y, (int)(c.x + pad + tabW), (int)(y + tabH) };
-        eqTabAll_  = { (int)(c.x + pad + tabW + metrics_.space(SP_SM)), (int)y,
-                       (int)(c.x + pad + tabW * 2 + metrics_.space(SP_SM)), (int)(y + tabH) };
+        auto tabRects = panels::layoutButtonRow(content, pad, 2, metrics_.space(200.0f),
+                                                metrics_.space(SP_SM), metrics_.space(panels::kMinActionBtnW),
+                                                (int)y, (int)tabH, /*alignRight=*/false);
+        eqTabMine_ = tabRects[0];
+        eqTabAll_  = tabRects[1];
         auto tab = [&](const LayoutRect& rc, const char* label, bool active, bool hovered) {
             Rect r = toRect(rc);
             // Accent = state, hover = neutral (UI_DESIGN_SYSTEM.md §1.4).
@@ -4094,22 +4108,20 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
                           metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
     }
 
-    float btnW = metrics_.space(277.0f);
-    float gap  = metrics_.space(SP_MD);
     int by = (int)(content.bottom - (btnH + pad));
     // Slot 0 is the PRIMARY and sits hard right, matching Manage Folders,
     // Audio Settings and the folder picker. Secondaries fill leftward. This
     // panel used to lay out left-to-right, so it was the one page of four
     // where the green button changed sides.
-    auto btnAt = [&](int slot) -> LayoutRect {
-        float x1 = content.right - pad - slot * (btnW + gap);
-        return { (int)(x1 - btnW), by, (int)x1, (int)(by + btnH) };
-    };
-    eqBtnAssign_ = btnAt(0);
+    int eqBtnCount = eqShowMine_ ? 3 : 2;
+    auto eqBtnRects = panels::layoutButtonRow(content, pad, eqBtnCount, metrics_.space(277.0f),
+                                              metrics_.space(SP_MD), metrics_.space(panels::kMinActionBtnW),
+                                              by, (int)btnH);
+    eqBtnAssign_ = eqBtnRects[0];
     if (eqShowMine_) {
         const EqHeadphone* sel = eqSelectedHeadphone();
-        eqBtnPin_    = btnAt(1);
-        eqBtnRemove_ = btnAt(2);
+        eqBtnPin_    = eqBtnRects[1];
+        eqBtnRemove_ = eqBtnRects[2];
         eqBtnClear_  = {};   // not offered here; Clear belongs to the device view
         panels::drawButton(canvas, eqBtnAssign_, "Select", eqHoverAssign_, metrics_.text.body, true);
         panels::drawButton(canvas, eqBtnPin_,
@@ -4117,7 +4129,7 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
                            eqHoverPin_, metrics_.text.body);
         panels::drawButton(canvas, eqBtnRemove_, "Remove", eqHoverRemove_, metrics_.text.body);
     } else {
-        eqBtnClear_  = btnAt(1);
+        eqBtnClear_  = eqBtnRects[1];
         eqBtnPin_    = {};
         eqBtnRemove_ = {};
         panels::drawButton(canvas, eqBtnAssign_, "Assign to Device", eqHoverAssign_, metrics_.text.body, true);
@@ -4751,8 +4763,11 @@ void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
 
     float btnW = metrics_.space(326.0f);
     int by = (int)(content.bottom - (btnH + pad));
-    fpBtnCancel_ = { content.left + (int)pad, by, (int)(content.left + pad + btnW), (int)(by + btnH) };
-    fpBtnSelect_ = { (int)(content.right - pad - btnW), by, content.right - (int)pad, (int)(by + btnH) };
+    auto fpRects = panels::layoutEdgePair(
+        content, pad, btnW, btnW,
+        metrics_.space(panels::kMinActionBtnW), metrics_.space(SP_MD), by, (int)btnH);
+    fpBtnCancel_ = fpRects.first;
+    fpBtnSelect_ = fpRects.second;
     panels::drawButton(canvas, fpBtnCancel_, "Cancel", fpHoverCancel_, metrics_.text.body);
     panels::drawButton(canvas, fpBtnSelect_, "Select This Folder", fpHoverSelect_, metrics_.text.body, true);
 }
@@ -5399,7 +5414,7 @@ void PlayerWindow::onPlay(StartCause cause) {
                 if (odone > 0) {
                     const int resampN = (int)(odone * srcCh);
                     // 3. TPDF dither + quantize once to the device's max bit depth
-                    ditherAndQuantize(rsBuf->data(), outBuf->data(), resampN, capturedBits);
+                    ditherAndQuantize(rsBuf->data(), outBuf->data(), resampN, capturedBits, srcCh);
                     outPtr->writeInt32Blocking(outBuf->data(), resampN);
                     playedFrames_.fetch_add(odone, std::memory_order_relaxed);
                 }

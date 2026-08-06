@@ -112,8 +112,14 @@ lists the rest under `OTHER VERSIONS` (`MORE REMIXES` on a remix page, where
 
 ## Audio
 
-- [ ] **DoP** (DSD-over-PCM): port `DsdPackager.java` to C++ and add
-      `writeDop()` to `UsbAudioDriver`. The one significant gap in the USB path.
+- [ ] **DoP** (DSD-over-PCM): the C++ packer already exists
+      (`framework/audio_engine`'s `DsdPackager::packDop`, feeding
+      `UsbAudioSink`'s raw-passthrough path — no `writeDop()` needed on
+      `UsbAudioDriver`) and `core/src/decoder.cpp` already dispatches to
+      `ae::DsdDecoder` for DSD magic bytes. What's actually missing is
+      upstream of both: the scanner never indexes `.dsf`/`.dff` (see "MP3 and
+      DSD are not indexed at all" above), so no DSD track is ever discovered
+      to play in the first place.
 - [ ] **DSD mode selector**: Native / DoP / PCM fallback (mirrors `DsdMode.java`).
 - [ ] USB device picker (enumerate libusb devices by VID/PID) instead of the
       hardcoded Hiby FC4 ids.

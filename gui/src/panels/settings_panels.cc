@@ -87,4 +87,55 @@ void drawScrollbar(Canvas& canvas, const LayoutRect& listArea,
     canvas.rect(x, a.y + t * (a.h - thumbH), barW, thumbH, toColor(CLR_TEXT_SECONDARY));
 }
 
+std::vector<LayoutRect> layoutButtonRow(const LayoutRect& content, float pad,
+                                        int count, float idealBtnW, float gap,
+                                        float minBtnW, int by, int height,
+                                        bool alignRight) {
+    std::vector<LayoutRect> out(std::max(0, count));
+    if (count <= 0) return out;
+    float x0 = content.left + pad, x1 = content.right - pad;
+    float avail = std::max(0.0f, x1 - x0);
+
+    float btnW = idealBtnW, useGap = gap;
+    float total = count * btnW + (count - 1) * useGap;
+    if (total > avail) {
+        btnW = std::max(minBtnW, (avail - (count - 1) * useGap) / count);
+        total = count * btnW + (count - 1) * useGap;
+        if (total > avail) {
+            useGap = (count > 1) ? std::max(0.0f, (avail - count * minBtnW) / (count - 1)) : 0.0f;
+            btnW = std::max(0.0f, (avail - (count - 1) * useGap) / count);
+        }
+    }
+
+    for (int slot = 0; slot < count; slot++) {
+        float left, right;
+        if (alignRight) { right = x1 - slot * (btnW + useGap); left = right - btnW; }
+        else            { left  = x0 + slot * (btnW + useGap); right = left + btnW; }
+        out[(size_t)slot] = { (int)left, by, (int)right, by + height };
+    }
+    return out;
+}
+
+std::pair<LayoutRect, LayoutRect> layoutEdgePair(
+    const LayoutRect& content, float pad,
+    float leftIdealW, float rightIdealW, float minBtnW, float minGap,
+    int by, int height) {
+    float x0 = content.left + pad, x1 = content.right - pad;
+    float avail = std::max(0.0f, x1 - x0);
+    float leftW = leftIdealW, rightW = rightIdealW;
+
+    if (leftW + rightW + minGap > avail) {
+        float idealSum = leftIdealW + rightIdealW;
+        float scale = idealSum > 0.0f ? (avail - minGap) / idealSum : 0.0f;
+        leftW  = std::max(minBtnW, leftIdealW  * scale);
+        rightW = std::max(minBtnW, rightIdealW * scale);
+        if (leftW + rightW + minGap > avail)
+            leftW = rightW = std::max(0.0f, (avail - minGap) * 0.5f);
+    }
+
+    LayoutRect leftRc  = { (int)x0, by, (int)(x0 + leftW), by + height };
+    LayoutRect rightRc = { (int)(x1 - rightW), by, (int)x1, by + height };
+    return { leftRc, rightRc };
+}
+
 } // namespace panels

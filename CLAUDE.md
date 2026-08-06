@@ -585,10 +585,23 @@ Three things about switching between them are load-bearing:
   the header comment in that file); adding another DAC is one line there.
 - Supports: 44.1k–768kHz PCM, 16/24/32-bit, DSD native (alt=4)
 
-### Not yet wired
+### DoP (DSD-over-PCM)
 
-- **DoP** (DSD-over-PCM): needs a C++ port of the Android sibling player's
-  `DsdPackager.java` → `UsbAudioDriver::writeDop()`.
+The packing itself is already implemented — not a `UsbAudioDriver` method.
+It happens one layer up, at the decoder: `DsdPackager::packDop`
+(`framework/audio_engine/core/dsp/dsd/dsd_packager.h`, called from
+`backends/dsd/dsd_decoder.cpp`) produces pre-packed DoP bytes, which flow
+straight through `UsbAudioSink::write()`'s existing raw-passthrough branch
+(`backends/usb/usb_sink.cpp`) — the same path any other pre-packed PCM takes.
+`UsbAudioDriver` itself needs no DoP-specific method, and `core/src/decoder.cpp:203`
+already instantiates `ae::DsdDecoder` for DSD magic bytes.
+
+What's still genuinely missing is one layer further up: the library
+**scanner** (`core/src/library.cpp`) does not index `.dsf`/`.dff` at all, so
+no DSD track is ever discovered and no file ever reaches the decoder this
+way — that's why `hasDsd` is hardcoded `false`
+(`core/src/library.cpp:66`). See TODO.md's "MP3 and DSD are not indexed at
+all" item; that's the real remaining gap, not a missing `writeDop()`.
 
 ### Reference EQ signal chain
 
@@ -653,9 +666,7 @@ system-wide `RegisterHotKey` calls on Windows but focused-window-only checks
 on Linux (no cross-compositor equivalent); `adaptToCurrentMonitor()`/
 `snapToEdge()` are no-ops on Linux (Wayland clients cannot query "which
 monitor" or reposition themselves); Essential UI mode has no Linux window-
-sizing logic yet (always opens at a 1200×700 default); `ArtWindow`
-(fullscreen album-art second window) remains Windows-only — Wayland has no
-per-monitor window-targeting API, so this needs its own design pass.
+sizing logic yet (always opens at a 1200×700 default).
 
 ### Settings panels (`gui/src/panels/settings_panels.hh/.cc`)
 
@@ -692,7 +703,7 @@ whenever the look changes, not left to drift.
 | USB driver | libusb/libusbK | Best isochronous support cross-platform; libusbK (Zadig) only needed on Windows |
 | Audio stack | Bypassed entirely for the primary path | No WASAPI/PulseAudio mixer — raw USB isochronous to DAC |
 | Linux secondary outputs | ALSA + JACK2 (never pipewire-jack) | Mirrors WASAPI's role: a fallback when no DAC is plugged in, or for testing without hardware |
-| Album art (fullscreen) | Separate window (Windows only for now) | Dual-monitor: art on one screen, controls on other |
+| Album art (fullscreen) | Separate window (`ArtWindow`, both platforms) | Dual-monitor: art on one screen, controls on other |
 | Submodules | `audio_engine`, `vk_canvas`, `soxr`, `libjpeg-turbo` | dr_flac + sqlite3 vendored directly (single-header / amalgamation, no submodule needed) |
 | Build | CMake + Ninja | MSVC `cl.exe` on Windows, GCC/Clang on Linux, no `.sln`/Makefiles |
 | `core/` | Zero OS headers (one PIMPL'd exception: FolderWatcher) | Portable app logic reusable without dragging in either platform's headers |
@@ -732,7 +743,8 @@ identity/metadata lives, never encoded into a folder name.
 ## Key TODOs (see TODO.md for the full list)
 
 1. Parse FLAC Vorbis comment tags for metadata (title/artist/album/duration)
-2. Port `DsdPackager.java` → C++ `writeDop()` in `UsbAudioDriver`
+2. Index `.dsf`/`.dff` in the library scanner — DoP packing and decoder
+   dispatch already exist (see "DoP (DSD-over-PCM)" above), the scanner just
+   never finds these files today
 3. Parallel folder scan (`std::thread` pool, one per CPU core)
 4. Essential UI mode's Linux window-sizing (currently always 1200×700)
-5. `ArtWindow` (fullscreen album art) on Linux — needs a real Wayland design pass
