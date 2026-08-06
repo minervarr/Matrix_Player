@@ -54,4 +54,4 @@ static constexpr float kIconBoxEmMin = 0.5f;
 // Part of the atlas cache filename (ui_fonts.hh), so changing any
 // icon invalidates the cache automatically instead of silently
 // reusing glyphs baked at the old size.
-static constexpr char kIconSetFingerprint[] = "72d43165";
+static constexpr char kIconSetFingerprint[] = "fd1adb38";

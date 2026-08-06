@@ -717,6 +717,21 @@ static void drawUiIconPrimitive(Canvas& c, const LayoutRect& rc, UiIcon icon, Co
         // drawUiIcon() routes this to drawWarningIconPrimitive() before ever
         // reaching here; listed so the switch stays exhaustive (-Wswitch).
         break;
+    case UiIcon::Quality:
+        // Deliberately draws NOTHING, and is listed rather than omitted so the
+        // switch stays exhaustive (this case was simply missing, which is the
+        // -Wswitch warning that rode along in every build).
+        //
+        // The quality mark is a hollow spark whose meaning is its draw-time
+        // COLOUR, and this fallback path cannot cut holes — every primitive
+        // lands in one pass in one colour, the same limitation
+        // drawWarningIconPrimitive() documents. A solid full-chroma star is
+        // exactly what quality.svg was hollowed to avoid: against a palette of
+        // near-black and greys it shouts, and it would shout on every track of
+        // a CD-quality library. Absent metadata degrades better than loud
+        // wrong metadata, which is not true of the warning banner — hence the
+        // different choice there.
+        break;
     }
 }
 

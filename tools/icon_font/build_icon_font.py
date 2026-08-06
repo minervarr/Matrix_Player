@@ -124,6 +124,107 @@ def svg_to_contours(path_file, box_em):
     return contours
 
 
+def _flatten(segs, steps=12):
+    """Contour -> polygon, for signed-area and point-in-polygon tests."""
+    pts, cur = [], None
+    for seg in segs:
+        if seg[0] == "move":
+            cur = seg[1]
+            pts.append(cur)
+        elif seg[0] == "line":
+            cur = seg[1]
+            pts.append(cur)
+        else:                                   # cubic
+            p0, c1, c2, p3 = cur, seg[1], seg[2], seg[3]
+            for i in range(1, steps + 1):
+                t = i / steps
+                u = 1.0 - t
+                pts.append((
+                    u*u*u*p0[0] + 3*u*u*t*c1[0] + 3*u*t*t*c2[0] + t*t*t*p3[0],
+                    u*u*u*p0[1] + 3*u*u*t*c1[1] + 3*u*t*t*c2[1] + t*t*t*p3[1]))
+            cur = p3
+    return pts
+
+
+def _signed_area(pts):
+    """Shoelace. Positive = counter-clockwise in a y-up (font) space."""
+    s = 0.0
+    for i in range(len(pts)):
+        x0, y0 = pts[i]
+        x1, y1 = pts[(i + 1) % len(pts)]
+        s += x0 * y1 - x1 * y0
+    return s * 0.5
+
+
+def _reverse(segs):
+    """Reverse a contour's direction, keeping its geometry identical.
+
+    A cubic from A via (c1,c2) to B becomes a cubic from B via (c2,c1) to A;
+    a line from A to B becomes a line to A. The start point moves to what was
+    the last on-curve point.
+    """
+    nodes = [segs[0][1]]                        # on-curve points, in order
+    kinds = []                                  # segment between node i and i+1
+    for seg in segs[1:]:
+        kinds.append(seg)
+        nodes.append(seg[-1])
+    out = [("move", nodes[-1])]
+    for i in range(len(kinds) - 1, -1, -1):
+        seg, target = kinds[i], nodes[i]
+        if seg[0] == "line":
+            out.append(("line", target))
+        else:
+            out.append(("curve", seg[2], seg[1], target))
+    return out
+
+
+def orient_contours(name, contours):
+    """Force outer contours counter-clockwise and holes clockwise.
+
+    THIS IS NOT COSMETIC. OpenType fills by the NON-ZERO winding rule, so a
+    nested contour only cuts a hole when it winds OPPOSITE its parent. Two
+    same-direction contours add their winding numbers instead and the shape
+    fills solid.
+
+    Inkscape emits whatever direction the path happened to be drawn in, so
+    until this existed the icons were a coin flip: warning.svg came out with
+    opposite windings and cut its "!" correctly, quality.svg came out with
+    both contours clockwise and rendered as a SOLID star instead of the
+    hollow spark it is drawn as.
+
+    That went unnoticed for as long as the app rendered through msdfgen,
+    whose orientContours() ignores the stored direction and derives fill from
+    scanline parity -- so it drew the hole this font never described. The
+    moment text moved to a per-size FreeType raster (see RasterFont), the
+    font's actual content became what you see.
+
+    Nesting depth comes from bounding-box containment, which is exact here
+    because check_overlap() already requires contours to be disjoint or
+    properly nested.
+    """
+    boxes = [bounds_of([c]) for c in contours]
+    polys = [_flatten(c) for c in contours]
+
+    def contains(outer, inner):
+        a, b = boxes[outer], boxes[inner]
+        return (b[0] >= a[0] and b[1] >= a[1] and b[2] <= a[2] and b[3] <= a[3]
+                and (a != b))
+
+    out, flipped = [], 0
+    for i, segs in enumerate(contours):
+        depth = sum(1 for j in range(len(contours)) if j != i and contains(j, i))
+        want_ccw = (depth % 2 == 0)
+        is_ccw = _signed_area(polys[i]) > 0
+        if is_ccw != want_ccw:
+            segs = _reverse(segs)
+            flipped += 1
+        out.append(segs)
+    if flipped:
+        print(f"  {name:9} oriented {flipped} contour(s) "
+              f"(outer CCW / holes CW, for the non-zero winding rule)")
+    return out
+
+
 def draw(contours, pen):
     for segs in contours:
         started = False
@@ -213,6 +314,11 @@ def main():
         if not contours:
             sys.exit(f"{src}: no path outlines found (Path > Object to Path?)")
         check_overlap(name, contours)
+        # After the overlap guard (which establishes that contours are either
+        # disjoint or properly nested) and before anything reads geometry:
+        # geom_digest() below hashes point order, so orienting afterwards
+        # would change the fingerprint without changing the shape.
+        contours = orient_contours(name, contours)
 
         box = UPEM * box_em
         gname = f"icon.{name}"
