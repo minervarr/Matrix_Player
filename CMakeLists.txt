@@ -269,6 +269,8 @@ vce_compile_slang(compile_shared_shaders
     coverage
     msdf_vert
     msdf_frag
+    glyph_area
+    glyph_resolve
 )
 vce_compile_slang(compile_vk_canvas_shaders
     ${CMAKE_BINARY_DIR}/assets/shaders
