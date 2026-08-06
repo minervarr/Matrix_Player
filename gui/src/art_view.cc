@@ -266,9 +266,18 @@ void ArtWindow::openFonts(const std::string& boldPath, const std::string& italic
     msdfFont_.addStyle(loader, monoPath.c_str(),   FontStyle::Math);
 
     msdfFont_.addOverride(loader, iconPath.c_str());
+    // Same serif chain and the same matched Bold cuts as PlayerWindow — see
+    // there for why these faces and not the sans/calligraphic ones bundled
+    // beside them.
     msdfFont_.addFallback(loader, (fontsDir + "fandol/FandolSong-Regular.otf").c_str());
     msdfFont_.addFallback(loader, (fontsDir + "haranoaji/HaranoAjiMincho-Regular.otf").c_str());
     msdfFont_.addFallback(loader, (fontsDir + "unfonts-core/UnBatang.ttf").c_str());
+    msdfFont_.addFallback(loader, (fontsDir + "fandol/FandolSong-Bold.otf").c_str(),
+                          FontStyle::Bold);
+    msdfFont_.addFallback(loader, (fontsDir + "haranoaji/HaranoAjiMincho-Bold.otf").c_str(),
+                          FontStyle::Bold);
+    msdfFont_.addFallback(loader, (fontsDir + "unfonts-core/UnBatangBold.ttf").c_str(),
+                          FontStyle::Bold);
 
     // Seed ASCII at the body size this window uses, so the very first frame has
     // something to draw. Everything else — other sizes, non-Latin track titles

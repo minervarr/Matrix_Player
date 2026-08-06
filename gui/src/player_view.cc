@@ -308,9 +308,34 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
             // both have, but the order is kept because it is still the right
             // priority.
             msdfFont_.addOverride(loader, (exeDir + ui_fonts::icons()).c_str());
+
+            // Song / Mincho / Batang: the Ming-Mincho-Myeongjo serif tradition,
+            // with the stroke contrast and terminal serifs that make them read
+            // as one family with New Computer Modern's serif Latin. The sans
+            // cuts bundled beside them (Hei, Gothic, Dotum) and the
+            // calligraphic ones (Kai, Fang, Gungseo, Pilgi) are deliberately
+            // NOT registered — whichever face won a codepoint would decide the
+            // look, and a track list would come out in mixed handwriting.
+            //
+            // Chinese -> Japanese -> Korean, and the order matters: all three
+            // cover Han and Kana, and only the Korean face has Hangul.
             msdfFont_.addFallback(loader, (fontsDir_ + "fandol/FandolSong-Regular.otf").c_str());
             msdfFont_.addFallback(loader, (fontsDir_ + "haranoaji/HaranoAjiMincho-Regular.otf").c_str());
             msdfFont_.addFallback(loader, (fontsDir_ + "unfonts-core/UnBatang.ttf").c_str());
+
+            // The matched Bold cuts. Grid titles, page headers and album titles
+            // are all drawn FontStyle::Bold, so without these a Korean or
+            // Chinese title renders at regular weight beside bold Latin — the
+            // text is there, at the wrong weight, which is easy to miss.
+            // Italic and Mono get no chain on purpose: these scripts have no
+            // italic tradition, so they resolve to the regular face and share
+            // its cells (see RasterFont::keyForStyle).
+            msdfFont_.addFallback(loader, (fontsDir_ + "fandol/FandolSong-Bold.otf").c_str(),
+                                  FontStyle::Bold);
+            msdfFont_.addFallback(loader, (fontsDir_ + "haranoaji/HaranoAjiMincho-Bold.otf").c_str(),
+                                  FontStyle::Bold);
+            msdfFont_.addFallback(loader, (fontsDir_ + "unfonts-core/UnBatangBold.ttf").c_str(),
+                                  FontStyle::Bold);
         }
     }
 
