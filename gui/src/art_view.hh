@@ -18,7 +18,7 @@
 #include "canvas.hh"
 #include "texture.hh"
 #include "font.hh"
-#include "msdf.hh"
+#include "raster_font.hh"
 
 class Host;  // forward decl only — see create(Host*), never dereferenced here
 
@@ -102,6 +102,14 @@ private:
     TextureHandle artTex_ = kInvalidTexture;
     int artTexW_ = 0, artTexH_ = 0;
     Font uiFont_;
-    MsdfFont msdfFont_;
+
+    // Opens the faces and seeds the glyph cache; both platform branches of
+    // create() call it. See its definition for why this window keeps its own
+    // RasterFont rather than sharing PlayerWindow's.
+    void openFonts(const std::string& boldPath, const std::string& italicPath,
+                   const std::string& monoPath, const std::string& iconPath,
+                   const std::string& fontsDir, const std::string& regularPath);
+
+    RasterFont msdfFont_;
     std::vector<float> msdfQuads_;
 };

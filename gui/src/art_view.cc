@@ -64,23 +64,9 @@ bool ArtWindow::create(Host*) {
     std::string fontPath = toUtf8Path(ui_fonts::regular());
     uiFont_.load(fontPath.c_str());
 
-    // Generate the MTSDF atlas (cached to disk, shared with PlayerWindow's own
-    // MsdfFont instance — same cache file, so whichever window initializes
-    // second gets a cache hit instead of re-rasterizing).
-    std::string cachePath = app_paths::stateDir() + ui_fonts::cacheFile();
-    FileByteReader loader;
-    if (msdfFont_.generate(loader, fontPath.c_str(), cachePath.c_str())) {
-        bool addedStyle = false;
-        if (!msdfFont_.hasStyle(FontStyle::Bold))
-            addedStyle |= msdfFont_.addStyle(loader, toUtf8Path(ui_fonts::bold()).c_str(), FontStyle::Bold);
-        if (!msdfFont_.hasStyle(FontStyle::Italic))
-            addedStyle |= msdfFont_.addStyle(loader, toUtf8Path(ui_fonts::italic()).c_str(), FontStyle::Italic);
-        if (!msdfFont_.hasStyle(FontStyle::Math))
-            addedStyle |= msdfFont_.addStyle(loader, toUtf8Path(ui_fonts::mono()).c_str(), FontStyle::Math);
-        if (addedStyle) msdfFont_.saveCache(cachePath.c_str());
-
-        renderer_->initMsdf(msdfFont_);
-    }
+    openFonts(toUtf8Path(ui_fonts::bold()), toUtf8Path(ui_fonts::italic()),
+              toUtf8Path(ui_fonts::mono()), toUtf8Path(ui_fonts::icons()),
+              toUtf8Path("fonts/"), fontPath);
 
     return true;
 }
@@ -183,27 +169,16 @@ bool ArtWindow::create(Host* host) {
         return false;
     }
 
-    // Font loading mirrors the Windows branch (own uiFont_/msdfFont_, shared
-    // on-disk MSDF cache file) via the portable Host::exeDir() instead of
-    // GetModuleFileNameW — no wide-char conversion needed on this platform.
+    // Font loading mirrors the Windows branch (its own uiFont_/msdfFont_) via
+    // the portable Host::exeDir() instead of GetModuleFileNameW — no
+    // wide-char conversion needed on this platform.
     std::string exeDir = host->exeDir();
     std::string fontPath = exeDir + ui_fonts::regular();
     uiFont_.load(fontPath.c_str());
 
-    std::string cachePath = app_paths::stateDir() + ui_fonts::cacheFile();
-    FileByteReader loader;
-    if (msdfFont_.generate(loader, fontPath.c_str(), cachePath.c_str())) {
-        bool addedStyle = false;
-        if (!msdfFont_.hasStyle(FontStyle::Bold))
-            addedStyle |= msdfFont_.addStyle(loader, (exeDir + ui_fonts::bold()).c_str(), FontStyle::Bold);
-        if (!msdfFont_.hasStyle(FontStyle::Italic))
-            addedStyle |= msdfFont_.addStyle(loader, (exeDir + ui_fonts::italic()).c_str(), FontStyle::Italic);
-        if (!msdfFont_.hasStyle(FontStyle::Math))
-            addedStyle |= msdfFont_.addStyle(loader, (exeDir + ui_fonts::mono()).c_str(), FontStyle::Math);
-        if (addedStyle) msdfFont_.saveCache(cachePath.c_str());
-
-        renderer_->initMsdf(msdfFont_);
-    }
+    openFonts(exeDir + ui_fonts::bold(), exeDir + ui_fonts::italic(),
+              exeDir + ui_fonts::mono(), exeDir + ui_fonts::icons(),
+              exeDir + "fonts/", fontPath);
 
     return true;
 }
@@ -270,6 +245,42 @@ void ArtWindow::onKey(const KeyEvent& e) {
 }
 
 #endif  // _WIN32
+
+// Open the faces and seed the glyph cache. Both platform branches of create()
+// call this; ArtWindow keeps its OWN RasterFont rather than sharing
+// PlayerWindow's, because the two windows have separate Renderers and an atlas
+// texture belongs to one device queue.
+//
+// Under MTSDF the two shared an on-disk cache file so the second window to
+// start got a cache hit instead of re-rasterizing a ~67 MB atlas. There is no
+// cache now and none is wanted: this window draws a handful of labels, so its
+// atlas is a few dozen cells that bake in well under a millisecond.
+void ArtWindow::openFonts(const std::string& boldPath, const std::string& italicPath,
+                          const std::string& monoPath, const std::string& iconPath,
+                          const std::string& fontsDir, const std::string& regularPath) {
+    FileByteReader loader;
+    if (!msdfFont_.open(loader, regularPath.c_str())) return;
+
+    msdfFont_.addStyle(loader, boldPath.c_str(),   FontStyle::Bold);
+    msdfFont_.addStyle(loader, italicPath.c_str(), FontStyle::Italic);
+    msdfFont_.addStyle(loader, monoPath.c_str(),   FontStyle::Math);
+
+    msdfFont_.addOverride(loader, iconPath.c_str());
+    msdfFont_.addFallback(loader, (fontsDir + "fandol/FandolSong-Regular.otf").c_str());
+    msdfFont_.addFallback(loader, (fontsDir + "haranoaji/HaranoAjiMincho-Regular.otf").c_str());
+    msdfFont_.addFallback(loader, (fontsDir + "unfonts-core/UnBatang.ttf").c_str());
+
+    // Seed ASCII at the body size this window uses, so the very first frame has
+    // something to draw. Everything else — other sizes, non-Latin track titles
+    // — arrives through the miss path in drawFrame().
+    std::vector<uint32_t> cps;
+    for (uint32_t cp = 0x0020; cp <= 0x00FF; cp++) cps.push_back(cp);
+    const int body = (int)(computeUiMetrics((float)renderer_->height()).text.body + 0.5f);
+    msdfFont_.ensureGlyphs(cps, {body});
+
+    renderer_->initMsdf(msdfFont_);
+}
+
 
 // ── Portable (both platforms): updateImage / markDirty / renderIfDirty / drawFrame ──
 
@@ -374,6 +385,14 @@ void ArtWindow::drawFrame() {
         canvas.textCentered("No artwork", canvas.w() * 0.5f, canvas.h() * 0.5f,
                             computeUiMetrics(canvas.h()).text.body, toColor(CLR_TEXT_DIM));
     }
+    // Bake anything this frame asked the glyph cache for and did not have,
+    // before the draw that would otherwise show a gap. One frame late is the
+    // contract; see RasterFont::hasMisses().
+    if (msdfFont_.hasMisses() && msdfFont_.bakeMisses() > 0) {
+        renderer_->initMsdf(msdfFont_);
+        markDirty();
+    }
+
     renderer_->draw(frameCurves_, /*overlay_rotation_deg=*/0, frameImages_, {}, msdfQuads_,
                     frameShapes_);
 }

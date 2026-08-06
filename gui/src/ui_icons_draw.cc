@@ -38,7 +38,7 @@ int encodeUtf8(unsigned cp, char out[4]) {
 bool drawUiIconGlyph(Canvas& c, const LayoutRect& rc, UiIcon icon, const Color& col) {
     // The Canvas already carries the atlas font, so this needs no extra
     // plumbing through the call sites.
-    const MsdfFont* font = c.msdfFont();
+    const TextFont* font = c.msdfFont();
     if (!font) return false;
 
     const unsigned cp = uiIconCodepoint(icon);

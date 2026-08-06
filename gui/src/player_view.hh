@@ -38,7 +38,7 @@
 #include "widgets.hh"
 #include "texture.hh"
 #include "font.hh"
-#include "msdf.hh"
+#include "raster_font.hh"
 #include "theme.hh"
 #include "ui_metrics.hh"
 #include "panels/settings_panels.hh"
@@ -297,27 +297,21 @@ private:
     void loadAlbumViewContent(int albumIdx);
     std::string rootForPath(const std::string& path) const;
 
-    // Helpers
-    // Multi-script text support: Latin Modern (the only font baked into
-    // msdfFont_ otherwise) has no Cyrillic/Greek/CJK/Hangul/Kana glyphs, so
-    // those scripts would render as blank/missing text (see the IC3PEAK
-    // Cyrillic titles bug). Bakes Cyrillic+Greek plus any other non-Latin-1
-    // codepoints in albums_' scanned metadata from a bundled fallback chain
-    // that's all serif, matching Latin Modern's look instead of jumping to
-    // a system UI font: New Computer Modern (Cyrillic/Greek/Latin Extended)
-    // -> Fandol Song (Chinese) -> Haranoaji Mincho (Japanese) -> Un Batang
-    // (Korean). No Windows system fonts involved. Safe/cheap to call
-    // repeatedly — already-covered codepoints are skipped (see
-    // MsdfFont::bakeCodepoints).
-    // Returns true if anything new was baked (caller must then re-save the
-    // MTSDF cache and re-run renderer_->initMsdf() to push the grown atlas).
-    bool bakeFallbackGlyphs();
-    // Bakes the UI icon glyphs (assets/fonts/icons/matrix-icons.otf) into that
-    // same atlas. Deliberately runs BEFORE bakeFallbackGlyphs(): the atlas has
-    // a hard 4096px height ceiling, and the icon set is small and fixed while
-    // the CJK fallback set grows with the user's library — so icons claim their
-    // rows first. Same "true if anything new was baked" contract as above.
-    bool bakeIconGlyphs();
+    // Bake every codepoint the app can draw, at every size it draws them at,
+    // and push the grown atlas to the GPU. Idempotent — cells already present
+    // are skipped, so a rescan costs only what is genuinely new.
+    //
+    // The fallback chain is all serif, matching New Computer Modern's look
+    // rather than jumping to a system UI font: NewCM itself (Latin, Greek,
+    // Cyrillic) -> Fandol Song (Chinese) -> Harano Aji Mincho (Japanese) ->
+    // Un Batang (Korean). No system fonts involved on either platform.
+    void refreshGlyphs();
+
+    // Bake whatever the last frame asked for and did not have. A per-size
+    // cache cannot know every size up front (icon boxes come from layout
+    // geometry, the art window has its own scale), so it learns them from what
+    // is actually drawn — see RasterFont::hasMisses().
+    void bakeGlyphMisses();
     int  gridHitTest(int x, int y) const;
     int  trackPanelHitTest(int x, int y) const;
     // Album index of the "OTHER VERSIONS" thumbnail under (x,y), or -1.
@@ -1048,22 +1042,19 @@ private:
     // pairs (e.g. "00").
     Font uiFont_;
 
-    // MTSDF font: pre-baked distance-field atlas for crisp text at any size
-    // without per-frame Bézier decomposition. Generated once at startup from
-    // the OTF font and cached to disk for subsequent runs. Also carries the UI
-    // icon glyphs (see ui_icons.hh) — same atlas, same pass.
+    // Per-size rasterized glyph cache: true 8-bit coverage of the outline at
+    // the size it is drawn at, unhinted. Also carries the UI icon glyphs (see
+    // ui_icons.hh) — same atlas, same pass.
     //
-    // "Mtsdf" vs "Msdf": what generate() bakes is always MTSDF (RGB multi-
-    // channel field + a true single-channel SDF in alpha). The type keeps the
-    // MsdfFont name because it genuinely handles both — a legacy v2 load()
-    // atlas really is plain MSDF — and isMtsdf() reports which is live.
-    MsdfFont             msdfFont_;
+    // This replaced an MTSDF atlas, which had one bake serve every size and so
+    // needed a wide distance-field margin per glyph: a CJK cell cost ~115x104
+    // px, a 4096-square sheet ran out at ~1,300 glyphs, and Japanese and Korean
+    // silently baked NOTHING. The member name is unchanged only because it is
+    // spelled into a lot of call sites; the type is what matters.
+    RasterFont           msdfFont_;
     std::vector<float>   msdfQuads_;
-    // Set once in create(); reused by onScanDone() to re-save the cache
-    // (now possibly including fresh fallback-script glyphs) after a rescan.
-    std::string          msdfCachePath_;
     // Set once in create(); exe-relative "fonts/" dir, reused by
-    // bakeFallbackGlyphs() to find the bundled fallback-script font files.
+    // refreshGlyphs() to find the bundled fallback-script font files.
     std::string          fontsDir_;
 
     // Recomputed once per recalcLayout() from the window's content height.

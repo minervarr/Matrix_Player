@@ -281,60 +281,46 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
         uiFont_.load(fontPath.c_str());
         fontsDir_ = toUtf8Path("fonts/");
 
-        // Drop atlas caches left by an older icon set / font (see ui_fonts.hh):
-        // they are ~45 MB each and would otherwise accumulate forever. Swept
-        // in stateDir(), where they are now written — NOT in fonts/, which is
-        // read-only shipped data a package may install root-owned.
-        pruneStaleCaches(app_paths::stateDir(),
-                         app_paths::stateDir() + ui_fonts::cacheFile());
+        // Sweep the MTSDF atlas caches this build no longer writes. They are
+        // ~45-67 MB each, and the raster path has no disk cache at all — a
+        // rasterized glyph costs 10-50us against MTSDF's 1-10ms, so the whole
+        // few-thousand-cell set is baked at startup faster than a cache file
+        // could be read. That deletes the version word, the fingerprinted
+        // filename, and every way a stale bake could be served.
+        pruneStaleCaches(app_paths::stateDir(), std::string());
 
-        // Generate the MTSDF atlas from the same OTF (cached to disk for fast
-        // reload). generate() always bakes MTSDF — the alpha channel carries a
-        // true single-channel SDF alongside the multi-channel RGB field; only a
-        // legacy v2 load() atlas is plain MSDF. The names below stay "msdf"
-        // because MsdfFont genuinely handles both variants (isMtsdf() reports
-        // which one is live). The cache name carries the icon-set fingerprint
-        // so redrawn icons can't be served from a stale bake — see ui_fonts.hh.
-        std::string cachePath = app_paths::stateDir() + ui_fonts::cacheFile();
-        msdfCachePath_ = cachePath;
-
+        // The faces. Order matters only for the fallbacks: a codepoint the
+        // primary face lacks is served by the first fallback that has it.
         FileByteReader loader;
-        if (msdfFont_.generate(loader, fontPath.c_str(), cachePath.c_str())) {
+        if (msdfFont_.open(loader, fontPath.c_str())) {
             // Bold (headers/titles), Italic (artist/secondary text), and Mono
             // (repurposing the unused Math slot — this app never renders math)
             // for numeric readouts so digits don't jitter as they change.
-            // Skipped if a warm cache already baked them (hasStyle()), so a
-            // fresh addStyle() rebake only happens once per cache generation.
-            bool addedStyle = false;
-            if (!msdfFont_.hasStyle(FontStyle::Bold))
-                addedStyle |= msdfFont_.addStyle(loader, toUtf8Path(ui_fonts::bold()).c_str(), FontStyle::Bold);
-            if (!msdfFont_.hasStyle(FontStyle::Italic))
-                addedStyle |= msdfFont_.addStyle(loader, toUtf8Path(ui_fonts::italic()).c_str(), FontStyle::Italic);
-            if (!msdfFont_.hasStyle(FontStyle::Math))
-                addedStyle |= msdfFont_.addStyle(loader, toUtf8Path(ui_fonts::mono()).c_str(), FontStyle::Math);
+            msdfFont_.addStyle(loader, toUtf8Path(ui_fonts::bold()).c_str(),   FontStyle::Bold);
+            msdfFont_.addStyle(loader, toUtf8Path(ui_fonts::italic()).c_str(), FontStyle::Italic);
+            msdfFont_.addStyle(loader, toUtf8Path(ui_fonts::mono()).c_str(),   FontStyle::Math);
 
-            // UI icon glyphs, BEFORE the fallback scripts: the atlas has a hard
-            // 4096px height ceiling, and this set is small and fixed while the
-            // CJK fallback set grows with the user's library.
-            bool addedIcons = bakeIconGlyphs();
-
-            // Cyrillic/Greek (unconditional) + whatever CJK/Hangul/Kana the
-            // now-loaded library actually contains — see bakeFallbackGlyphs().
-            bool addedFallback = bakeFallbackGlyphs();
-
-            if (addedStyle || addedIcons || addedFallback)
-                msdfFont_.saveCache(cachePath.c_str());
-
-            renderer_->initMsdf(msdfFont_);
-            // The CPU atlas copy (~8 MB) just went to the GPU and is saved
-            // on disk — drop it from RAM. Re-bakes re-hydrate it from the
-            // cache first (see onScanDone()).
-            msdfFont_.releaseAtlasPixels();
+            // Icons first, then the scripts New Computer Modern does not cover.
+            // Under MTSDF this order was load-bearing — the sheet had a hard
+            // 4096px ceiling and whatever came last was silently dropped, which
+            // is precisely how Japanese and Korean ended up baking nothing.
+            // Here it only decides which face wins a codepoint two of them
+            // both have, but the order is kept because it is still the right
+            // priority.
+            msdfFont_.addOverride(loader, (exeDir + ui_fonts::icons()).c_str());
+            msdfFont_.addFallback(loader, (fontsDir_ + "fandol/FandolSong-Regular.otf").c_str());
+            msdfFont_.addFallback(loader, (fontsDir_ + "haranoaji/HaranoAjiMincho-Regular.otf").c_str());
+            msdfFont_.addFallback(loader, (fontsDir_ + "unfonts-core/UnBatang.ttf").c_str());
         }
     }
 
     artWin_.create(host_.get());
     recalcLayout();
+    // Needs metrics_, which recalcLayout() just computed: the sizes to bake at
+    // ARE the type roles. Anything drawn at a size not in that set (icon boxes,
+    // the art window) is picked up by the miss path after the first frame that
+    // asks for it — see refreshGlyphs().
+    refreshGlyphs();
 
     // Last-played album (grid indicator, Fix C): stored as "name\x1fartist"
     // rather than an index, since the album list's order/indices shift
@@ -500,141 +486,101 @@ static void pruneStaleCaches(const std::string& dir, const std::string& keepPath
     }
 }
 
-bool PlayerWindow::bakeIconGlyphs() {
-    if (!msdfFont_.valid()) return false;
+// Bake every codepoint this app can draw, at every size it draws them at,
+// then push the grown atlas to the GPU. Idempotent: cells already present are
+// skipped, so calling it again after a rescan costs only what is genuinely new.
+//
+// This one function replaces the MTSDF path's bakeIconGlyphs() +
+// bakeFallbackGlyphs() pair and their disk-cache dance (re-hydrate the CPU
+// atlas, append, save, release). A raster atlas is never released and never
+// written, because there is nothing expensive to avoid recomputing.
+void PlayerWindow::refreshGlyphs() {
+    if (!renderer_) return;
 
-    // A warm cache already carries them — skip the bake and the re-upload.
-    bool anyMissing = false;
-    for (unsigned cp : kIconCodepoints)
-        if (!msdfFont_.hasCodepoint(cp)) { anyMissing = true; break; }
-    if (!anyMissing) return false;
+    // ── What to draw ────────────────────────────────────────────────────────
+    std::vector<uint32_t> cps;
 
-    // Same atlas-residency contract as bakeFallbackGlyphs() below: baking
-    // APPENDS to the CPU atlas pixels, so they must be re-hydrated first.
-    if (!msdfFont_.atlasResident() &&
-        !msdfFont_.ensureAtlasLoaded(msdfCachePath_.empty() ? nullptr
-                                                            : msdfCachePath_.c_str()))
-        return false;
+    // ASCII + Latin-1, Greek and Cyrillic: cheap, bounded, and enough to cover
+    // most European-language metadata outright with no library scan involved.
+    for (uint32_t cp = 0x0020; cp <= 0x00FF; cp++) cps.push_back(cp);
+    for (uint32_t cp = 0x0370; cp <= 0x04FF; cp++) cps.push_back(cp);
 
-    FileByteReader loader;
-    std::vector<uint32_t> cps(std::begin(kIconCodepoints), std::end(kIconCodepoints));
-    std::string iconPath = host_->exeDir() + ui_fonts::icons();
-    if (msdfFont_.bakeCodepoints(loader, iconPath.c_str(), cps) > 0) return true;
+    // Latin Extended-A/B — Polish, Czech, Turkish, Vietnamese base letters.
+    for (uint32_t cp = 0x0100; cp <= 0x024F; cp++) cps.push_back(cp);
 
-    // Not fatal: drawUiIcon() falls back to the primitive construction, so a
-    // missing/unreadable icon font degrades the look instead of the app.
-    printf("[Icons] icon font not baked (%s) — falling back to primitive icons\n",
-           iconPath.c_str());
-    return false;
-}
+    // General punctuation this UI's own prose and real metadata actually use.
+    // An em dash coming out as a blank gap is worse than a wrong glyph:
+    // nothing about a gap says a character is missing, so the sentence just
+    // reads broken.
+    static const uint32_t kPunct[] = {
+        0x2010, 0x2013, 0x2014,          // hyphen, en dash, em dash
+        0x2018, 0x2019, 0x201C, 0x201D,  // curly quotes (and the apostrophe
+                                         // Unicode-correct metadata uses)
+        0x2020, 0x2021, 0x2022, 0x2026,  // daggers, bullet, ellipsis
+        0x2032, 0x2033, 0x2039, 0x203A,  // primes, single guillemets
+        0x2190, 0x2192,                  // arrows
+    };
+    cps.insert(cps.end(), std::begin(kPunct), std::end(kPunct));
 
-bool PlayerWindow::bakeFallbackGlyphs() {
-    if (!msdfFont_.valid()) return false;
-    // Baking APPENDS rows to the CPU atlas pixels, which are released from
-    // RAM after each GPU upload (releaseAtlasPixels()). Re-hydrate them from
-    // the disk cache first — appending to an empty buffer would zero out
-    // every existing glyph and then saveCache() would wreck the good cache.
-    if (!msdfFont_.atlasResident() &&
-        !msdfFont_.ensureAtlasLoaded(msdfCachePath_.empty() ? nullptr
-                                                            : msdfCachePath_.c_str()))
-        return false;
-    FileByteReader loader;
-    bool anyNew = false;
+    // The UI icons, which are ordinary glyphs in an ordinary face.
+    cps.insert(cps.end(), std::begin(kIconCodepoints), std::end(kIconCodepoints));
 
-    // Greek (U+0370-U+03FF) + Cyrillic (U+0400-U+04FF): cheap and bounded
-    // (~700 codepoints), baked unconditionally — covers most European-
-    // language metadata outright with no library scan needed. Baked from
-    // New Computer Modern, the same Computer Modern lineage as the Latin
-    // Modern base font, so Cyrillic/Greek text renders in a visually
-    // consistent serif instead of jumping to a system UI font.
+    // Everything else — CJK, Hangul, Kana — comes from the library itself.
+    // Baking the Han block eagerly (20,000+ codepoints) is out of proportion
+    // to what a music library's metadata ever contains.
+    //
+    // displayName and Track::album are scanned as well as name: `name` is the
+    // raw FOLDER key, which in a downloader-managed library is an opaque hash
+    // and carries none of the script the record is actually titled in.
     {
-        std::vector<uint32_t> cps;
-        for (uint32_t cp = 0x0370; cp <= 0x03FF; cp++) cps.push_back(cp);
-        for (uint32_t cp = 0x0400; cp <= 0x04FF; cp++) cps.push_back(cp);
-
-        // General Punctuation, the handful of it this app's own UI strings and
-        // real-world metadata actually use. The base atlas bakes ASCII +
-        // Latin-1 + eight maths symbols and stops (see MsdfFont::generate),
-        // so an em dash — the one this UI's prose leans on hardest — came out
-        // as a blank gap wherever it appeared, most visibly in the EQ panel's
-        // bitperfect notice. A gap is worse than a wrong glyph: nothing about
-        // it says a character is missing, so the sentence just reads broken.
-        //
-        // Cheap and bounded (a dozen glyphs), and NewCM covers every one of
-        // them in the same serif as the base face — so this is the right place
-        // for them rather than an edit to the engine's fixed charset.
-        static const uint32_t kPunct[] = {
-            0x2010,  // hyphen
-            0x2013,  // en dash
-            0x2014,  // em dash
-            0x2018, 0x2019,          // single curly quotes (and the apostrophe
-                                     // Unicode-correct metadata uses)
-            0x201C, 0x201D,          // double curly quotes
-            0x2020, 0x2021,          // dagger, double dagger
-            0x2022,  // bullet
-            0x2026,  // ellipsis
-            0x2032, 0x2033,          // prime, double prime
-            0x2039, 0x203A,          // single guillemets (« » are Latin-1)
-            0x2190, 0x2192,          // left/right arrows
-        };
-        cps.insert(cps.end(), std::begin(kPunct), std::end(kPunct));
-
-        std::string newcmPath = fontsDir_ + "newcomputermodern/NewCM10-Regular.otf";
-        if (msdfFont_.bakeCodepoints(loader, newcmPath.c_str(), cps) > 0)
-            anyNew = true;
-    }
-
-    // Everything else (CJK, Hangul, Kana, ...): baking the full Han block
-    // eagerly (~20,000+ glyphs) isn't proportionate to what a music
-    // library's metadata will ever actually contain, so only bake
-    // codepoints that genuinely appear in the scanned library.
-    std::vector<uint32_t> exotic;
-    {
+        std::lock_guard<std::mutex> lk(albumsMu_);
         auto scan = [&](const std::string& s) {
             for (size_t i = 0; i < s.size(); ) {
                 uint32_t cp = utf8::nextCodepoint(s, i);
-                if (cp >= 0x500 && !msdfFont_.hasCodepoint(cp))
-                    exotic.push_back(cp);
+                if (cp >= 0x100) cps.push_back(cp);
             }
         };
         for (auto& a : albums_) {
             scan(a.name);
+            scan(a.displayName);
             scan(a.artist);
             for (auto& t : a.tracks) {
                 scan(t.title);
                 scan(t.artist);
                 scan(t.albumArtist);
+                scan(t.album);
             }
         }
     }
-    if (!exotic.empty()) {
-        // New Computer Modern's coverage extends well past Greek/Cyrillic
-        // (Latin Extended-A/B, general punctuation incl. „ " smart quotes,
-        // etc.), so anything ≥U+0500 it happens to have (German/French/
-        // Polish/... metadata using those blocks) stays in the same serif
-        // look instead of jumping to a mismatched font. Only what it
-        // genuinely lacks (CJK/Hangul/Kana) falls through to the bundled
-        // per-script serif faces below — bakeCodepoints() skips whatever's
-        // already covered, so this whole chain is purely additive.
-        std::string newcmPath = fontsDir_ + "newcomputermodern/NewCM10-Regular.otf";
-        if (msdfFont_.bakeCodepoints(loader, newcmPath.c_str(), exotic) > 0)
-            anyNew = true;
 
-        // Dedicated CJK/Hangul serif faces bundled alongside Latin Modern —
-        // Song/Mincho/Batang are all serif designs, the closest visual match
-        // to Latin Modern's serif Latin text (vs. a sans-serif system font).
-        const std::string kCjkFallbacks[] = {
-            fontsDir_ + "fandol/FandolSong-Regular.otf",         // Simplified Chinese
-            fontsDir_ + "haranoaji/HaranoAjiMincho-Regular.otf", // Japanese
-            fontsDir_ + "unfonts-core/UnBatang.ttf",             // Korean
-        };
-        for (const auto& path : kCjkFallbacks) {
-            if (msdfFont_.bakeCodepoints(loader, path.c_str(), exotic) > 0)
-                anyNew = true;
-        }
+    // ── At what sizes ───────────────────────────────────────────────────────
+    //
+    // The type roles, and nothing else. caption and secondary share a size by
+    // design (they are separated by the colour ladder and by style), so this
+    // is four distinct values, not five. Every other size the app happens to
+    // ask for — icon boxes derived from layout geometry, the art window's own
+    // scale — arrives through the miss path instead of being guessed at here.
+    const UiTextSizes& t = metrics_.text;
+    const std::vector<int> sizes = {
+        (int)(t.caption   + 0.5f), (int)(t.secondary + 0.5f),
+        (int)(t.body      + 0.5f), (int)(t.title     + 0.5f),
+        (int)(t.header    + 0.5f),
+    };
+
+    if (msdfFont_.ensureGlyphs(cps, sizes) > 0 || !renderer_->msdfReady())
+        renderer_->initMsdf(msdfFont_);
+}
+
+// Drain whatever the last frame asked for and did not have. See
+// RasterFont::hasMisses(): a per-size cache cannot know every size in advance,
+// so it learns them from what is actually drawn. Costs one frame of a missing
+// glyph the first time a size appears, and nothing afterwards.
+void PlayerWindow::bakeGlyphMisses() {
+    if (!renderer_ || !msdfFont_.hasMisses()) return;
+    if (msdfFont_.bakeMisses() > 0) {
+        renderer_->initMsdf(msdfFont_);
+        markDirty();          // redraw now that the glyphs exist
     }
-
-    return anyNew;
 }
 
 void PlayerWindow::markDirty() {
@@ -1776,7 +1722,7 @@ void PlayerWindow::drawFrame() {
         // baseline-aligned and vertically centered in the bar. Hovering the
         // tag swaps the whole cluster for the full signal-path readout
         // (source format » DSP stage » output backend). '→' (U+2192) IS baked
-        // now (see bakeFallbackGlyphs), so swapping it in is a free choice
+        // now (see refreshGlyphs), so swapping it in is a free choice
         // rather than a missing glyph — '»' stays because a chevron reads as a
         // separator at this size where an arrow reads as a claim of direction.
         {
@@ -1881,6 +1827,11 @@ void PlayerWindow::drawFrame() {
         float textY = w.y + w.h * 0.5f - metrics_.text.secondary * 0.5f;
         canvas.text(audioNotice_, textX, textY, metrics_.text.secondary, toColor(CLR_WARNING));
     }
+
+    // Bake anything this frame's layout asked the glyph cache for and did not
+    // have — icon boxes and the art window draw at sizes the type roles do not
+    // enumerate. One frame late by contract; see RasterFont::hasMisses().
+    bakeGlyphMisses();
 
     renderer_->draw(frameCurves_, /*overlay_rotation_deg=*/0, frameImages_, frameImagesFg_, msdfQuads_, frameShapes_);
 }
@@ -6071,17 +6022,11 @@ void PlayerWindow::onScanDone() {
     trackPanelArtTexAlbum_ = -1;
     if (trackPanelArtTex_ != kInvalidTexture) { renderer_->destroy_texture(trackPanelArtTex_); trackPanelArtTex_ = kInvalidTexture; }
 
-    // A rescan can introduce text in a script never seen before (e.g. the
-    // first Chinese/Cyrillic album added after launch) — bakeFallbackGlyphs()
-    // is cheap when there's nothing new (every codepoint already resolves),
-    // so it's safe to just always re-check here.
-    if (bakeFallbackGlyphs()) {
-        if (!msdfCachePath_.empty()) msdfFont_.saveCache(msdfCachePath_.c_str());
-        renderer_->initMsdf(msdfFont_);  // re-entrant: rebuilds the grown atlas (see Renderer::initMsdf())
-    }
-    // Whether or not anything new was baked, the CPU atlas pixels (hydrated
-    // by bakeFallbackGlyphs above) are dead weight now — GPU + disk have it.
-    msdfFont_.releaseAtlasPixels();
+    // A rescan can introduce text in a script never seen before (the first
+    // Korean album added after launch). refreshGlyphs() is cheap when there is
+    // nothing new — every cell already present is skipped — so it just always
+    // re-checks here, and re-uploads only if it actually baked something.
+    refreshGlyphs();
 
     rebuildAlbumGroups();  // albums_ changed — regroup before the tile mapping
     rebuildGridIndices();  // albums_ changed — refresh the (possibly filtered) tile mapping
