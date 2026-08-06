@@ -6450,10 +6450,63 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
         return true;
     }
 
+    // The multi-script tail of the grid. Latin sorts first, so on a real
+    // library every Han/Hangul/Cyrillic title lands at the BOTTOM — the first
+    // screenful is all Latin, and a shot of it says nothing about the scripts
+    // most likely to be broken. That is not hypothetical: the atlas silently
+    // stopped baking Japanese and Korean (both fallback faces rejected for
+    // exceeding 4096px of sheet) and every capture still looked correct.
+    // gridTotalHeight_ is already set by reset()'s recalcLayout(), so one
+    // oversized wheel notch clamps straight to the end.
+    if (state == "17-grid-multiscript") {
+        click(rcNavAlbum_);
+        if (gridIndices_.empty()) return false;
+        int cx, cy; centerOf(rcGrid_, cx, cy);
+        onMouseWheel(cx, cy, -1000000);
+        return true;
+    }
+
     if (state == "20-album-view") {
         click(rcNavAlbum_);
         if (gridIndices_.empty()) return false;
         onAlbumSelected(gridIndices_[0]);
+        return true;
+    }
+
+    // The same view on a non-Latin record: its TRACK TITLES are the smallest
+    // type role in the app, and a glyph the atlas never baked draws as nothing
+    // at all — an empty row, not a wrong-looking one. Chosen by content rather
+    // than by index so it keeps working on any library, and Hangul is
+    // preferred over Han because the fallback faces are baked in the order
+    // Chinese -> Japanese -> Korean (see ensureFallbackGlyphs): whatever runs
+    // out of atlas does so from the BACK of that list, so Korean is the first
+    // script to disappear and the last to come back.
+    if (state == "21-album-view-multiscript") {
+        click(rcNavAlbum_);
+        auto scan = [](const std::string& s, uint32_t lo, uint32_t hi) {
+            for (size_t i = 0; i < s.size(); ) {
+                uint32_t cp = utf8::nextCodepoint(s, i);
+                if (cp >= lo && cp <= hi) return true;
+            }
+            return false;
+        };
+        // displayName, not name: name is the raw folder key, which in a
+        // downloader-managed library is an opaque hash and never carries the
+        // script the record is actually titled in.
+        auto pick = [&](uint32_t lo, uint32_t hi) {
+            for (int idx : gridIndices_) {
+                const Album& a = albums_[(size_t)idx];
+                if (scan(a.displayName, lo, hi) || scan(a.artist, lo, hi)) return idx;
+                for (const Track& t : a.tracks)
+                    if (scan(t.title, lo, hi)) return idx;
+            }
+            return -1;
+        };
+        int idx = pick(0xAC00, 0xD7AF);                     // Hangul syllables
+        if (idx < 0) idx = pick(0x3040, 0x30FF);            // Kana
+        if (idx < 0) idx = pick(0x1100, 0x10FFFF);          // anything past Latin/Greek/Cyrillic
+        if (idx < 0) return false;
+        onAlbumSelected(idx);
         return true;
     }
 
