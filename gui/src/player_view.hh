@@ -989,6 +989,30 @@ private:
     EqProfileStore   eqProfiles_;
     EqManager        eqManager_;
 
+    // ── The AutoEQ database, parsed off the startup path ────────────────────
+    //
+    // eqProfiles_ is filled by this thread, started in the constructor. NOTHING
+    // MAY READ eqProfiles_ WITHOUT CALLING ensureEqProfiles() FIRST.
+    //
+    // That is the whole safety argument, and it is not a style preference:
+    // EqProfileStore has no synchronization of any kind, and load() CLEARS
+    // profiles_ before refilling it — so a reader arriving mid-parse would walk
+    // a vector that is being reallocated underneath it. ensureEqProfiles()
+    // joins, and after a join the thread is gone and the store is whole, which
+    // is why no mutex is needed anywhere.
+    // Mutable because one reader — eqSelectedHeadphone() — is const, the same
+    // reason RasterFont::misses_ is mutable: the join is bookkeeping, not a
+    // change to what the object means.
+    mutable std::thread eqProfilesThread_;
+    void ensureEqProfiles() const;
+
+    // The art window is built on first show(), not at launch — see
+    // ensureArtWindow(). A refused create() is remembered so it is not retried
+    // on every open (the headless capture tool refuses it by design).
+    bool artWinReady_  = false;
+    bool artWinFailed_ = false;
+    void ensureArtWindow();
+
     // ── DRIVER'S AUTOEQ quick-switcher ──────────────────────────────────────
     // A DAC has no frequency response; the DRIVERS do — headphones, IEMs and
     // speakers alike — and several take turns on one output, so "one profile

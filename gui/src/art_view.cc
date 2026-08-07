@@ -20,7 +20,7 @@ static Color toColor(ColorRef c) {
 
 static const wchar_t* ART_CLASS = L"MatrixArtWindow";
 
-bool ArtWindow::create(Host*) {
+bool ArtWindow::create(Host*, const RasterFont* shareFontsWith) {
     HINSTANCE hInst = GetModuleHandleW(nullptr);
     WNDCLASSEXW wc = {};
     wc.cbSize       = sizeof(wc);
@@ -66,7 +66,7 @@ bool ArtWindow::create(Host*) {
 
     openFonts(toUtf8Path(ui_fonts::bold()), toUtf8Path(ui_fonts::italic()),
               toUtf8Path(ui_fonts::mono()), toUtf8Path(ui_fonts::icons()),
-              toUtf8Path("fonts/"), fontPath);
+              toUtf8Path("fonts/"), fontPath, shareFontsWith);
 
     return true;
 }
@@ -141,7 +141,7 @@ LRESULT CALLBACK ArtWindow::wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 #else  // !_WIN32 — real Wayland second window, sharing the main window's
        // WaylandDisplay connection (see Host::secondaryWindowHandle()).
 
-bool ArtWindow::create(Host* host) {
+bool ArtWindow::create(Host* host, const RasterFont* shareFontsWith) {
     display_ = host ? static_cast<WaylandDisplay*>(host->secondaryWindowHandle()) : nullptr;
     if (!display_ || !display_->valid()) return false;
 
@@ -178,7 +178,7 @@ bool ArtWindow::create(Host* host) {
 
     openFonts(exeDir + ui_fonts::bold(), exeDir + ui_fonts::italic(),
               exeDir + ui_fonts::mono(), exeDir + ui_fonts::icons(),
-              exeDir + "fonts/", fontPath);
+              exeDir + "fonts/", fontPath, shareFontsWith);
 
     return true;
 }
@@ -257,27 +257,34 @@ void ArtWindow::onKey(const KeyEvent& e) {
 // atlas is a few dozen cells that bake in well under a millisecond.
 void ArtWindow::openFonts(const std::string& boldPath, const std::string& italicPath,
                           const std::string& monoPath, const std::string& iconPath,
-                          const std::string& fontsDir, const std::string& regularPath) {
-    FileByteReader loader;
-    if (!msdfFont_.open(loader, regularPath.c_str())) return;
+                          const std::string& fontsDir, const std::string& regularPath,
+                          const RasterFont* shareFontsWith) {
+    // Only the FACE OPENING is shareable. The seeding at the bottom is not: it
+    // bakes into this window's own atlas, on this window's own device, at this
+    // window's own body size — which is the part that genuinely cannot be
+    // borrowed (see RasterFont::openSharedWith).
+    if (!shareFontsWith || !msdfFont_.openSharedWith(*shareFontsWith)) {
+        FileByteReader loader;
+        if (!msdfFont_.open(loader, regularPath.c_str())) return;
 
-    msdfFont_.addStyle(loader, boldPath.c_str(),   FontStyle::Bold);
-    msdfFont_.addStyle(loader, italicPath.c_str(), FontStyle::Italic);
-    msdfFont_.addStyle(loader, monoPath.c_str(),   FontStyle::Math);
+        msdfFont_.addStyle(loader, boldPath.c_str(),   FontStyle::Bold);
+        msdfFont_.addStyle(loader, italicPath.c_str(), FontStyle::Italic);
+        msdfFont_.addStyle(loader, monoPath.c_str(),   FontStyle::Math);
 
-    msdfFont_.addOverride(loader, iconPath.c_str());
-    // Same serif chain and the same matched Bold cuts as PlayerWindow — see
-    // there for why these faces and not the sans/calligraphic ones bundled
-    // beside them.
-    msdfFont_.addFallback(loader, (fontsDir + "fandol/FandolSong-Regular.otf").c_str());
-    msdfFont_.addFallback(loader, (fontsDir + "haranoaji/HaranoAjiMincho-Regular.otf").c_str());
-    msdfFont_.addFallback(loader, (fontsDir + "unfonts-core/UnBatang.ttf").c_str());
-    msdfFont_.addFallback(loader, (fontsDir + "fandol/FandolSong-Bold.otf").c_str(),
-                          FontStyle::Bold);
-    msdfFont_.addFallback(loader, (fontsDir + "haranoaji/HaranoAjiMincho-Bold.otf").c_str(),
-                          FontStyle::Bold);
-    msdfFont_.addFallback(loader, (fontsDir + "unfonts-core/UnBatangBold.ttf").c_str(),
-                          FontStyle::Bold);
+        msdfFont_.addOverride(loader, iconPath.c_str());
+        // Same serif chain and the same matched Bold cuts as PlayerWindow — see
+        // there for why these faces and not the sans/calligraphic ones bundled
+        // beside them.
+        msdfFont_.addFallback(loader, (fontsDir + "fandol/FandolSong-Regular.otf").c_str());
+        msdfFont_.addFallback(loader, (fontsDir + "haranoaji/HaranoAjiMincho-Regular.otf").c_str());
+        msdfFont_.addFallback(loader, (fontsDir + "unfonts-core/UnBatang.ttf").c_str());
+        msdfFont_.addFallback(loader, (fontsDir + "fandol/FandolSong-Bold.otf").c_str(),
+                              FontStyle::Bold);
+        msdfFont_.addFallback(loader, (fontsDir + "haranoaji/HaranoAjiMincho-Bold.otf").c_str(),
+                              FontStyle::Bold);
+        msdfFont_.addFallback(loader, (fontsDir + "unfonts-core/UnBatangBold.ttf").c_str(),
+                              FontStyle::Bold);
+    }
 
     // Seed ASCII at the body size this window uses, so the very first frame has
     // something to draw. Everything else — other sizes, non-Latin track titles

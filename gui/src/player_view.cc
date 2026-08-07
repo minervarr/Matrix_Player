@@ -370,7 +370,9 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
         msdfFont_.useGpuBake(true);
     }
 
-    artWin_.create(host_.get());
+    // NOT created here. See ensureArtWindow() — it opens a second Vulkan
+    // device and (before sharing) re-read ~39 MB of faces, at launch, for a
+    // window most sessions never open.
     recalcLayout();
     // Needs metrics_, which recalcLayout() just computed: the sizes to bake at
     // ARE the type roles. Anything drawn at a size not in that set (icon boxes,
@@ -401,8 +403,18 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
         }
     }
 
-    // Load EQ profiles
-    eqProfiles_.load(exeDir + "eq_profiles.json");
+    // Load EQ profiles — on a thread, because nothing needs them yet.
+    //
+    // This is ~150 ms of a ~730 ms startup: 8666 profiles out of a 4.8 MB JSON,
+    // parsed and sorted, on the thread that is trying to put a window on screen.
+    // Nothing drawn before the listener touches anything reads it — the sidebar's
+    // DRIVER'S AUTOEQ block is fed from the eq_headphones TABLE, not from here —
+    // and the first real reader is applyDeviceEq() at track start.
+    //
+    // See ensureEqProfiles() for the rule that makes this safe.
+    eqProfilesThread_ = std::thread([this, exeDir] {
+        eqProfiles_.load(exeDir + "eq_profiles.json");
+    });
 
     setupWatchers();
     startBackgroundScan();
@@ -3061,6 +3073,7 @@ void PlayerWindow::onLButtonDown(int x, int y) {
         // scrolled while it sat still. ArtWindow is a real second surface with
         // its own renderer, so nothing from this window can reach it.
         artWinShowsArtist_ = true;
+        ensureArtWindow();
         artWin_.show(artistImgPath_);
         return;
     }
@@ -3617,6 +3630,7 @@ void PlayerWindow::onPanelClick(int x, int y) {
         // coefficients live, and restarts the trial clock together.
         if (ptInRect(eqBtnAssign_, x, y)) {
             if (eqSelectedRow_ >= 0 && eqSelectedRow_ < (int)eqFilteredIndices_.size()) {
+                ensureEqProfiles();   // indexes getAll() directly, below
                 auto& p = eqProfiles_.getAll()[eqFilteredIndices_[eqSelectedRow_]];
                 selectEqProfile({ p.name, p.source, p.form });
             }
@@ -4106,6 +4120,7 @@ void PlayerWindow::onEqSettings() {
 }
 
 void PlayerWindow::eqRefilter() {
+    ensureEqProfiles();
     eqFilteredIndices_.clear();
     std::string needle = eqSearch_;
     for (auto& ch : needle) ch = (char)std::tolower((unsigned char)ch);
@@ -4129,6 +4144,7 @@ void PlayerWindow::eqRefilter() {
 // panel's profile-indexed list and eq_headphones. Pin/Remove need the saved
 // entry (for its pinned flag), not just the profile.
 const EqHeadphone* PlayerWindow::eqSelectedHeadphone() const {
+    ensureEqProfiles();
     if (eqSelectedRow_ < 0 || eqSelectedRow_ >= (int)eqFilteredIndices_.size())
         return nullptr;
     const auto& p = eqProfiles_.getAll()[eqFilteredIndices_[eqSelectedRow_]];
@@ -4139,6 +4155,7 @@ const EqHeadphone* PlayerWindow::eqSelectedHeadphone() const {
 }
 
 void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
+    ensureEqProfiles();
     LayoutRect content = panels::drawHeader(canvas, area, "EQ / AutoEQ Profiles", metrics_.scale, metrics_.text.header, eqCloseRc_);
     Rect c = toRect(content);
     float pad = metrics_.space(SP_LG);
@@ -4982,6 +4999,11 @@ void PlayerWindow::applyDeviceEq(int sampleRate, int channels) {
         eqCurrentTentative_ = false;
         return;
     }
+    // Deliberately AFTER the early return above, not at the top of the
+    // function. This is the one reader on the audio path — it runs at every
+    // track start — and a listener with no profile assigned has no reason to
+    // wait for a database they are not using.
+    ensureEqProfiles();
     auto* profile = eqProfiles_.findByKey(assign.name, assign.source, assign.form);
     if (profile) {
         eqManager_.applyProfile(profile, sampleRate, channels);
@@ -5183,6 +5205,7 @@ void PlayerWindow::drawHeadphoneBlock(Canvas& canvas, const LayoutRect& sidebar)
 }
 
 void PlayerWindow::selectEqProfile(const EqAssignment& a) {
+    ensureEqProfiles();
     const EqProfile* profile = eqProfiles_.findByKey(a.name, a.source, a.form);
     if (!profile) return;
 
@@ -6091,6 +6114,7 @@ void PlayerWindow::onTimer() {
 void PlayerWindow::onArtClick() {
     if (displayAlbum_ < 0) return;
     artWinShowsArtist_ = false;
+    ensureArtWindow();
     artWin_.show(albums_[displayAlbum_].artPath);
 }
 
@@ -6151,6 +6175,44 @@ void PlayerWindow::setupWatchers() {
         sdb.open(root);  // no-op if this root has no sibling .streamer db
         streamerDbs_[root] = std::move(sdb);
     }
+}
+
+// Make the AutoEQ database safe to read, blocking if the parse is still going.
+//
+// Every read of eqProfiles_ goes through here. It is cheap after the first
+// call — joining an already-finished thread, then a joinable() test that is
+// false forever after — so call sites do not need to reason about whether they
+// are the first.
+//
+// Note this can genuinely block, and that is the correct behaviour rather than
+// a flaw: the alternative is answering a question about the listener's saved
+// profile before the answer has been read off disk. The worst case is a
+// listener who presses play within ~150 ms of launch, who waits exactly as long
+// as they used to; everyone else waits for nothing, because the parse finished
+// while the window was still being put on screen.
+void PlayerWindow::ensureEqProfiles() const {
+    if (eqProfilesThread_.joinable()) eqProfilesThread_.join();
+}
+
+// Build the art window the first time it is actually asked for.
+//
+// It used to be built in create(), which meant every launch paid for a second
+// Vulkan instance/device/swapchain and a second full set of font faces —
+// whether or not the listener ever opened fullscreen art. Its own faces are now
+// opened over the main window's bytes (RasterFont::openSharedWith), so what
+// remains is the Vulkan setup.
+//
+// The two windows genuinely cannot share more than the bytes: they have
+// separate Renderers and therefore separate VkDevices, and an atlas image
+// belongs to one device. Cells, packer and atlas stay per-window.
+//
+// A failure is remembered rather than retried. On the headless capture tool
+// Host::secondaryWindowHandle() is null by design, so create() declines every
+// time, and retrying on each show() would be a pointless stall.
+void PlayerWindow::ensureArtWindow() {
+    if (artWinReady_ || artWinFailed_) return;
+    if (artWin_.create(host_.get(), &msdfFont_)) artWinReady_ = true;
+    else                                         artWinFailed_ = true;
 }
 
 void PlayerWindow::startBackgroundScan() {
@@ -6480,6 +6542,10 @@ void PlayerWindow::shutdown() {
     onStop();
     watcher_.unwatchAll();
     if (scanThread_.joinable()) scanThread_.join();
+    // The EQ parse writes into eqProfiles_, which is a member: it must not
+    // still be running when this object is destroyed, whether or not anything
+    // ever read from it.
+    if (eqProfilesThread_.joinable()) eqProfilesThread_.join();
     // Join the art-decode worker before tearing down textures/renderer — it
     // never touches the Renderer, but a decode completing after this point
     // would notify a dying window.

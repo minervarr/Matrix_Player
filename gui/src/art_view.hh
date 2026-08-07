@@ -40,7 +40,11 @@ class ArtWindow {
 class ArtWindow : public InputSink {
 #endif
 public:
-    bool create(Host* host);
+    // `shareFontsWith` is the main window's RasterFont, if there is one. Its
+    // faces are opened over the same bytes rather than re-read from disk (~39 MB
+    // and ~100 ms otherwise) — see RasterFont::openSharedWith(). Pass nullptr
+    // and this window loads its own copies, which is still correct, just slower.
+    bool create(Host* host, const RasterFont* shareFontsWith = nullptr);
     void show(const std::string& imagePath);
     // Swap the displayed image in place while visible (now-playing album
     // changed). No-op when hidden or if the path is unchanged.
@@ -108,7 +112,8 @@ private:
     // RasterFont rather than sharing PlayerWindow's.
     void openFonts(const std::string& boldPath, const std::string& italicPath,
                    const std::string& monoPath, const std::string& iconPath,
-                   const std::string& fontsDir, const std::string& regularPath);
+                   const std::string& fontsDir, const std::string& regularPath,
+                   const RasterFont* shareFontsWith = nullptr);
 
     RasterFont msdfFont_;
     std::vector<float> msdfQuads_;
