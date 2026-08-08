@@ -259,12 +259,20 @@ without it, regardless of what compiles the app itself. libusbK driver bound to 
 target USB DAC via Zadig, same as always.
 
 ```bat
-scripts\windows\build.ps1            :: Release -> build\windows\
+scripts\windows\build.ps1            :: no mode flag, interactive console -> asks microarch, then build type
+scripts\windows\build.ps1 -Release   :: Release -> build\windows\ (skips both prompts)
 scripts\windows\build.ps1 -Debug     :: Debug -> build\windows_debug\ (smoke-test tools + matrix_ab_test)
 scripts\windows\build.ps1 -Clean     :: wipe the target build dir first
+scripts\windows\build.ps1 -Native    :: -march=native, tuned to this exact CPU
 scripts\windows\build.ps1 -V3        :: or -V4, x86-64 psABI microarch level
+scripts\windows\build.ps1 -Custom znver4   :: any -march value CMake can validate
 scripts\windows\build.ps1 -Msys2Root D:\msys64   :: only if MSYS2 isn't at the default C:\msys64
 ```
+
+Bare `build.ps1` on an interactive console mirrors `scripts/linux/build.sh`'s two-question
+prompt (microarch target, then build type) instead of defaulting silently — pass any mode
+flag above (or run from a non-interactive caller, like `package.ps1`, which always passes
+`-Release`) to skip straight to the build.
 
 Output: `build\windows\gui\matrix_player.exe` (Release) or `build\windows_debug\gui\matrix_player.exe` (Debug),
 plus three sibling DLLs (`libc++.dll`, `libgcc_s_seh-1.dll`, `libwinpthread-1.dll`) —

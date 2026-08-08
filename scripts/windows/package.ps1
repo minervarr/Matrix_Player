@@ -14,7 +14,12 @@ Set-Location (Join-Path $PSScriptRoot "..\..")
 
 if (-not $SkipBuild) {
     Write-Host "Building Release..."
-    & (Join-Path $PSScriptRoot "build.ps1")
+    # -Release: build.ps1 now prompts for microarch/build-type when run with
+    # no mode flag on an interactive console (mirrors scripts/linux/build.sh).
+    # Since this script runs in-process (&), it shares the outer console's
+    # interactivity, so an explicit flag is the only reliable way to keep
+    # packaging deterministic and unattended-safe.
+    & (Join-Path $PSScriptRoot "build.ps1") -Release
     if ($LASTEXITCODE -ne 0) { throw "Release build failed." }
 }
 
