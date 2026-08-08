@@ -14,3 +14,8 @@ ui-shots*/
 
 # subagent-driven-development scratch workspace
 .superpowers/
+
+# android/ Gradle build artifacts (build/ above already covers app/build/)
+.gradle/
+.cxx/
+local.properties

@@ -20,8 +20,8 @@ add_library(matrix_core STATIC
 
 target_include_directories(matrix_core PUBLIC
     include
-    ${CMAKE_SOURCE_DIR}/third_party
-    ${CMAKE_SOURCE_DIR}/third_party/soxr/src)
+    ${CMAKE_CURRENT_SOURCE_DIR}/../third_party
+    ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/soxr/src)
 
 target_link_libraries(matrix_core PUBLIC ae_core sqlite3)
 

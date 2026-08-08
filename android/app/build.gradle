@@ -1,0 +1,77 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace "io.nava.matrixplayer"
+
+    lint {
+        disable 'ExpiredTargetSdkVersion'
+    }
+
+    // Only platform 35 / build-tools 35.0.0 are installed in this SDK
+    // (matches framework/audio_engine's own Android build); vk_canvas's demo
+    // uses 37, but nothing here needs it.
+    compileSdkVersion 35
+    ndkVersion "29.0.14206865"
+
+    defaultConfig {
+        applicationId "io.nava.matrixplayer"
+        minSdkVersion 26          // AAudio floor
+        targetSdkVersion 35       // >=30 needed for MANAGE_EXTERNAL_STORAGE semantics
+        versionCode 1
+        versionName "0.1.0-android-slice"
+
+        // core/CMakeLists.txt's Debug-only block (variants_test/stats_test/
+        // matrix_fixture_gen — desktop test executables, not part of this
+        // app) references ${CMAKE_SOURCE_DIR}/tools/fixture_gen.cpp, which
+        // resolves against the top-level CMake project — the repo root on
+        // desktop, but android/ here (a different top-level project),
+        // breaking that path. Forcing Release for the native side
+        // regardless of the Gradle Debug/Release variant sidesteps that
+        // block entirely without touching core/CMakeLists.txt, and matches
+        // this slice's real need (no desktop-only test tooling).
+        externalNativeBuild {
+            cmake {
+                arguments "-DCMAKE_BUILD_TYPE=Release"
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "../CMakeLists.txt"
+        }
+    }
+
+    splits {
+        abi {
+            enable true
+            reset()
+            include "arm64-v8a", "x86_64"
+            universalApk false
+        }
+    }
+}
+
+// android/CMakeLists.txt's vce_compile_slang() writes .spv files directly into
+// app/src/main/assets/shaders/ as a side effect of the native build. AGP's
+// asset-merge tasks don't know that write is coming — they only track
+// declared source-set inputs — so without this, mergeDebugAssets/
+// mergeReleaseAssets run (and get cached as up-to-date) before CMake has
+// produced anything, and the shaders silently never reach the APK. Same
+// ordering trap gui/CMakeLists.txt's copy_shader_assets comment already
+// warns about on desktop, here on the Gradle side instead of CMake's own
+// POST_BUILD ordering.
+afterEvaluate {
+    def nativeBuildTasks = tasks.matching { it.name.startsWith("buildCMake") }
+    tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+        dependsOn nativeBuildTasks
+    }
+}
