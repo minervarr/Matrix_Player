@@ -93,4 +93,23 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     else()
         target_compile_options(stats_test PRIVATE -Wall)
     endif()
+
+    # ── matrix_fixture_gen ────────────────────────────────────────────────
+    # Writes a small, fixed synthetic music library (real sine-tone WAVs, a
+    # real folder layout) to disk so the GUI's Album/EP/Single/Compilation/
+    # Live/Remix views and the variant-grouping rules can be exercised
+    # without a real music collection — see
+    # docs/superpowers/specs/2026-08-08-fixture-gen-design.md. Links
+    # variants.cpp alone (same trick as variants_test above) to self-verify
+    # every album it writes against the REAL classifyReleaseType(), so it
+    # can never silently drift out of sync with the classifier it exists to
+    # exercise. Both platforms — no OS-specific code at all, unlike
+    # icon_preview/matrix_ui_capture's Wayland dependency.
+    add_executable(matrix_fixture_gen ${CMAKE_SOURCE_DIR}/tools/fixture_gen.cpp src/variants.cpp)
+    target_include_directories(matrix_fixture_gen PRIVATE include ${CMAKE_SOURCE_DIR}/third_party)
+    if(MSVC)
+        target_compile_options(matrix_fixture_gen PRIVATE /W3 /utf-8)
+    else()
+        target_compile_options(matrix_fixture_gen PRIVATE -Wall)
+    endif()
 endif()

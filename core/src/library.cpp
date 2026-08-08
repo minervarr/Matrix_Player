@@ -195,7 +195,7 @@ void parseAlbumFolder(const std::string& folderPath,
     fs::path rel = fs::relative(fs::u8path(folderPath), fs::u8path(rootPath), ec);
     if (ec || rel.empty()) return;
     std::vector<std::string> parts;
-    for (auto& p : rel) parts.push_back(p.u8string());
+    for (const auto& p : rel) parts.push_back(p.u8string());
     if (parts.size() >= 2 && parts[parts.size() - 2] == "Singles")
         album.mode = "single";
     // country/Artist/Album (3 deep) or country/Artist/Singles/Title (4 deep)

@@ -422,13 +422,25 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
     // Load audio mode
     bitperfectMode_.store(db_.loadSetting("audio_mode") == "bitperfect");
 
-    // Load audio backend
+    // Load audio backend. Default (nothing saved yet) is WASAPI Exclusive on
+    // Windows / ALSA on Linux — never USB. USB is bit-perfect and the primary
+    // path once chosen, but probing for it unconditionally on a fresh install
+    // means a listener with no DAC plugged in sees a driver error as their
+    // very first impression. The USB-open block below only ever runs when
+    // audioBackend_ == Usb, so this default is what keeps that probe (and the
+    // libusbK/Zadig check it implies) tied to an explicit opt-in.
     {
         std::string backend = db_.loadSetting("audio_backend");
-        audioBackend_ = AudioBackend::Usb;
 #ifdef _WIN32
-        if (backend == "wasapi") audioBackend_ = AudioBackend::Wasapi;
+        audioBackend_ = AudioBackend::Wasapi;
+        if (backend == "usb") audioBackend_ = AudioBackend::Usb;
 #else
+#ifdef MATRIX_HAVE_ALSA
+        audioBackend_ = AudioBackend::Alsa;
+#else
+        audioBackend_ = AudioBackend::Usb;
+#endif
+        if (backend == "usb") audioBackend_ = AudioBackend::Usb;
 #ifdef MATRIX_HAVE_ALSA
         if (backend == "alsa") audioBackend_ = AudioBackend::Alsa;
 #endif
@@ -438,8 +450,8 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
 #endif
     }
 #ifdef _WIN32
-    wasapiMode_ = (db_.loadSetting("wasapi_mode") == "exclusive")
-                  ? WasapiMode::Exclusive : WasapiMode::Shared;
+    wasapiMode_ = (db_.loadSetting("wasapi_mode") == "shared")
+                  ? WasapiMode::Shared : WasapiMode::Exclusive;
     auto devIdUtf8 = db_.loadSetting("wasapi_device_id");
     wasapiDeviceId_ = utf8ToWide(devIdUtf8);
 #else
@@ -483,17 +495,11 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
             printf("\n");
         } else {
             printf("[USB][ERROR] Failed to open DAC VID=%04X PID=%04X\n", vid, pid);
-            char msgBuf[512];
+            char msgBuf[96];
             snprintf(msgBuf, sizeof(msgBuf),
-                "USB DAC not found (VID=%04X PID=%04X).\n\n"
-                "Steps to fix:\n"
-                "1. Open Zadig\n"
-                "2. Select your USB DAC interface MI_00\n"
-                "3. Install libusbK driver\n"
-                "4. Restart this app\n\n"
-                "Use Audio Settings to select a different device\n"
-                "or switch to a secondary backend.", vid, pid);
-            host_->showErrorMessage("USB DAC not found", msgBuf);
+                "USB DAC not found (VID=%04X PID=%04X) \xE2\x80\x94 check Audio Settings.",
+                vid, pid);
+            audioNotice_ = msgBuf;
         }
         output_ = std::make_unique<UsbAudioOutput>(usbDriver_);
     }
@@ -2011,6 +2017,13 @@ void PlayerWindow::drawFrame() {
 // ── Layout ───────────────────────────────────────────────────────────────────
 
 void PlayerWindow::recalcLayout() {
+    // host_->init() (CreateWindowExW on Windows) can synchronously deliver a
+    // WM_SIZE before it returns, reaching here via onHostLayoutInvalidated()
+    // while renderer_ is still null (it isn't constructed until create()
+    // resumes after host_->init() — see player_view.cc's create()). The real
+    // layout pass runs once construction actually reaches that point; this
+    // one is a spurious pre-construction echo, not a resize to honor.
+    if (!renderer_) return;
     int W = (int)renderer_->width(), H = (int)renderer_->height();
 
     // WHICH TILE IS AT THE TOP-LEFT, read while the members still describe the
@@ -4052,7 +4065,16 @@ void PlayerWindow::applyAudioSettingsPanel() {
         uint16_t pid = pidStr.empty() ? (uint16_t)0x0004 : (uint16_t)strtoul(pidStr.c_str(), nullptr, 16);
         usbDriver_.close();
         usbOpen_ = usbDriver_.open(vid, pid);
-        if (usbOpen_) usbDriver_.parseDescriptors();
+        if (usbOpen_) {
+            usbDriver_.parseDescriptors();
+        } else {
+            char msgBuf[96];
+            snprintf(msgBuf, sizeof(msgBuf),
+                "USB DAC not found (VID=%04X PID=%04X) \xE2\x80\x94 check Audio Settings.",
+                vid, pid);
+            audioNotice_ = msgBuf;
+            invalidate();
+        }
         output_ = std::make_unique<UsbAudioOutput>(usbDriver_);
     }
 #ifdef _WIN32
@@ -5407,7 +5429,6 @@ void PlayerWindow::onPlay(StartCause cause) {
             audioNotice_ = audioBackendLabel() + " output failed to start" +
                            (why.empty() ? std::string(" at ") + std::to_string(fileSr) + " Hz."
                                         : std::string(" \xE2\x80\x94 ") + why + ".");
-            host_->showErrorMessage("Audio configure failed", audioNotice_);
             invalidate();
         }
         active_->stop();
@@ -5623,8 +5644,8 @@ void PlayerWindow::onPlay(StartCause cause) {
     if (!startOk) {
         printf("[onPlay][ERROR] Audio output failed to start\n");
         fflush(stdout);
-        host_->showErrorMessage("Audio start failed",
-            "Audio output failed to start.\nCheck Audio Settings.");
+        audioNotice_ = audioBackendLabel() + " output failed to start \xE2\x80\x94 check Audio Settings.";
+        invalidate();
         active_->stop();
         isPlaying_ = false;
         return;
@@ -6070,7 +6091,6 @@ void PlayerWindow::onTimer() {
         audioNotice_ = audioBackendLabel() + " output stopped" +
                        (why.empty() ? " \xE2\x80\x94 device fault."
                                     : std::string(" \xE2\x80\x94 ") + why + ".");
-        host_->showErrorMessage("Audio device error", audioNotice_);
         invalidate();
         return;
     }

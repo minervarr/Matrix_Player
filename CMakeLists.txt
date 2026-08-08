@@ -109,6 +109,59 @@ if(NOT MSVC)
     endif()
 endif()
 
+# -stdlib=libc++ on Windows/Clang only: MSYS2 UCRT64's Clang 22 ships against
+# GCC 16's libstdc++ headers by default, and a plain std::map<std::string, T>
+# ::operator[] (core/src/db.cpp's FileCache cache) fails to compile against
+# them — a real incompatibility in libstdc++'s _Rb_tree internals under Clang's
+# frontend, not a bug in this project's code (confirmed: the identical
+# translation unit compiles clean with -stdlib=libc++, LLVM's own standard
+# library, same version as Clang itself via the same MSYS2 packaging). Scoped
+# to WIN32 so the working Linux GCC/Clang + system libstdc++ build is
+# untouched. Must apply to every C++ TU in this configuration, including the
+# ExternalProject sub-builds (hence CMAKE_CXX_FLAGS, not a per-target flag —
+# mixing libstdc++ and libc++ objects in one binary is unsafe), and to the
+# link step, since the runtime library actually linked has to match too.
+if(WIN32 AND NOT MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    string(APPEND CMAKE_CXX_FLAGS " -stdlib=libc++")
+    string(APPEND CMAKE_EXE_LINKER_FLAGS " -stdlib=libc++")
+    # libc++.dll ends up a runtime dependency despite the static-link flags
+    # below (see gui/CMakeLists.txt's POST_BUILD copy step for why) — derived
+    # from the compiler's own location, not hardcoded, since it's a sibling
+    # of clang++.exe in every MSYS2 UCRT64 install regardless of where MSYS2
+    # itself is installed.
+    get_filename_component(_matrix_clang_bin_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    set(_matrix_libcxx_dll "${_matrix_clang_bin_dir}/libc++.dll")
+endif()
+
+# Statically link the MinGW/UCRT runtime (libc++, libgcc, and — confirmed by
+# an isolated std::thread/mutex/condition_variable smoke test — winpthread
+# too) so every Windows executable this project builds is self-contained: no
+# MSYS2 install needed on PATH to run it, on the dev machine or an end
+# user's. Only vulkan-1.dll (GPU-driver-provided) and the OS's own
+# api-ms-win-crt-*.dll/KERNEL32.dll stay dynamic. Global (CMAKE_EXE_LINKER_
+# FLAGS), not per-target: a Debug test binary that only runs with MSYS2's
+# ucrt64/bin on PATH defeats the point as much as the shipped player would.
+if(WIN32 AND NOT MSVC)
+    string(APPEND CMAKE_EXE_LINKER_FLAGS " -static -static-libgcc -static-libstdc++")
+endif()
+
+# -fuse-ld=lld on Windows/Clang: Release enables CMAKE_INTERPROCEDURAL_
+# OPTIMIZATION (line ~15 above), which under Clang means -flto=thin — and
+# MSYS2 UCRT64's default linker (GNU ld) needs its LLVMgold.dll plugin to
+# understand the resulting LLVM-bitcode objects, which failed to load here
+# ("error loading plugin: " — measured, not assumed) even with
+# mingw-w64-ucrt-x86_64-llvm installed for llvm-ar/llvm-ranlib (a SEPARATE
+# requirement — those two satisfy CMAKE_CXX_COMPILER_AR/RANLIB for archiving
+# the static libs, but say nothing about the final link step's plugin).
+# lld is LLVM's own linker and reads LLVM bitcode natively, no plugin
+# involved — installed via mingw-w64-ucrt-x86_64-lld. Applied globally
+# (Debug included) rather than gated on Release-with-LTO specifically: one
+# linker for both configs is simpler than two, and lld works identically
+# well for Debug's non-LTO link.
+if(WIN32 AND NOT MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    string(APPEND CMAKE_EXE_LINKER_FLAGS " -fuse-ld=lld")
+endif()
+
 # Standalone dev tool, not part of the shipped player — off by default so a
 # normal build never compiles or links it. Turn on with
 # `cmake -B build -DMATRIX_BUILD_AB_TEST=ON`. Windows-only (uses <windows.h>
@@ -152,6 +205,8 @@ ExternalProject_Add(libjpeg_turbo_ext
     CMAKE_ARGS
         -G${CMAKE_GENERATOR}
         -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
         -DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}
         -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}
         -DCMAKE_INSTALL_LIBDIR=lib
@@ -231,6 +286,8 @@ ExternalProject_Add(min_text_size_ext
     CMAKE_ARGS
         -G${CMAKE_GENERATOR}
         -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
         -DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}
         -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}
     INSTALL_COMMAND ${CMAKE_COMMAND} -E copy
@@ -293,7 +350,11 @@ add_subdirectory(gui)
 if(MATRIX_BUILD_AB_TEST AND WIN32)
     add_executable(matrix_ab_test tools/ab_test.cpp)
     set_target_properties(matrix_ab_test PROPERTIES WIN32_EXECUTABLE FALSE)
-    target_compile_options(matrix_ab_test PRIVATE /W3)
+    if(MSVC)
+        target_compile_options(matrix_ab_test PRIVATE /W3)
+    else()
+        target_compile_options(matrix_ab_test PRIVATE -Wall)
+    endif()
     target_compile_definitions(matrix_ab_test PRIVATE NOMINMAX)
     target_link_libraries(matrix_ab_test PRIVATE ae_usb winusb setupapi avrt)
 elseif(MATRIX_BUILD_AB_TEST)

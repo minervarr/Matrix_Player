@@ -52,8 +52,11 @@ bool ArtWindow::create(Host*, const RasterFont* shareFontsWith) {
     std::wstring exeDirW = exePathW;
     exeDirW = exeDirW.substr(0, exeDirW.rfind(L'\\') + 1);
 
-    auto toUtf8Path = [&](const wchar_t* rel) -> std::string {
-        std::wstring wpath = exeDirW + rel;
+    auto toUtf8Path = [&](const char* rel) -> std::string {
+        // rel is always a plain ASCII relative path (see ui_fonts.hh) — safe
+        // to widen char-for-char rather than pull in a full MultiByteToWideChar
+        // round trip for what's never anything but ASCII.
+        std::wstring wpath = exeDirW + std::wstring(rel, rel + std::strlen(rel));
         int len = WideCharToMultiByte(CP_UTF8, 0, wpath.c_str(), -1, nullptr, 0, nullptr, nullptr);
         std::string path(len, '\0');
         WideCharToMultiByte(CP_UTF8, 0, wpath.c_str(), -1, path.data(), len, nullptr, nullptr);

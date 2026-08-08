@@ -4,6 +4,27 @@
 // Portable replacement for Win32's COLORREF/RGB()/GetRValue() family — a
 // plain 0x00BBGGRR-packed uint32_t, same bit layout COLORREF always used, so
 // every existing `CLR_*` constant and `RGB(r,g,b)` call site is unchanged.
+//
+// On the real Windows build, <windows.h> may already have been included
+// (transitively) before this header, which defines RGB/GetRValue/GetGValue/
+// GetBValue as wingdi.h textual macros of the same names — a collision that
+// breaks the constexpr declarations below outright (not just shadows them).
+// Undefine them first so these portable versions win; the bit layout matches
+// COLORREF exactly, so nothing that meant to call the real Win32 macros
+// changes behavior.
+#ifdef RGB
+#undef RGB
+#endif
+#ifdef GetRValue
+#undef GetRValue
+#endif
+#ifdef GetGValue
+#undef GetGValue
+#endif
+#ifdef GetBValue
+#undef GetBValue
+#endif
+
 using ColorRef = uint32_t;
 
 constexpr ColorRef RGB(uint8_t r, uint8_t g, uint8_t b) {

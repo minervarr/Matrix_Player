@@ -11,6 +11,7 @@
 #include <io.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <share.h>
 #else
 #include <fcntl.h>
 #include <unistd.h>

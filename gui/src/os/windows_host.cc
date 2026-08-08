@@ -364,7 +364,7 @@ private:
             // window class's own hCursor would win otherwise — answering here
             // is what makes setCursor() stick. Only the client area: the
             // frame's resize arrows are DefWindowProc's to draw.
-            if (LOWORD(lParam) == HTCLIENT) {
+            if (LOWORD(lp) == HTCLIENT) {
                 SetCursor(cursor_ ? cursor_ : LoadCursorW(nullptr, IDC_ARROW));
                 return TRUE;
             }

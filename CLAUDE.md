@@ -236,17 +236,59 @@ for a `slangc` on `PATH` or at a couple of known locations and passes
 Output: `build/linux/gui/matrix_player` (plus `matrix_player.log` and `eq_profiles.json`/
 `fonts/`/`assets/` copied next to it by the build's POST_BUILD steps).
 
-**Windows**: Visual Studio Build Tools (MSVC `cl.exe`), CMake, Ninja, libusbK driver
-bound to the target USB DAC via Zadig.
+**Windows**: [MSYS2](https://www.msys2.org/) (UCRT64 environment) — Clang, not MSVC,
+invoked directly (`clang.exe`/`clang++.exe` targeting `x86_64-w64-windows-gnu`, **not**
+`clang-cl`; no Visual Studio involved at all). From an MSYS2 UCRT64 shell:
+
+```bash
+pacman -S mingw-w64-ucrt-x86_64-clang mingw-w64-ucrt-x86_64-cmake \
+          mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-libc++ \
+          mingw-w64-ucrt-x86_64-llvm mingw-w64-ucrt-x86_64-lld
+```
+
+`llvm` (for `llvm-ar`/`llvm-ranlib`) and `lld` are both required, not optional: Release
+enables LTO (`-flto=thin` under Clang), and MSYS2's default GNU `ar`/`ranlib`/`ld` can't
+archive or link the resulting LLVM-bitcode objects — confirmed by an actual failed
+Release build (`CMAKE_CXX_COMPILER_AR-NOTFOUND`, then a `LLVMgold.dll` plugin-load
+failure) before both packages were installed. Also needs the [Vulkan
+SDK](https://vulkan.lunarg.com/) (`VULKAN_SDK` env var set — the installer does this)
+and the **Microsoft Visual C++ Redistributable** (`winget install --id
+Microsoft.VCRedist.2015+.x64 -e`) — the latter is a free runtime, not a build tool: the
+Vulkan SDK's `slangc.exe` shader compiler is itself an MSVC-built binary and won't run
+without it, regardless of what compiles the app itself. libusbK driver bound to the
+target USB DAC via Zadig, same as always.
 
 ```bat
 scripts\windows\build.ps1            :: Release -> build\
 scripts\windows\build.ps1 -Debug     :: Debug -> build_debug\ (smoke-test tools + matrix_ab_test)
 scripts\windows\build.ps1 -Clean     :: wipe the target build dir first
 scripts\windows\build.ps1 -V3        :: or -V4, x86-64 psABI microarch level
+scripts\windows\build.ps1 -Msys2Root D:\msys64   :: only if MSYS2 isn't at the default C:\msys64
 ```
 
-Output: `build\matrix_player.exe` (Release) or `build_debug\matrix_player.exe` (Debug).
+Output: `build\matrix_player.exe` (Release) or `build_debug\matrix_player.exe` (Debug),
+plus three sibling DLLs (`libc++.dll`, `libgcc_s_seh-1.dll`, `libwinpthread-1.dll`) —
+everything else the app itself needs (libgcc, libstdc++, winpthread, its own code)
+links in fully static (`-static -static-libgcc -static-libstdc++`, confirmed by an
+isolated `std::thread`/`mutex`/`condition_variable` smoke test to actually eliminate
+those DLLs — see root `CMakeLists.txt`'s Windows/Clang block). The three DLLs survive
+only because a vendored libFLAC CMake rule (`-Wl,-Bstatic ... -Wl,-Bdynamic -lm`,
+untouched — see `framework/audio_engine/CLAUDE.md` on keeping libFLAC pristine) resets
+the linker's static/dynamic mode without restoring it, so Clang's own auto-appended
+C++ runtime resolves dynamically; shipping the three DLLs (`gui/CMakeLists.txt`'s
+POST_BUILD step, resolved from wherever `clang++.exe` itself lives — not hardcoded)
+was the pragmatic call over more invasive linker-ordering surgery for one DLL chain.
+No MSYS2 install is needed on an end-user machine either way — only these three files
+next to the exe, `vulkan-1.dll` (GPU-driver-provided), and the OS's own
+`api-ms-win-crt-*.dll`/`KERNEL32.dll`.
+
+`core/src/decoder.cpp`'s `openBinary()` uses `_wsopen_s`/`_SH_DENYNO` (needs
+`<share.h>`, easy to miss since it's not needed for the sibling `<io.h>`/`<sys/stat.h>`
+calls in the same block) and `gui/src/color.hh` `#undef`s `RGB`/`GetRValue`/
+`GetGValue`/`GetBValue` before declaring its own portable versions of the same names —
+`<windows.h>`'s `wingdi.h` macros of those names, if already in scope from an earlier
+include in the same translation unit, collide by text substitution, not just shadow.
+Both were latent bugs nobody had hit before this toolchain existed to compile them.
 
 **Both platforms**: submodules first if empty —
 `git submodule update --init --recursive`.
@@ -705,7 +747,7 @@ whenever the look changes, not left to drift.
 | Linux secondary outputs | ALSA + JACK2 (never pipewire-jack) | Mirrors WASAPI's role: a fallback when no DAC is plugged in, or for testing without hardware |
 | Album art (fullscreen) | Separate window (`ArtWindow`, both platforms) | Dual-monitor: art on one screen, controls on other |
 | Submodules | `audio_engine`, `vk_canvas`, `soxr`, `libjpeg-turbo` | dr_flac + sqlite3 vendored directly (single-header / amalgamation, no submodule needed) |
-| Build | CMake + Ninja | MSVC `cl.exe` on Windows, GCC/Clang on Linux, no `.sln`/Makefiles |
+| Build | CMake + Ninja | Clang (MSYS2 UCRT64, targeting `x86_64-w64-windows-gnu`) on Windows, GCC/Clang on Linux — no MSVC, no Visual Studio, no `.sln`/Makefiles |
 | `core/` | Zero OS headers (one PIMPL'd exception: FolderWatcher) | Portable app logic reusable without dragging in either platform's headers |
 
 ---

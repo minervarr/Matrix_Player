@@ -52,7 +52,11 @@ if(WIN32)
     # forcing /O2 unconditionally would win over Debug's /Od on the command line
     # (MSVC takes the last /O flag) and silently turn a debug build into an
     # optimized build anyway.
-    target_compile_options(matrix_player PRIVATE /W3)
+    if(MSVC)
+        target_compile_options(matrix_player PRIVATE /W3)
+    else()
+        target_compile_options(matrix_player PRIVATE -Wall)
+    endif()
 
     target_compile_definitions(matrix_player PRIVATE
         NOMINMAX
@@ -73,7 +77,21 @@ if(WIN32)
         ole32
         mmdevapi
         avrt
-        dbghelp)
+        dbghelp
+        winmm)
+
+    # GNU ld (MSYS2/MinGW's linker) doesn't honor #pragma comment(lib,...)
+    # .drectve directives the way MSVC's link.exe/lld-link does — winmm above
+    # is the one library in this tree that had no explicit link fallback
+    # before this (windows_host.cc's #pragma comment(lib,"winmm.lib") is a
+    # silent no-op here). ole32/mmdevapi/avrt/dbghelp are also pragma'd but
+    # were already listed explicitly, so they were never actually at risk.
+    #
+    # Static-link flags (-static/-stdlib=libc++) are set globally in the root
+    # CMakeLists.txt, not per-target here — every Windows executable this
+    # project builds (matrix_player, the Debug test binaries, matrix_ab_test)
+    # needs to be self-contained, not just the shipped one; a test binary
+    # that only runs with MSYS2's ucrt64/bin on PATH defeats the point.
 else()
     # AlsaOutput/JackOutput are secondary Linux outputs (see gui/src/os/) —
     # only built when audio_engine actually found ALSA/jack2 dev headers and
@@ -154,6 +172,41 @@ add_custom_command(TARGET matrix_player POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/eq_profiles.json
         $<TARGET_FILE_DIR:matrix_player>/eq_profiles.json)
+
+# libc++.dll next to the executable (Clang/MinGW builds only). The rest of
+# the MinGW/UCRT runtime (libgcc, libstdc++, winpthread) links into
+# matrix_player.exe's OWN object code fully static — see the
+# -static/-static-libgcc/-static-libstdc++ block in the root CMakeLists.txt —
+# but libc++ itself doesn't: a vendored libFLAC CMake rule emits
+# `-Wl,-Bstatic ... -Wl,-Bdynamic -lm` and never resets the linker's mode
+# back, so everything resolved afterward (including Clang's own auto-appended
+# C++ runtime) falls back to dynamic. Forcing that back to static means
+# precisely controlling where in the flattened link line a static libc++.a
+# lands relative to every transitive dependency CMake inserts on its own —
+# fragile enough, for a single DLL, that shipping the DLL itself is the
+# better trade. libFLAC is vendored and stays pristine (see
+# framework/audio_engine/CLAUDE.md); this works around it here instead.
+#
+# libc++.dll is itself a precompiled MSYS2 binary with its OWN dynamic
+# dependencies, regardless of how matrix_player.exe's own code links: it
+# needs libgcc_s_seh-1.dll, which in turn needs libwinpthread-1.dll (verified
+# via objdump -p on each, chain terminates there — both only need KERNEL32
+# and the OS-builtin api-ms-win-crt-* apiset after that). Confirmed by an
+# actual STATUS_DLL_NOT_FOUND launch failure with only libc++.dll copied —
+# don't drop these two on the assumption libc++.dll alone is enough.
+if(WIN32 AND NOT MSVC)
+    get_filename_component(_matrix_mingw_bin_dir "${_matrix_libcxx_dll}" DIRECTORY)
+    add_custom_command(TARGET matrix_player POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_matrix_libcxx_dll}"
+            $<TARGET_FILE_DIR:matrix_player>/libc++.dll
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_matrix_mingw_bin_dir}/libgcc_s_seh-1.dll"
+            $<TARGET_FILE_DIR:matrix_player>/libgcc_s_seh-1.dll
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_matrix_mingw_bin_dir}/libwinpthread-1.dll"
+            $<TARGET_FILE_DIR:matrix_player>/libwinpthread-1.dll)
+endif()
 
 # Compiled shaders land at ${CMAKE_BINARY_DIR}/assets/shaders (root
 # CMakeLists.txt's vce_compile_slang calls) — on Windows that's already the

@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdio>
+#include <csetjmp>
+#include <mutex>
 
 // {00000003-0000-0010-8000-00AA00389B71}  IEEE_FLOAT
 static const GUID kSubtypeFloat = {
@@ -21,44 +23,94 @@ static const GUID kSubtypePcm = {
 // to occasionally crash inside GetBuffer/GetCurrentPadding on some USB DACs
 // after long sessions or brief USB hiccups — a driver-side bug, not a use-after-
 // free on our end (foobar2000's WASAPI output guards the same calls for the
-// same reason). __except can't share a frame with C++ objects that unwind, so
-// each guarded call lives in its own tiny noinline function with no such objects.
+// same reason).
+//
+// Guarded via a vectored exception handler + thread-local setjmp/longjmp
+// rather than SEH's __try/__except: this file is built with Clang targeting
+// *-w64-windows-gnu (MSYS2/MinGW). Clang parses __try/__except there under
+// -fms-extensions, but the real unwind machinery it needs isn't wired up
+// outside clang-cl's MSVC-compatible target — a real access violation
+// segfaulted instead of being caught (verified empirically with a standalone
+// repro before this rewrite). AddVectoredExceptionHandler/setjmp/longjmp are
+// portable Win32/C, and work identically under MSVC and Clang/MinGW.
+//
+// longjmp doesn't run a real SEH unwind the way __except did — no destructors
+// fire for frames between the fault and the handler — but the only such frame
+// here is a single trivial noinline wrapper with no objects that need one,
+// the same constraint the original __except code already lived with, so
+// that's a no-op difference in this specific case.
+//
+// Guarded calls happen concurrently on two threads (the render thread's tight
+// loop, and the UI thread via pendingPlaybackMs()/stop()), so the "am I
+// inside a guarded call" state is thread_local, not a single process-wide
+// flag — verified with a two-thread smoke test before this landed.
 static constexpr HRESULT kSehCrashHr = (HRESULT)0x8AAAAAAAL;
 
-static HRESULT __declspec(noinline) sehGetBuffer(IAudioRenderClient* rc, UINT32 n, BYTE** pp) {
-    __try {
-        return rc->GetBuffer(n, pp);
-    } __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION
-                    ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
-        return kSehCrashHr;
+thread_local jmp_buf tls_wasapiJmpBuf;
+thread_local volatile bool tls_wasapiGuardActive = false;
+
+static LONG WINAPI wasapiVectoredHandler(EXCEPTION_POINTERS* info) {
+    if (info->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
+        tls_wasapiGuardActive) {
+        tls_wasapiGuardActive = false;
+        longjmp(tls_wasapiJmpBuf, 1);
+        // never returns
     }
+    // Not one of our guarded calls (or the guard wasn't active on this
+    // thread) — must fall through so windows_host.cc's
+    // SetUnhandledExceptionFilter-based minidump handler still sees any
+    // genuine, unrelated crash. VEH runs earlier in the dispatch chain than
+    // that handler, so getting this condition right is what keeps it from
+    // silently swallowing bugs that have nothing to do with WASAPI.
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+// Registered once, process-lifetime — never removed. The OS tears down the
+// whole VEH chain on process exit; there's no plugin-DLL-unload case here
+// that would make RemoveVectoredExceptionHandler necessary.
+static void ensureWasapiVehRegistered() {
+    static std::once_flag once;
+    std::call_once(once, [] { AddVectoredExceptionHandler(1, wasapiVectoredHandler); });
+}
+
+static HRESULT __declspec(noinline) sehGetBuffer(IAudioRenderClient* rc, UINT32 n, BYTE** pp) {
+    tls_wasapiGuardActive = true;
+    if (setjmp(tls_wasapiJmpBuf) == 0) {
+        HRESULT hr = rc->GetBuffer(n, pp);
+        tls_wasapiGuardActive = false;
+        return hr;
+    }
+    return kSehCrashHr;
 }
 
 static HRESULT __declspec(noinline) sehReleaseBuffer(IAudioRenderClient* rc, UINT32 n, DWORD flags) {
-    __try {
-        return rc->ReleaseBuffer(n, flags);
-    } __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION
-                    ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
-        return kSehCrashHr;
+    tls_wasapiGuardActive = true;
+    if (setjmp(tls_wasapiJmpBuf) == 0) {
+        HRESULT hr = rc->ReleaseBuffer(n, flags);
+        tls_wasapiGuardActive = false;
+        return hr;
     }
+    return kSehCrashHr;
 }
 
 static HRESULT __declspec(noinline) sehGetCurrentPadding(IAudioClient* ac, UINT32* padding) {
-    __try {
-        return ac->GetCurrentPadding(padding);
-    } __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION
-                    ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
-        return kSehCrashHr;
+    tls_wasapiGuardActive = true;
+    if (setjmp(tls_wasapiJmpBuf) == 0) {
+        HRESULT hr = ac->GetCurrentPadding(padding);
+        tls_wasapiGuardActive = false;
+        return hr;
     }
+    return kSehCrashHr;
 }
 
 static HRESULT __declspec(noinline) sehStop(IAudioClient* ac) {
-    __try {
-        return ac->Stop();
-    } __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION
-                    ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
-        return kSehCrashHr;
+    tls_wasapiGuardActive = true;
+    if (setjmp(tls_wasapiJmpBuf) == 0) {
+        HRESULT hr = ac->Stop();
+        tls_wasapiGuardActive = false;
+        return hr;
     }
+    return kSehCrashHr;
 }
 
 static const char* wireFormatName(WireFormat wf) {
@@ -122,6 +174,7 @@ std::vector<WasapiDeviceInfo> WasapiOutput::enumerateDevices() {
 WasapiOutput::WasapiOutput(std::wstring deviceId, WasapiMode mode)
     : deviceId_(std::move(deviceId)), mode_(mode)
 {
+    ensureWasapiVehRegistered();
     hDrainEvent_ = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 }
 
