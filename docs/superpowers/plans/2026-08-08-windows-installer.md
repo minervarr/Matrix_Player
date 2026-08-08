@@ -337,7 +337,7 @@ git_wrapper commit "Add the Windows installer packaging script"
 - Consumes: `dist\windows\matrix-player-setup-<version>.exe` from Task 2. Inno Setup's generated uninstaller, always named `unins000.exe`, written by the installer into `{app}` (i.e. `%LOCALAPPDATA%\Matrix Player\unins000.exe`) — this is an Inno Setup convention, not something either script defines.
 - Produces: nothing consumed by a later task — this is the final verification.
 
-- [ ] **Step 1: Clean any prior install on this machine**
+- [x] **Step 1: Clean any prior install on this machine**
 
 ```powershell
 $AppDir = "$env:LOCALAPPDATA\Matrix Player"
@@ -348,7 +348,7 @@ if (Test-Path "$AppDir\unins000.exe") {
 Remove-Item -Recurse -Force $AppDir -ErrorAction SilentlyContinue
 ```
 
-- [ ] **Step 2: Silent-install and verify the program files + shortcut**
+- [x] **Step 2: Silent-install and verify the program files + shortcut**
 
 ```powershell
 $Version = (Get-Content manifest.json -Raw | ConvertFrom-Json).version
@@ -362,13 +362,13 @@ Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs" -Filter "Matr
 Expected: both `Test-Path` returns `True`, and the `Get-ChildItem` shows a
 `Matrix Player.lnk` shortcut.
 
-- [ ] **Step 3: Plant a fake library/settings file to stand in for real user data**
+- [x] **Step 3: Plant a fake library/settings file to stand in for real user data**
 
 ```powershell
 "fake listening history" | Out-File "$env:LOCALAPPDATA\Matrix Player\matrix_player.db"
 ```
 
-- [ ] **Step 4: Re-run the same installer over the existing install (upgrade-in-place)**
+- [x] **Step 4: Re-run the same installer over the existing install (upgrade-in-place)**
 
 ```powershell
 & "dist\windows\matrix-player-setup-$Version.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
@@ -384,7 +384,7 @@ is still present, and `matrix_player.db` still exists with its original
 content `fake listening history` — proof the upgrade never touched it,
 because `matrix-player.iss`'s `[Files]` section never lists it.
 
-- [ ] **Step 5: Uninstall and verify program files are gone but the fake data survives**
+- [x] **Step 5: Uninstall and verify program files are gone but the fake data survives**
 
 ```powershell
 & "$env:LOCALAPPDATA\Matrix Player\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES
@@ -399,7 +399,7 @@ Expected: the first two are `False` (program files and the `assets\`
 directory Inno Setup created are removed), the third is `True` (the fake
 library file survives uninstall untouched).
 
-- [ ] **Step 6: Clean up the fake data and do one real launch**
+- [x] **Step 6: Clean up the fake data and do one real launch**
 
 ```powershell
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Matrix Player" -ErrorAction SilentlyContinue
