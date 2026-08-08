@@ -18,7 +18,7 @@ if (-not $SkipBuild) {
     if ($LASTEXITCODE -ne 0) { throw "Release build failed." }
 }
 
-$BuildDir = "build\gui"
+$BuildDir = "build\windows\gui"
 if (-not (Test-Path (Join-Path $BuildDir "matrix_player.exe"))) {
     throw "$BuildDir\matrix_player.exe not found. Run without -SkipBuild, or run scripts\windows\build.ps1 first."
 }

@@ -1,7 +1,9 @@
-# Desktop Windows build -> <repo>\build (Release) or \build_debug (Debug)
-# Thin launcher: locates MSYS2's UCRT64 Clang toolchain, then cmake+ninja does
-# everything - no source lives here. Matches this repo's scripts/<platform>/
-# convention.
+# Desktop Windows build -> <repo>\build\windows (Release) or \build\windows_debug
+# (Debug). Thin launcher: locates MSYS2's UCRT64 Clang toolchain, then
+# cmake+ninja does everything - no source lives here. Matches this repo's
+# scripts/<platform>/ convention, and nests under build\ the same way
+# scripts/linux/build.sh's build/linux and build/linux_debug do (one shared
+# top-level build\ ignore entry covers every platform's output).
 #
 # Toolchain is MSYS2 UCRT64 Clang (clang.exe/clang++.exe targeting
 # x86_64-w64-windows-gnu - NOT clang-cl), not MSVC. Root CMakeLists.txt
@@ -34,7 +36,7 @@ $BuildType = if ($Debug) { "Debug" } else { "Release" }
 # Ninja is a single-config generator: flipping CMAKE_BUILD_TYPE in the same
 # directory forces a near-total recompile (Debug/Release use incompatible
 # runtime libraries). Separate directories keep switching back and forth fast.
-$BuildDir = if ($Debug) { "build_debug" } else { "build" }
+$BuildDir = if ($Debug) { "build\windows_debug" } else { "build\windows" }
 
 if ($Clean -and (Test-Path $BuildDir)) {
     Write-Host "Cleaning $BuildDir..."
@@ -101,4 +103,4 @@ cmake --build $BuildDir --parallel
 if ($LASTEXITCODE -ne 0) { throw "Build failed." }
 
 Write-Host ""
-Write-Host "Success! Output: $BuildDir\matrix_player.exe"
+Write-Host "Success! Output: $BuildDir\gui\matrix_player.exe"

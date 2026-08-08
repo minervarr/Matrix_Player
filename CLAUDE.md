@@ -170,7 +170,7 @@ matrix_player/
     icons/matrix-icons.otf      — the UI icon glyphs, generated (see tools/icon_font/)
   scripts/
     linux/build.sh               — cmake+ninja -> build/linux/ (see flags below)
-    windows/build.ps1            — vswhere -> vcvars64 -> cmake+ninja -> build/ or build_debug/
+    windows/build.ps1            — vswhere -> vcvars64 -> cmake+ninja -> build/windows/ or build/windows_debug/
   docs/
     UI_DESIGN_SYSTEM.md          — the GUI's visual language (colors, type, layout rules) —
                                   single source of truth alongside theme.hh
@@ -259,14 +259,14 @@ without it, regardless of what compiles the app itself. libusbK driver bound to 
 target USB DAC via Zadig, same as always.
 
 ```bat
-scripts\windows\build.ps1            :: Release -> build\
-scripts\windows\build.ps1 -Debug     :: Debug -> build_debug\ (smoke-test tools + matrix_ab_test)
+scripts\windows\build.ps1            :: Release -> build\windows\
+scripts\windows\build.ps1 -Debug     :: Debug -> build\windows_debug\ (smoke-test tools + matrix_ab_test)
 scripts\windows\build.ps1 -Clean     :: wipe the target build dir first
 scripts\windows\build.ps1 -V3        :: or -V4, x86-64 psABI microarch level
 scripts\windows\build.ps1 -Msys2Root D:\msys64   :: only if MSYS2 isn't at the default C:\msys64
 ```
 
-Output: `build\matrix_player.exe` (Release) or `build_debug\matrix_player.exe` (Debug),
+Output: `build\windows\gui\matrix_player.exe` (Release) or `build\windows_debug\gui\matrix_player.exe` (Debug),
 plus three sibling DLLs (`libc++.dll`, `libgcc_s_seh-1.dll`, `libwinpthread-1.dll`) —
 everything else the app itself needs (libgcc, libstdc++, winpthread, its own code)
 links in fully static (`-static -static-libgcc -static-libstdc++`, confirmed by an
