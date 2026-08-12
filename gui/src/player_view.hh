@@ -11,6 +11,7 @@
 #include <memory>
 #include "core/library.h"
 #include "core/variants.h"
+#include "core/facets.h"
 #include "core/decoder.h"
 #include "core/db.h"
 #include "core/streamer_db.h"
@@ -205,10 +206,8 @@ private:
     // (see startGaplessCoordinator). That restart reaches onPlay() and would
     // otherwise be indistinguishable from the listener pressing play.
     std::atomic<bool> playFromGapless_{false};
-    // Position from the previous session, applied once by the first onPlay()
-    // that opens the very file it was saved for. 0 = nothing to resume.
-    int         pendingResumeMs_ = 0;
-    std::string pendingResumePath_;
+    // (There is no resume-on-launch state here any more. The player does not
+    // return you to the middle of a record — see savePlaybackStateNow().)
     void onArtClick();
     void onEqSettings();
     void toggleBitperfectMode();
@@ -530,10 +529,35 @@ private:
     // gridHitTest() both go through it, so every click/hover consumer keeps
     // receiving real album indices whether or not a filter is active.
     LayoutRect       rcSearch_ = {};
-    std::string      searchQuery_;       // UTF-8
+    std::string      searchQuery_;       // UTF-8 — the text still being typed
     bool             searchFocused_ = false;
     std::vector<int> gridIndices_;
     void rebuildGridIndices();
+
+    // ── Guided search (core/facets.h) ───────────────────────────────────────
+    // The box does not parse a sentence. What the listener types is matched
+    // against values that EXIST in this library, offered as suggestions, and
+    // accepted into chips:
+    //
+    //     [ Björk ]  AND  [ 1990–1999 ]  AND  [ 24-bit ]
+    //
+    // searchQuery_ keeps its old job (free text, matched against names) and
+    // the chips carry everything structural. Both feed rebuildGridIndices().
+    std::vector<facets::Chip>       searchChips_;
+    std::vector<facets::Suggestion> searchSuggest_;
+    int  searchSuggestSel_ = -1;         // keyboard highlight; -1 = none
+    // Rects for hit-testing, rebuilt by the draw pass that owns them.
+    LayoutRect              rcChips_ = {};     // strip above the grid
+    std::vector<LayoutRect> chipRects_;        // parallel to searchChips_
+    std::vector<LayoutRect> suggestRects_;     // parallel to searchSuggest_
+    int  hoverChipIdx_    = -1;
+    int  hoverSuggestIdx_ = -1;
+    void refreshSuggestions();
+    void acceptSuggestion(int i);
+    void removeChip(int i);
+    // Why the current chips found nothing, and which chip to blame — the
+    // difference between "you own no 24-bit" and "none in the nineties".
+    facets::EmptyReason searchEmptyReason() const;
 
     // Album variants (see core/include/core/variants.h). The grid shows one
     // tile per GROUP — its best member — instead of one per folder, so the

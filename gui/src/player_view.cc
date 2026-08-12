@@ -21,6 +21,7 @@
 
 #include <soxr.h>
 #include "core/dsp/dither.h"   // ae::TpdfQuantizer — Reference EQ output stage
+#include "core/facets.h"       // facets::albumYear — Album carries no year field
 
 static int pickOutputRate(int inRate, const std::vector<int>& supported) {
     for (int r : supported)
@@ -392,16 +393,16 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
         }
     }
 
-    // Resume point from the previous session. Only the position is carried
-    // here; the track it belongs to is matched by path inside onPlay(), so a
-    // resume can never fire against a different file.
-    {
-        PlaybackState st;
-        if (db_.loadPlaybackState(st) && st.positionMs > 0) {
-            pendingResumePath_ = st.filePath;
-            pendingResumeMs_   = st.positionMs;
-        }
-    }
+    // NO resume point is read here, deliberately — see savePlaybackStateNow()
+    // and the design law it serves: a record is heard from its start, because
+    // the player exists to carry the artist's intended development, not to
+    // return you to the middle of it. Dropping back in where you left off is
+    // the same convenience as a scrubber, and this app has no scrubber and no
+    // pause for the same reason.
+    //
+    // playback_state itself is left in place (db.cpp's SCHEMA) and still
+    // records WHICH file was last playing; only the position is neither
+    // written nor honoured.
 
     // Load EQ profiles — on a thread, because nothing needs them yet.
     //
@@ -1167,6 +1168,97 @@ void PlayerWindow::drawFrame() {
 
     // ── Main content: album grid, settings page, or (below) the full-page
     // album view that replaces the grid while an album is focused ─────────
+    // ── The chip strip: what the query currently says ──────────────────────
+    // Drawn above the grid because that is where the width is, and because a
+    // filter belongs beside the results it produced. Clicking a chip removes
+    // it — the whole query is one row of things you can take back.
+    chipRects_.clear();
+    suggestRects_.clear();
+    if (rcChips_.right > rcChips_.left) {
+        Rect cs = toRect(rcChips_);
+        canvas.rect(cs.x, cs.y, cs.w, cs.h, toColor(CLR_BG_MAIN));
+        canvas.rect(cs.x, cs.y + cs.h - metrics_.stroke(1.0f), cs.w,
+                    metrics_.stroke(1.0f), toColor(CLR_SEPARATOR));
+
+        const float sz    = metrics_.text.secondary;
+        const float padX  = metrics_.space(10.0f);
+        const float gap   = metrics_.space(8.0f);
+        const float chipH = metrics_.space(34.0f);
+        const float rowH  = metrics_.space(46.0f);
+        float x = cs.x + metrics_.space(20.0f);
+        float y = cs.y + (rowH - chipH) * 0.5f;
+
+        for (size_t i = 0; i < searchChips_.size(); i++) {
+            // The connective is DERIVED (facets::sameGroup) and merely shown:
+            // OR between alternatives, AND between different questions. It is
+            // drawn in CLR_TEXT_DIM and upper case — never CLR_ACCENT, which
+            // §4 reserves for state — and that contrast is also what tells it
+            // apart from a record actually CALLED "AND": a title lives inside
+            // a chip, in ordinary text, while the connective sits outside and
+            // dimmed.
+            if (i > 0) {
+                const char* conn = facets::sameGroup(searchChips_[i - 1], searchChips_[i])
+                                       ? "OR" : "AND";
+                float cw = canvas.textWidthStyled(conn, sz, FontStyle::Roman);
+                canvas.textStyled(conn, x, y + (chipH - sz) * 0.5f, sz,
+                                  toColor(CLR_TEXT_DIM), FontStyle::Roman);
+                x += cw + gap;
+            }
+            const std::string& label = searchChips_[i].value;
+            float tw = canvas.textWidthStyled(label, sz, FontStyle::Roman);
+            float xw = canvas.textWidthStyled("\xC3\x97", sz, FontStyle::Roman);  // ×
+            float w  = padX + tw + gap + xw + padX;
+
+            bool hot = hoverChipIdx_ == (int)i;
+            canvas.rect(x, y, w, chipH, toColor(hot ? CLR_HOVER : CLR_INPUT_BG),
+                        UI_CORNER_RADIUS);
+            canvas.textStyled(label, x + padX, y + (chipH - sz) * 0.5f, sz,
+                              toColor(CLR_TEXT_PRIMARY), FontStyle::Roman);
+            canvas.textStyled("\xC3\x97", x + padX + tw + gap, y + (chipH - sz) * 0.5f, sz,
+                              toColor(hot ? CLR_TEXT_PRIMARY : CLR_TEXT_DIM), FontStyle::Roman);
+
+            chipRects_.push_back({ (int)x, (int)y, (int)(x + w), (int)(y + chipH) });
+            x += w + gap;
+        }
+
+        // ── Suggestions, on their own row, laid out across the strip ────────
+        // A row of choices rather than a vertical dropdown, because this is
+        // the space that actually exists: it is wide, it is reserved, and
+        // nothing is drawn underneath it to bleed through.
+        if (searchFocused_ && !searchSuggest_.empty()) {
+            float sx = cs.x + metrics_.space(20.0f);
+            float sy = cs.y + (searchChips_.empty() ? 0.0f : rowH)
+                     + (rowH - chipH) * 0.5f;
+
+            for (size_t i = 0; i < searchSuggest_.size(); i++) {
+                const facets::Suggestion& s = searchSuggest_[i];
+                std::string count = std::to_string(s.count);
+                float lw = canvas.textWidthStyled(s.label, sz, FontStyle::Roman);
+                float cw = canvas.textWidthStyled(count, sz, FontStyle::Math);
+                float w  = padX + lw + gap + cw + padX;
+                if (sx + w > cs.x + cs.w - metrics_.space(20.0f)) break;  // no wrap: one row
+
+                bool hot = (int)i == hoverSuggestIdx_ || (int)i == searchSuggestSel_;
+                // A DISABLED row means "this exists, but not with what you
+                // already picked" — the count reads 0 and the row stays put so
+                // the listener can see it and learn what is blocking it. A
+                // value the library does not hold at all never gets here:
+                // facets::suggest() builds its candidates from the albums.
+                canvas.rect(sx, sy, w, chipH,
+                            toColor(hot && s.enabled ? CLR_HOVER : CLR_INPUT_BG),
+                            UI_CORNER_RADIUS);
+                canvas.textStyled(s.label, sx + padX, sy + (chipH - sz) * 0.5f, sz,
+                                  toColor(s.enabled ? CLR_TEXT_PRIMARY : CLR_TEXT_DIM),
+                                  FontStyle::Roman);
+                canvas.textStyled(count, sx + padX + lw + gap, sy + (chipH - sz) * 0.5f, sz,
+                                  toColor(CLR_TEXT_DIM), FontStyle::Math);
+
+                suggestRects_.push_back({ (int)sx, (int)sy, (int)(sx + w), (int)(sy + chipH) });
+                sx += w + gap;
+            }
+        }
+    }
+
     if (!settingsOpen_ && !trackPanelOpen_) {
         Rect g = toRect(rcGrid_);
         canvas.rect(g.x, g.y, g.w, g.h, toColor(CLR_BG_MAIN));
@@ -1191,7 +1283,15 @@ void PlayerWindow::drawFrame() {
             emptyState("No albums yet. Use the gear icon below to add a music folder.");
         } else if (gridIndices_.empty()) {
             std::string msg;
-            if (!searchQuery_.empty()) {
+            // A chip set that matched nothing gets the REASON, not a shrug.
+            // "No 24-bit in 1990s — your 24-bit releases are from 2002 onward"
+            // is the whole point of the guided search: the listener learns
+            // where the thing they asked for actually lives instead of facing
+            // an empty page and guessing which of their choices was wrong.
+            facets::EmptyReason why = searchEmptyReason();
+            if (why.empty) {
+                msg = why.message;
+            } else if (!searchQuery_.empty()) {
                 msg = "No matches for \"" + searchQuery_ + "\"";
             } else {
                 const char* filterLabel =
@@ -1327,8 +1427,20 @@ void PlayerWindow::drawFrame() {
                             centered(l2, ty + adv, metrics_.text.body, CLR_TEXT_ALBUM_TITLE, FontStyle::Bold);
                     }
                     // Artist sits in a fixed slot (below 2 title lines) so it
-                    // aligns across tiles whether titles wrapped or not.
-                    centered(truncateToWidth(canvas, alb.artist, textMaxW, metrics_.text.secondary, FontStyle::Italic),
+                    // aligns across tiles whether titles wrapped or not. The
+                    // release year rides on that same line rather than taking
+                    // a fourth: the tile's height is fixed by the layout, and
+                    // a year is short enough that truncation still lands in
+                    // the artist name, where an ellipsis is legible.
+                    // Untagged (year 0) simply omits it — no "Unknown", which
+                    // would be noise on every MP3 in a library nothing reads
+                    // ID3 for.
+                    std::string byline = alb.artist;
+                    if (int yr = facets::albumYear(alb)) {
+                        if (!byline.empty()) byline += " · ";
+                        byline += std::to_string(yr);
+                    }
+                    centered(truncateToWidth(canvas, byline, textMaxW, metrics_.text.secondary, FontStyle::Italic),
                              ty + adv * 2, metrics_.text.secondary, CLR_TEXT_SECONDARY, FontStyle::Italic);
                 }
             }
@@ -1460,7 +1572,15 @@ void PlayerWindow::drawFrame() {
                 maxRate = std::max(maxRate, t.sampleRate);
                 maxBit  = std::max(maxBit,  t.bitDepth);
             }
+            // The release year leads that same line. This page is where a
+            // record is actually read, and until now the year was stored and
+            // never shown anywhere in the app — which made "what era is this"
+            // unanswerable at a glance and searching by decade meaningless.
             std::string badge = formatQualityBadge(maxRate, maxBit);
+            if (int yr = facets::albumYear(album)) {
+                std::string y0 = std::to_string(yr);
+                badge = badge.empty() ? y0 : y0 + " · " + badge;
+            }
             if (!badge.empty()) {
                 canvas.textStyled(badge, colX, y, metrics_.text.caption,
                                   toColor(CLR_TEXT_DIM), FontStyle::Math);
@@ -2131,6 +2251,31 @@ void PlayerWindow::recalcLayout() {
     rcGrid_ = { sidebarW, 0, W, H - transportH };
     rcTrackPanel_ = trackPanelOpen_ ? rcGrid_ : LayoutRect{ 0, 0, 0, 0 };
 
+    // The search strip eats into the GRID only, and only when it has something
+    // to say: the chips currently applied, and — while the box has focus — the
+    // suggestions on offer. It is deliberately not part of rcTrackPanel_/the
+    // settings page: those are full pages the listener opened on purpose.
+    // Taking it off rcGrid_ here — after rcTrackPanel_ is assigned — means the
+    // draw loop, gridHitTest() and the scroll extent all pick the new top edge
+    // up on their own.
+    //
+    // It RESERVES space rather than floating over the grid, and that is not a
+    // stylistic choice: the renderer draws every rect (frameCurves_) before
+    // every glyph (msdfQuads_), so a panel painted last still comes out UNDER
+    // any text painted earlier. An overlay dropdown here renders as the
+    // sidebar's nav labels showing straight through it — seen, not guessed.
+    rcChips_ = { 0, 0, 0, 0 };
+    if (!settingsOpen_ && !trackPanelOpen_) {
+        int rowH = (int)metrics_.space(46.0f);
+        int rows = (searchChips_.empty() ? 0 : 1)
+                 + ((searchFocused_ && !searchSuggest_.empty()) ? 1 : 0);
+        if (rows > 0) {
+            int chipsH = rowH * rows + (int)metrics_.space(12.0f);
+            rcChips_ = { sidebarW, 0, W, chipsH };
+            rcGrid_.top += chipsH;
+        }
+    }
+
     // Grid columns — derived from a target tile pitch (~220px art + margins)
     // rather than a fixed column count, so density stays consistent across
     // window widths and panel open/close: more of the library visible at a
@@ -2770,10 +2915,16 @@ void PlayerWindow::rebuildGridIndices() {
         if (i < 0 || i >= (int)albums_.size()) continue;
         const Album& a = albums_[i];
         if ((int)a.releaseType != (int)albumTypeFilter_) continue;
+        // Both filters match on ANY member of the group. Without this,
+        // grouping would HIDE results: a track title that only exists on the
+        // variant sitting behind the tile would stop finding its own album.
+        if (!searchChips_.empty()) {
+            bool hit = false;
+            for (size_t mi = 0; !hit && mi < grp.members.size(); mi++)
+                hit = facets::matches(albums_[grp.members[mi]], searchChips_);
+            if (!hit) continue;
+        }
         if (!searchQuery_.empty()) {
-            // Search matches on ANY member. Without this, grouping would
-            // HIDE results: a track title that only exists on the variant
-            // sitting behind the tile would stop finding its own album.
             bool hit = false;
             for (size_t mi = 0; !hit && mi < grp.members.size(); mi++) {
                 const Album& m = albums_[grp.members[mi]];
@@ -2786,6 +2937,73 @@ void PlayerWindow::rebuildGridIndices() {
         }
         gridIndices_.push_back(i);
     }
+}
+
+// ── Guided search ───────────────────────────────────────────────────────────
+
+// The dropdown is a shortlist, not a catalogue. facets::suggest() already
+// sorts reachable-first then by result size, so the rows that survive the cut
+// are the ones worth offering; a longer list would cover the sidebar's nav.
+static constexpr size_t kMaxSuggestRows = 8;
+
+void PlayerWindow::refreshSuggestions() {
+    searchSuggest_.clear();
+    searchSuggestSel_ = -1;
+    if (!searchFocused_) return;
+    // Suggestions come from the WHOLE library, not from the section currently
+    // showing: asking for "1990s" while Singles is open is a question about
+    // the library, and offering only what this tab holds would hide most of
+    // the answer and report misleading counts.
+    searchSuggest_ = facets::suggest(albums_, searchQuery_, searchChips_);
+    if (searchSuggest_.size() > kMaxSuggestRows)
+        searchSuggest_.resize(kMaxSuggestRows);
+}
+
+void PlayerWindow::acceptSuggestion(int i) {
+    if (i < 0 || i >= (int)searchSuggest_.size()) return;
+    // A disabled row is offered so the listener can SEE that the value exists
+    // and learn what blocks it — accepting it would just empty the screen.
+    if (!searchSuggest_[i].enabled) return;
+    searchChips_.push_back(searchSuggest_[i].chip);
+    searchQuery_.clear();          // the text became a chip; the box starts over
+    refreshSuggestions();
+    rebuildGridIndices();
+    gridScrollY_ = 0;
+    recalcLayout();                // the chip strip changes the grid's top edge
+    invalidate();
+}
+
+void PlayerWindow::removeChip(int i) {
+    if (i < 0 || i >= (int)searchChips_.size()) return;
+    searchChips_.erase(searchChips_.begin() + i);
+    refreshSuggestions();
+    rebuildGridIndices();
+    gridScrollY_ = 0;
+    recalcLayout();
+    invalidate();
+}
+
+facets::EmptyReason PlayerWindow::searchEmptyReason() const {
+    facets::EmptyReason r = facets::explainEmpty(albums_, searchChips_);
+    if (r.empty) return r;
+
+    // The chips match something, yet the screen is empty — which normally
+    // means the free text is aiming at an ATTRIBUTE rather than a name.
+    // Typing "24" while 1990s is applied is a question about bit depth, and
+    // answering it with «No matches for "24"» is technically true and useless:
+    // the listener is left guessing whether they own no 24-bit at all.
+    //
+    // So if the suggestion row is already offering that very value and has it
+    // blocked, explain THAT instead — the same sentence the listener would
+    // have got by accepting it.
+    for (const facets::Suggestion& s : searchSuggest_) {
+        if (s.enabled) continue;
+        std::vector<facets::Chip> probe = searchChips_;
+        probe.push_back(s.chip);
+        facets::EmptyReason why = facets::explainEmpty(albums_, probe);
+        if (why.empty) return why;
+    }
+    return {};
 }
 
 int PlayerWindow::gridHitTest(int x, int y) const {
@@ -2908,6 +3126,20 @@ void PlayerWindow::onMouseMove(int x, int y) {
         mouseTracking_ = true;
     }
 #endif
+
+    // Chip / suggestion hover. Both lists are small and only exist while the
+    // search is in use, so this runs before the rest rather than being folded
+    // into a section-specific branch.
+    {
+        int oldChip = hoverChipIdx_, oldSugg = hoverSuggestIdx_;
+        hoverChipIdx_ = hoverSuggestIdx_ = -1;
+        for (size_t i = 0; i < suggestRects_.size(); i++)
+            if (ptInRect(suggestRects_[i], x, y)) { hoverSuggestIdx_ = (int)i; break; }
+        if (hoverSuggestIdx_ < 0)
+            for (size_t i = 0; i < chipRects_.size(); i++)
+                if (ptInRect(chipRects_[i], x, y)) { hoverChipIdx_ = (int)i; break; }
+        if (oldChip != hoverChipIdx_ || oldSugg != hoverSuggestIdx_) invalidate();
+    }
 
     if (uiMode_ == UiMode::Essential) {
         int oldHoverEssential = hoverEssentialBtn_;
@@ -3042,12 +3274,32 @@ void PlayerWindow::onLButtonDown(int x, int y) {
         return;
     }
 
+    // The suggestion dropdown is tested FIRST: it floats over the nav rows,
+    // so without this a click meant for "1990s" would land on whichever
+    // section happens to sit underneath and change the view instead.
+    for (size_t i = 0; i < suggestRects_.size(); i++) {
+        if (ptInRect(suggestRects_[i], x, y)) { acceptSuggestion((int)i); return; }
+    }
+    // Clicking a chip takes it back — the query is a row of undoable choices.
+    for (size_t i = 0; i < chipRects_.size(); i++) {
+        if (ptInRect(chipRects_[i], x, y)) { removeChip((int)i); return; }
+    }
+
     // Search box focus: clicking it starts typing; clicking anywhere else
     // releases focus (the query itself stays, still filtering).
     {
         bool wasFocused = searchFocused_;
         searchFocused_ = ptInRect(rcSearch_, x, y) != 0;
-        if (searchFocused_ != wasFocused) invalidate();
+        if (searchFocused_ != wasFocused) {
+            // Focus decides whether the suggestion row exists at all, so the
+            // list is rebuilt on both edges: filled on focus (offering the
+            // whole menu before a single letter is typed), dropped on blur.
+            // recalcLayout() follows because that row occupies real space —
+            // the grid's top edge moves with it.
+            refreshSuggestions();
+            recalcLayout();
+            invalidate();
+        }
         if (searchFocused_) return;
     }
 
@@ -5337,11 +5589,11 @@ void PlayerWindow::onPlay(StartCause cause) {
         // outgoing track finished; it was not replaced.
         flushTrackStats(EndCause::Natural);
         cause = StartCause::Gapless;
-    } else if (pendingResumeMs_ > 0 && t.filePath == pendingResumePath_) {
-        // Restored from last session — see the seek applied at the end of
-        // this function, which is what clears the pending fields.
-        cause = StartCause::Resume;
     }
+    // StartCause::Resume has no producer any more (the resume it recorded was
+    // removed — see create()). The value stays in the enum: play_events rows
+    // already on disk carry it, and renumbering would relabel every one of
+    // them. Same standing as StartCause::Shuffle, which has never had one.
     // A playlist overrides all of the above, Manual included. What matters
     // downstream is only that the play came OUT of a playlist: picking a row,
     // pressing Next in one, or shuffling it are all the same fact, and none of
@@ -5656,16 +5908,10 @@ void PlayerWindow::onPlay(StartCause cause) {
     startGaplessCoordinator(callbackI32, capturedOutSr, capturedDacCh);
     host_->startTimer(TimerId::SeekUpdate, 250);
 
-    // Resume from the previous session, once, and only into the very file the
-    // position was saved for — matched by path so picking any other track
-    // starts at zero as usual. Fires here rather than earlier because onSeek()
-    // needs the decode thread and the output already running.
-    if (pendingResumeMs_ > 0 && t.filePath == pendingResumePath_) {
-        int resumeMs = pendingResumeMs_;
-        pendingResumeMs_ = 0;
-        pendingResumePath_.clear();
-        onSeek(resumeMs);
-    }
+    // Nothing seeks here. Every track starts at zero, including the one that
+    // was playing when the app last closed — see create(). onSeek() survives
+    // for onPrev()'s restart-this-track path, which is a return to the
+    // beginning, not a jump into the middle.
 }
 
 void PlayerWindow::onStop() {
@@ -6049,16 +6295,24 @@ void PlayerWindow::flushTrackStats(EndCause cause) {
     statsLastPosMs_  = -1;
 }
 
-// Snapshot for resume-on-launch. Volume is written as unity: this player has
-// no volume control (the DAC owns level), so the column is reserved rather
-// than guessed — see playback_state in db.cpp's SCHEMA.
+// Snapshot of WHICH file was last playing — never of how far into it.
+//
+// positionMs is written as 0 on purpose. Storing the offset is what made
+// resume-on-launch possible, and this player does not resume: a record is
+// heard from its beginning, because that is how its development was built.
+// The column stays (rewriting the schema to delete it would buy nothing) and
+// nothing reads it.
+//
+// Volume is written as unity for the same kind of reason: this player has no
+// volume control, the DAC owns level, so the column is reserved rather than
+// guessed — see playback_state in db.cpp's SCHEMA.
 void PlayerWindow::savePlaybackStateNow() {
     if (displayAlbum_ < 0 || displayAlbum_ >= (int)albums_.size()) return;
     const auto& tracks = albums_[displayAlbum_].tracks;
     if (displayTrack_ < 0 || displayTrack_ >= (int)tracks.size()) return;
     PlaybackState st;
     st.filePath   = tracks[displayTrack_].filePath;
-    st.positionMs = seekPosMs_ > 0 ? seekPosMs_ : 0;
+    st.positionMs = 0;
     st.volume     = 1.0f;
     db_.savePlaybackState(st);
 }
@@ -6358,7 +6612,22 @@ void PlayerWindow::onHotkey(int hotkeyId) {
 void PlayerWindow::onCharPortable(uint32_t codepoint) {
     if (activePanel_ != SettingsPanel::None) { onPanelChar(codepoint); return; }
     if (!searchFocused_) return;
+    // Tab and Enter accept the highlighted suggestion (the first row when
+    // nothing is highlighted, which is the one the ranking put there). Both
+    // keys, because the box behaves like a completion field and there is no
+    // reason to make the listener remember which of the two this one wants.
+    if (codepoint == 0x09 || codepoint == 0x0D) {
+        acceptSuggestion(searchSuggestSel_ >= 0 ? searchSuggestSel_ : 0);
+        return;
+    }
     if (codepoint == 0x08) {  // backspace: pop one UTF-8 codepoint
+        // On an empty box, backspace takes back the last CHIP whole. A chip is
+        // one indivisible choice — deleting it letter by letter would mean
+        // passing through half-values that were never valid queries.
+        if (searchQuery_.empty()) {
+            if (!searchChips_.empty()) removeChip((int)searchChips_.size() - 1);
+            return;
+        }
         while (!searchQuery_.empty() && (searchQuery_.back() & 0xC0) == 0x80)
             searchQuery_.pop_back();
         if (!searchQuery_.empty()) searchQuery_.pop_back();
@@ -6371,6 +6640,7 @@ void PlayerWindow::onCharPortable(uint32_t codepoint) {
     } else {
         return;  // control chars: consumed, no query change
     }
+    refreshSuggestions();
     rebuildGridIndices();
     gridScrollY_ = 0;
     recalcLayout();
@@ -6670,6 +6940,9 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
         plKind_         = PlaylistKind::None;
         searchFocused_  = false;
         searchQuery_.clear();
+        searchChips_.clear();
+        searchSuggest_.clear();
+        searchSuggestSel_ = -1;
         rebuildGridIndices();
         recalcLayout();
     };
@@ -6824,6 +7097,23 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
     if (state == "40-search") {
         click(rcSearch_);
         for (char c : std::string("love")) onCharPortable((uint32_t)c);
+        return true;
+    }
+    // Both guided-search states are reached through the REAL input path —
+    // click, type, press Tab — rather than by assigning to searchChips_. A
+    // capture that set the state directly could not catch the suggestion
+    // ranking or the accept path breaking.
+    if (state == "41-search-suggest") {
+        click(rcSearch_);
+        for (char c : std::string("199")) onCharPortable((uint32_t)c);
+        return true;
+    }
+    if (state == "42-search-chips") {
+        click(rcSearch_);
+        for (char c : std::string("199")) onCharPortable((uint32_t)c);
+        onCharPortable(0x09);                       // Tab: accept the top row
+        for (char c : std::string("24")) onCharPortable((uint32_t)c);
+        onCharPortable(0x09);
         return true;
     }
 

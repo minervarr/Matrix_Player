@@ -8,6 +8,7 @@
 add_library(matrix_core STATIC
     src/library.cpp
     src/variants.cpp
+    src/facets.cpp
     src/db.cpp
     src/db_stats.cpp
     src/stats.cpp
@@ -92,6 +93,21 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         target_compile_options(stats_test PRIVATE /W3 /utf-8)
     else()
         target_compile_options(stats_test PRIVATE -Wall)
+    endif()
+
+    # ── facets_test ────────────────────────────────────────────────────────
+    # The guided search engine (chips, suggestions, counts, the two kinds of
+    # "zero results"). Links the REAL src/facets.cpp and NOTHING else — not
+    # even variants.cpp: facets.cpp reads Album/Track as plain data and calls
+    # no other translation unit, which is what keeps the search usable from
+    # the Android build unchanged. If this target ever needs another source,
+    # the search picked up a dependency it should not have.
+    add_executable(facets_test tests/facets_test.cc src/facets.cpp)
+    target_include_directories(facets_test PRIVATE include)
+    if(MSVC)
+        target_compile_options(facets_test PRIVATE /W3 /utf-8)
+    else()
+        target_compile_options(facets_test PRIVATE -Wall)
     endif()
 
     # ── matrix_fixture_gen ────────────────────────────────────────────────

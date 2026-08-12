@@ -149,6 +149,8 @@ const char* kStates[] = {
     "39-playlists-never-heard",
     "3a-playlists-row-hover",
     "40-search",
+    "41-search-suggest",
+    "42-search-chips",
 };
 
 } // namespace
