@@ -196,6 +196,26 @@ matrix_player/
                                   rail_layout_test asserts every anchor in all states,
                                   including that the two orientations ARE that rotation
                                   of each other, rect by rect
+      bar_a.hh/.cc              — bar A's DRAWING and HIT-TESTING, from plain values.
+                                  SHARED WITH ANDROID: android/src/android_player_view.cc
+                                  fills the same BarAModel and gets the same rail, so the
+                                  phone shows the app's real navigation bar rather than a
+                                  lookalike. It takes a Canvas and a struct and nothing
+                                  else. The rule is checkable on its INCLUDES (the prose mentions
+                                  player_view.cc on purpose, so a grep over the whole
+                                  file would only ever match itself) and must stay empty:
+                                    grep '^#include' gui/src/bar_a.* | grep -E 'player_view|host|core/db|audio_output'
+                                  Anything it would need from those is APP STATE and
+                                  belongs in the caller, arriving as a value. BarAItem is
+                                  deliberately NOT PlayerWindow's integer kSidebar*Hit
+                                  vocabulary, whose low end IS AlbumTypeFilter — an enum
+                                  frozen by the albums table and meaningless to a layer
+                                  that draws letters; PlayerWindow translates at its own
+                                  edge (sidebarHitToPick/pickToSidebarHit). drawSearchField
+                                  lives here too, because bar A's search and the EQ panel's
+                                  must not drift apart. The extraction was verified by
+                                  byte-comparing all 20 ui_capture states in BOTH
+                                  orientations against the previous build: identical
       ui_fonts.hh               — the ONE place the UI face paths and the atlas cache
                                   name live. PlayerWindow and ArtWindow share that cache,
                                   so both must agree on it; they used to keep duplicate
@@ -1040,10 +1060,15 @@ this turns into a mess:
    *primitives*, not code: the same `Canvas`, the same `theme.hh` and
    `ui_metrics.hh`, unmodified — plus, since the orientation work,
    `ui_orientation.cc` and `rail_layout.cc`, which are pure enough to cross
-   with no shim. What has NOT crossed yet is the drawing: bar A and bar B still
-   live in `player_view.cc`, so the phone still shows the flat track list and
-   not the desktop's frame. Closing that gap means lifting the two bars behind
-   a plain-data view model, not widening `Host`.
+   with no shim, **and `bar_a.cc`, which is the drawing itself**. Bar A now
+   crosses whole: `AndroidPlayerView::recalcLayout()` fills a `BarAModel` and
+   calls the same `drawBarA()`/`barAHitTest()` the desktop calls. That was done
+   by lifting the two methods out of `PlayerWindow` behind a plain-data view
+   model — NOT by widening `Host`, which is the boundary this rule protects.
+   **Bar B has not crossed**: the transport still lives in `player_view.cc`,
+   so the phone draws bar A over the flat track list and no transport bar.
+   Closing that gap is the same move again (`bar_b.hh/.cc` over a `BarBModel`),
+   and it is the one piece of the frame still owned by one platform.
 2. **What it reuses, it reuses UNCHANGED** — `matrix_core` (`scanLibrary`,
    `Decoder`, and `facets` when guided search reaches the phone) and
    `vk_canvas_core`, both added by `add_subdirectory` straight from this tree.

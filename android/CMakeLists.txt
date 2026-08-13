@@ -150,6 +150,12 @@ add_library(matrix_player_android SHARED
     # and the NDK, which is where non-portable code that GCC accepts shows up.
     ${MATRIX_GUI_SRC}/ui_orientation.cc
     ${MATRIX_GUI_SRC}/rail_layout.cc
+    # And the bar itself. This is the whole point of the two files above: bar A
+    # is DRAWN and HIT-TESTED here by the same code the desktop runs, from a
+    # struct of plain values, so the phone shows the app's real navigation rail
+    # instead of a lookalike. It compiles under the NDK because it takes a
+    # Canvas and a BarAModel and nothing else -- no Host, no PlayerWindow, no Db.
+    ${MATRIX_GUI_SRC}/bar_a.cc
     ${NATIVE_APP_GLUE}/android_native_app_glue.c)
 
 target_include_directories(matrix_player_android PRIVATE

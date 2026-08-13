@@ -8,6 +8,7 @@
 #include "layout.hh"    // vk_canvas: clampScroll
 #include "theme.hh"     // gui/src: CLR_* (ColorRef)
 #include "ui_metrics.hh"  // gui/src: computeUiMetrics
+#include "bar_a.hh"       // gui/src: drawBarA/barAHitTest -- the SAME bar the desktop draws
 
 #define LOG_TAG "AndroidPlayerView"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -16,12 +17,11 @@
 namespace {
 
 // theme.hh's CLR_* constants are ColorRef (a packed 0x00BBGGRR uint32_t, the
-// portable COLORREF replacement — see gui/src/color.hh) — a different
+// portable COLORREF replacement -- see gui/src/color.hh) -- a different
 // representation from vk_canvas's own Color{r,g,b,a} floats Canvas actually
-// draws with. No existing bridge between the two (desktop's player_view.cc
-// draws through Canvas too, so this conversion presumably lives there or
-// inline at each call site — this is the Android equivalent, kept local
-// since it's the only file here that needs it).
+// draws with. player_view.cc and bar_a.cc each keep the same three lines,
+// file-static, for the same reason: a shared bridge would have to live in
+// color.hh, and that header is deliberately free of Canvas's Rect/Color.
 Color toColor(ColorRef c, float alpha = 1.0f) {
     return Color{GetRValue(c) / 255.0f, GetGValue(c) / 255.0f, GetBValue(c) / 255.0f, alpha};
 }
@@ -84,6 +84,69 @@ float AndroidPlayerView::rowHeight() const {
     return m.space(72.0f);
 }
 
+// ── The frame ────────────────────────────────────────────────────────────────
+//
+// The desktop's two-bar layout, on a phone. Bar A is a bar of one thickness at
+// one edge; the content is what is left. That thickness is space(130) -- the
+// same value PlayerWindow uses, from the same ui_metrics.hh, so the two are not
+// merely similar sizes.
+//
+// Orientation is DERIVED from the window's own shape and never asked of the OS,
+// which is exactly why it works here unchanged: a phone rotating produces an
+// ordinary resize (the manifest declares configChanges=orientation and locks no
+// screenOrientation), and a tablet held wide gets the horizontal frame for the
+// same reason a desktop window does.
+//
+// Everything is computed inside the SAFE AREA, so bar A never slides under a
+// display cutout or the gesture bar. That is the one thing the desktop does not
+// have to think about, and it is why these functions take a rect rather than a
+// size.
+void AndroidPlayerView::recalcLayout(float screenW, float screenH, float insetTop,
+                                     float insetBottom, float insetLeft,
+                                     float insetRight) {
+    UiMetrics m = computeUiMetrics(std::min(screenW, screenH));
+
+    const LayoutRect safe = {
+        (int)insetLeft, (int)insetTop,
+        (int)(screenW - insetRight), (int)(screenH - insetBottom)
+    };
+    orient_ = autoOrientationFor(safe.right - safe.left, safe.bottom - safe.top);
+
+    const int thick = (int)m.space(130.0f);
+    LayoutRect barA;
+    if (orient_ == UiOrientation::Vertical) {
+        barA       = { safe.left, safe.top, safe.right, safe.top + thick };
+        rcContent_ = { safe.left, safe.top + thick, safe.right, safe.bottom };
+    } else {
+        barA       = { safe.left, safe.top, safe.left + thick, safe.bottom };
+        rcContent_ = { safe.left + thick, safe.top, safe.right, safe.bottom };
+    }
+
+    RailInput ri;
+    ri.bar    = barA;
+    ri.orient = orient_;
+    // Bit-perfect as far as bar A is concerned: this slice has no EQ, so there
+    // is nothing for an AutoEQ box to pick a profile FOR. The letter group
+    // CENTRES in the space instead of pegging to the far end -- the same state
+    // the desktop shows in bit-perfect, reached the same way, not special-cased
+    // for Android.
+    ri.bitPerfect  = true;
+    ri.cell        = thick;
+    ri.eqBoxExtent = 0;
+    ri.pad         = (int)m.space(10.0f);
+    ri.gap         = (int)m.space(16.0f);
+
+    barA_               = BarAModel{};
+    barA_.bar           = barA;
+    barA_.orient        = orient_;
+    barA_.rail          = computeRailLayout(ri);
+    barA_.metrics       = m;
+    barA_.activeLetter  = activeLetter_;
+    barA_.playlistsActive = (activeLetter_ == kRailPlaylists);
+    // hovered stays None. There is no pointer on a phone, and the shared code
+    // never asks which platform it is on -- it just draws no hover.
+}
+
 void AndroidPlayerView::draw(Canvas& canvas, float screenW, float screenH,
                              float insetTop, float insetBottom,
                              float insetLeft, float insetRight) {
@@ -91,15 +154,16 @@ void AndroidPlayerView::draw(Canvas& canvas, float screenW, float screenH,
     lastScreenH_ = screenH;
 
     canvas.clear(toColor(CLR_BG_MAIN));
+    recalcLayout(screenW, screenH, insetTop, insetBottom, insetLeft, insetRight);
 
-    UiMetrics m = computeUiMetrics(std::min(screenW, screenH));
+    UiMetrics m = barA_.metrics;
     const float rowH = m.space(72.0f);
     const float pad  = m.space(SP_MD);
 
-    const float top    = insetTop + pad;
-    const float bottom = screenH - insetBottom - pad;
-    const float left   = insetLeft + pad;
-    const float right  = screenW - insetRight - pad;
+    const float top    = (float)rcContent_.top + pad;
+    const float bottom = (float)rcContent_.bottom - pad;
+    const float left   = (float)rcContent_.left + pad;
+    const float right  = (float)rcContent_.right - pad;
 
     lastTop_  = top;
     lastLeft_ = left;
@@ -129,10 +193,17 @@ void AndroidPlayerView::draw(Canvas& canvas, float screenW, float screenH,
     }
 
     canvas.clearClip();
+
+    // Bar A last, and OUTSIDE the clip: it is the frame, not content in it.
+    drawBarA(canvas, barA_);
 }
 
 void AndroidPlayerView::onTouchDown(float x, float y) {
-    (void)x;
+    // A touch that starts in bar A belongs to bar A, and must NOT also arm a
+    // scroll of the list behind it -- otherwise dragging off a letter scrolls
+    // the tracks, which is not what any of it looked like it would do.
+    touchInBarA_ = (barAHitTest(barA_, (int)x, (int)y).item != BarAItem::None);
+    touchStartX_       = x;
     touchStartY_       = y;
     touchStartScrollY_ = scrollY_;
     touchIsDrag_       = false;
@@ -140,18 +211,32 @@ void AndroidPlayerView::onTouchDown(float x, float y) {
 
 void AndroidPlayerView::onTouchMove(float x, float y) {
     (void)x;
+    if (touchInBarA_) return;
     const float dy = y - touchStartY_;
     if (!touchIsDrag_ && std::fabs(dy) > kTouchSlopPx) touchIsDrag_ = true;
     if (touchIsDrag_) {
         const float contentH = static_cast<float>(tracks_.size()) * rowHeight();
-        const float viewH    = lastScreenH_;  // clamp against the full screen height —
-                                              // a generous bound; exact viewport height
-                                              // isn't tracked between frames here.
+        // The CONTENT rect's extent, not the screen's. Clamping against the
+        // whole screen let the list scroll past its end by exactly bar A's
+        // thickness plus the insets -- a small, permanent overscroll that a
+        // short library made obvious and a long one hid.
+        const float viewH    = (float)(rcContent_.bottom - rcContent_.top);
         scrollY_ = clampScroll(touchStartScrollY_ - dy, contentH, viewH);
     }
 }
 
 void AndroidPlayerView::onTouchUp(float x, float y) {
+    if (touchInBarA_) {
+        // Released on the same item it started on, the way a button works
+        // everywhere -- a finger that slid off is a cancel, not a press.
+        const BarAPick down = barAHitTest(barA_, (int)touchStartX_, (int)touchStartY_);
+        const BarAPick up   = barAHitTest(barA_, (int)x, (int)y);
+        if (down == up && up.item == BarAItem::Filter) activeLetter_ = up.index;
+        else if (down == up && up.item == BarAItem::Playlists) activeLetter_ = kRailPlaylists;
+        touchInBarA_ = false;
+        touchIsDrag_ = false;
+        return;
+    }
     (void)x;
     if (!touchIsDrag_) {
         const float rowH = rowHeight();

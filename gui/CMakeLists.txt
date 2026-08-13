@@ -30,6 +30,7 @@ set(MATRIX_PLAYER_PORTABLE_SOURCES
     src/ui_metrics.cc
     src/ui_orientation.cc
     src/rail_layout.cc
+    src/bar_a.cc
     src/ui_icons.cc
     src/ui_icons_draw.cc
     src/panels/settings_panels.cc)
@@ -351,6 +352,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
             src/art_view.cc
             src/ui_metrics.cc
             src/ui_orientation.cc
+            src/bar_a.cc
             src/rail_layout.cc
             src/ui_icons.cc
             src/ui_icons_draw.cc

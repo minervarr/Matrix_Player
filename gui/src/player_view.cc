@@ -4,6 +4,7 @@
 #include "log_util.h"
 #include "ui_fonts.hh"
 #include "ui_icons.hh"
+#include "bar_a.hh"
 #include "art_texture.hh"
 #include "img_decode.hh"
 #include "text_util.hh"
@@ -159,22 +160,8 @@ static widgets::ScrollListStyle matrixListStyle() {
     return s;
 }
 
-// One text-input field, shared by the sidebar album search and the EQ-profile
-// search: CLR_INPUT_BG fill at the uniform radius, a bottom underline that
-// turns accent on focus, dim placeholder when empty+unfocused, and a caret
-// while focused. Keeps both searches visually identical (see UI_DESIGN_SYSTEM).
-static void drawSearchField(Canvas& canvas, const LayoutRect& rc, const std::string& text,
-                            bool focused, const char* placeholder, float textSize) {
-    Rect s = toRect(rc);
-    canvas.rect(s.x, s.y, s.w, s.h, toColor(CLR_INPUT_BG), UI_CORNER_RADIUS);
-    canvas.rect(s.x, s.y + s.h - 1, s.w, 1, toColor(focused ? CLR_ACCENT : CLR_SEPARATOR));
-    bool empty = text.empty() && !focused;
-    std::string shown = empty ? placeholder : text;
-    ColorRef clr = empty ? CLR_TEXT_DIM : CLR_TEXT_PRIMARY;
-    std::string fit = truncateToWidth(canvas, shown, s.w - 16 - 8, textSize, FontStyle::Roman);
-    if (focused) fit += "|";
-    canvas.text(fit, s.x + 8, s.y + s.h * 0.5f - textSize * 0.5f, textSize, toColor(clr));
-}
+// drawSearchField() moved to bar_a.cc: bar A's search box needs it, and a
+// second copy is how two search fields start looking different.
 
 // truncateToWidth / splitTwoLines / wrapText / stripHtmlToPlain moved into
 // vk_canvas (core/text_util.hh) so other apps can reuse them.
@@ -1008,7 +995,7 @@ void PlayerWindow::drawFrame() {
     // background image layer. Each panel below fills only its own rect.
 
 
-    drawBarA(canvas);
+    drawBarA(canvas, barAModel());
 
     // ── Main content: album grid, settings page, or (below) the full-page
     // album view that replaces the grid while an album is focused ─────────
@@ -3015,31 +3002,12 @@ int PlayerWindow::variantTileHitTest(int x, int y) const {
     return -1;
 }
 
+// One hit-test, shared with Android (bar_a.cc), translated back into the
+// integer vocabulary the rest of this file already speaks. The rects and the
+// order they are tested in live beside the drawing that used them, which is
+// what stops the two from disagreeing about where row 3 is.
 int PlayerWindow::sidebarHitTest(int x, int y) const {
-    if (ptInRect(rcNavAlbum_, x, y))  return (int)AlbumTypeFilter::Album;
-    if (ptInRect(rcNavEp_, x, y))     return (int)AlbumTypeFilter::Ep;
-    if (ptInRect(rcNavSingle_, x, y)) return (int)AlbumTypeFilter::Single;
-    if (ptInRect(rcNavCompilation_, x, y)) return (int)AlbumTypeFilter::Compilation;
-    if (ptInRect(rcNavLive_, x, y))   return (int)AlbumTypeFilter::Live;
-    if (ptInRect(rcNavRemix_, x, y))  return (int)AlbumTypeFilter::Remix;
-    if (ptInRect(rcNavPlaylists_, x, y)) return kSidebarPlaylistsHit;
-    if (ptInRect(rcNavSettings_, x, y)) return kSidebarSettingsHit;
-    // The unfurled AutoEQ list is tested FIRST, before the letters it floats
-    // over -- otherwise a click meant for a profile would land on whichever
-    // filter happens to sit underneath and change the section instead. Same
-    // rule, and same reason, as the search suggestions in onLButtonDown().
-    for (int i = 0; i < (int)hpRows_.size(); i++)
-        if (ptInRect(hpRows_[i].rc, x, y)) return kSidebarHpRowBase + i;
-    if (ptInRect(hpMoreRc_, x, y)) return kSidebarHpMoreHit;
-    if (ptInRect(hpNoneRc_, x, y)) return kSidebarHpNoneHit;
-    if (ptInRect(eqNameRc_, x, y)) return kSidebarEqBoxHit;
-    // The search cell is one rect that means two things depending on state:
-    // the letter that OPENS search, or the field it turns into. Only the
-    // former is a click target -- the field handles its own focus.
-    if (ptInRect(rail_.close, x, y))  return kSidebarSearchCloseHit;
-    if (ptInRect(rail_.search, x, y))
-        return searchOpen_ ? -1 : kSidebarSearchHit;
-    return -1;
+    return pickToSidebarHit(barAHitTest(barAModel(), x, y));
 }
 
 int PlayerWindow::transportBtnHitTest(int x, int y) const {
@@ -5286,238 +5254,120 @@ void PlayerWindow::closeSearch() {
     invalidate();
 }
 
-// ── Bar A: the navigation rail ───────────────────────────────────────────────
+// ── Bar A: the navigation rail ───────────────────────────────────────────
 //
-// Seven filter letters, the search letter, Settings, and the AutoEQ box.
-// Geometry comes entirely from computeRailLayout() (rail_layout.hh) — nothing
-// here decides where anything goes, which is what lets rail_layout_test pin
-// every anchor without a window.
+// The drawing and the hit-testing both live in bar_a.cc now, and take plain
+// values. This is the only thing left here: turning THIS app's state into those
+// values. Android builds the same struct from its own state and gets the same
+// bar -- which was the point, and which two methods reading fifteen members
+// directly could never have delivered.
 //
-// THE LETTERS ARE NOT ROTATED in the horizontal layout, and that is deliberate
-// even though everything else in the frame is. A single capital reads the same
-// upright at any orientation, and turning it on its side would cost legibility
-// to buy a consistency nobody can see. Rotation is for text whose LENGTH runs
-// along the bar — the AutoEQ profile name, the now-playing title — where
-// upright would not fit at all.
-//
-// Colour is the text-color ladder from theme.hh, unchanged: filters PRIMARY
-// (242), search SECONDARY (170), Settings DIM (128, the WCAG floor). That
-// ladder is what separates the three rows that all say "S" — Singles, Search,
-// Settings. Position is what teaches them; colour only confirms. There is no
-// room for a fourth S: see theme.hh's own comment on the floor.
-void PlayerWindow::drawBarA(Canvas& canvas) {
-    Rect bar = toRect(rcBarA_);
-    if (bar.w <= 0 || bar.h <= 0) return;
+// Geometry still comes entirely from computeRailLayout() (rail_layout.hh), and
+// the AutoEQ hit model still comes from recalcLayout(). Nothing below decides
+// where anything goes.
+BarAModel PlayerWindow::barAModel() const {
+    BarAModel m;
+    m.bar     = rcBarA_;
+    m.orient  = curOrientation_;
+    m.rail    = rail_;
+    m.metrics = metrics_;
 
-    canvas.rect(bar.x, bar.y, bar.w, bar.h, toColor(CLR_BG_SIDEBAR));
+    m.searchOpen     = searchOpen_;
+    m.searchFocused  = searchFocused_;
+    m.eqListOpen     = eqListOpen_;
+    m.settingsActive = settingsOpen_;
+    m.searchQuery    = searchQuery_;
 
-    // The hairline sits on the bar's INNER edge — the one facing the content —
-    // which is the bottom in Vertical and the right in Horizontal.
-    const float hair = metrics_.stroke(1.0f);
-    if (curOrientation_ == UiOrientation::Vertical)
-        canvas.rect(bar.x, bar.y + bar.h - hair, bar.w, hair, toColor(CLR_SEPARATOR));
-    else
-        canvas.rect(bar.x + bar.w - hair, bar.y, hair, bar.h, toColor(CLR_SEPARATOR));
-
-    // One cell: optional selection/hover treatment, then a centred glyph.
-    // Same selection family as the rows this replaces (accent tint + a 3px
-    // accent bar, hover a neutral grey) so nothing about what "selected" looks
-    // like changed — only the shape it is drawn in.
-    auto cell = [&](const LayoutRect& lr, const char* glyph, ColorRef base,
-                    bool active, bool hovered) {
-        if (lr.right <= lr.left) return;
-        Rect r = toRect(lr);
-        if (active) {
-            canvas.rect(r.x, r.y, r.w, r.h,
-                        toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
-            // The accent bar goes on the inner edge, so it points at the
-            // content it is filtering — the rotated equivalent of the left bar
-            // the sidebar rows used to carry.
-            const float t = metrics_.stroke(3.0f);
-            if (curOrientation_ == UiOrientation::Vertical)
-                canvas.rect(r.x, r.y + r.h - t, r.w, t, toColor(CLR_ACCENT));
-            else
-                canvas.rect(r.x + r.w - t, r.y, t, r.h, toColor(CLR_ACCENT));
-        } else if (hovered) {
-            canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+    // The rail's reading order is NOT AlbumTypeFilter's order (that enum is
+    // frozen by the albums table), so the translation happens here, at the
+    // app's own edge, and the shared layer never sees a release type.
+    m.activeLetter = -1;
+    if (!settingsOpen_ && navSection_ == NavSection::Albums) {
+        switch (albumTypeFilter_) {
+            case AlbumTypeFilter::Album:       m.activeLetter = kRailAlbums;       break;
+            case AlbumTypeFilter::Ep:          m.activeLetter = kRailEps;          break;
+            case AlbumTypeFilter::Single:      m.activeLetter = kRailSingles;      break;
+            case AlbumTypeFilter::Compilation: m.activeLetter = kRailCompilations; break;
+            case AlbumTypeFilter::Live:        m.activeLetter = kRailLive;         break;
+            case AlbumTypeFilter::Remix:       m.activeLetter = kRailRemixes;      break;
         }
-        const float sz = metrics_.text.title;
-        canvas.textCentered(glyph, r.x + r.w * 0.5f, r.y + r.h * 0.5f - sz * 0.5f,
-                            sz, toColor(active ? CLR_ACCENT : base));
-    };
-
-    // ── The seven filters ───────────────────────────────────────────────────
-    // Initials, in the reading order rail_layout.hh fixes: original material
-    // by descending size (Albums, EPs, Singles), then the artist's own
-    // material re-presented (Compilations, Live), then other people's
-    // reworkings of it (Remixes), then Playlists. NOT the AlbumTypeFilter
-    // enum's order, which is frozen by the albums table and means nothing on
-    // screen.
-    if (!searchOpen_ && !eqListOpen_) {
-        struct L { const char* g; int rail; AlbumTypeFilter f; };
-        static const L kFilters[] = {
-            { "A", kRailAlbums,       AlbumTypeFilter::Album       },
-            { "E", kRailEps,          AlbumTypeFilter::Ep          },
-            { "S", kRailSingles,      AlbumTypeFilter::Single      },
-            { "C", kRailCompilations, AlbumTypeFilter::Compilation },
-            { "L", kRailLive,         AlbumTypeFilter::Live        },
-            { "R", kRailRemixes,      AlbumTypeFilter::Remix       },
-        };
-        for (const L& it : kFilters) {
-            const bool active = (!settingsOpen_ && navSection_ == NavSection::Albums &&
-                                 albumTypeFilter_ == it.f);
-            cell(rail_.letters[it.rail], it.g, CLR_TEXT_PRIMARY, active,
-                 hoverSidebarItem_ == (int)it.f && !active);
-        }
-        const bool plActive = (!settingsOpen_ && navSection_ == NavSection::Playlists);
-        cell(rail_.letters[kRailPlaylists], "P", CLR_TEXT_PRIMARY, plActive,
-             hoverSidebarItem_ == kSidebarPlaylistsHit && !plActive);
-
-        // Search: one step down the ladder from the filters. It is about the
-        // music, so it outranks Settings; it is not one of the sections, so it
-        // does not sit level with them.
-        cell(rail_.search, "S", CLR_TEXT_SECONDARY, searchOpen_,
-             hoverSidebarItem_ == kSidebarSearchHit);
-    } else if (searchOpen_) {
-        // Open search: the field spans the middle, with a close cell at the
-        // far end. The filter letters and the AutoEQ box are both gone — see
-        // computeRailLayout(), which is why this state looks identical in
-        // bit-perfect and in Reference EQ.
-        drawSearchField(canvas, rail_.search, searchQuery_, searchFocused_,
-                        "Search your library", metrics_.text.secondary);
-        cell(rail_.close, "\xC3\x97", CLR_TEXT_SECONDARY, false,
-             hoverSidebarItem_ == kSidebarSearchCloseHit);
     }
+    m.playlistsActive = (!settingsOpen_ && navSection_ == NavSection::Playlists);
 
-    // ── Settings ────────────────────────────────────────────────────────────
-    // Pinned at the near end in every state, DIM at the bottom of the ladder.
-    // It does not move when search opens: interrupting a filter to change a
-    // setting must not cost what was typed.
-    cell(rail_.settings, "S", CLR_TEXT_DIM, settingsOpen_,
-         hoverSidebarItem_ == kSidebarSettingsHit && !settingsOpen_);
+    m.eqNone      = eqCurrent_.name.empty();
+    m.eqTentative = eqCurrentTentative_;
+    m.eqName      = eqCurrent_.name;
 
-    drawEqBox(canvas);
-}
-
-// ── The AutoEQ quick-switcher ────────────────────────────────────────────────
-//
-// A bounded region at bar A's Settings end, holding exactly two things: a
-// discreet X meaning NO PROFILE — unlabelled, because in a box that is plainly
-// about AutoEQ it reads on its own — and the active profile's name. Touching
-// the name UNFURLS the saved list from the box to the far end of the bar.
-//
-// This replaces drawHeadphoneBlock()'s three clamped rows. That block existed
-// inside a height budget (kEqHpMaxRows, listCapacity, "drop rows from the LIST
-// rather than hide the block") only because the sidebar had three rows' worth
-// of space below Settings. An unfurled list has no such ceiling, so the saved
-// list is shown WHOLE and the whole budget is gone. What is NOT gone is
-// anything deciding which profiles exist: the 60-second credit gate,
-// eqCreditBaselineMs_, pinning, and clearEqProfile()'s deletion of the
-// "global" row all still stand — those are a different question.
-//
-// Hidden entirely in bitperfect: the signal path is untouched by definition, so
-// the control would do nothing. Hidden, not greyed — a disabled row still asks
-// to be read. computeRailLayout() hides it while searching too, which is what
-// makes open-search identical in both EQ modes.
-void PlayerWindow::drawEqBox(Canvas& canvas) {
-    if (rail_.eqBox.right <= rail_.eqBox.left) return;
-
-    // Pure paint. Every rect below was computed by recalcLayout() from
-    // computeRailLayout() -- this function writes nothing, which is what lets
-    // it move into the shared UI layer later.
-    const bool vertical = (curOrientation_ == UiOrientation::Vertical);
-    Rect box = toRect(rail_.eqBox);
-
-    // A frame around it, so the region reads as its own thing rather than as
-    // two more cells in the letter row.
-    const float hair = metrics_.stroke(1.0f);
-    canvas.rect(box.x, box.y, box.w, box.h, toColor(CLR_BG_TRANSPORT));
-    if (vertical) {
-        canvas.rect(box.x, box.y, hair, box.h, toColor(CLR_SEPARATOR));
-        canvas.rect(box.x + box.w - hair, box.y, hair, box.h, toColor(CLR_SEPARATOR));
-    } else {
-        canvas.rect(box.x, box.y, box.w, hair, toColor(CLR_SEPARATOR));
-        canvas.rect(box.x, box.y + box.h - hair, box.w, hair, toColor(CLR_SEPARATOR));
-    }
-
-    // Rotated label: the AutoEQ name is exactly the text whose LENGTH runs
-    // along the bar, so upright would not fit. Canvas honours setRotation()
-    // for text (canvas.hh:175); it does not for image(), which is why nothing
-    // in either bar depends on a rotated bitmap.
-    auto label = [&](const LayoutRect& lr, const std::string& text, float sz,
-                     ColorRef clr) {
-        Rect r = toRect(lr);
-        const float pad = metrics_.space(SP_SM);
-        if (vertical) {
-            canvas.text(truncateToWidth(canvas, text, r.w - pad * 2, sz, FontStyle::Roman),
-                        r.x + pad, r.y + r.h * 0.5f - sz * 0.5f, sz, toColor(clr));
-            return;
-        }
-        const float cx = r.x + r.w * 0.5f, cy = r.y + r.h * 0.5f;
-        canvas.setRotation(-1.57079633f, cx, cy);
-        const std::string shown =
-            truncateToWidth(canvas, text, r.h - pad * 2, sz, FontStyle::Roman);
-        const float tw = canvas.textWidth(shown, sz);
-        canvas.text(shown, cx - tw * 0.5f, cy - sz * 0.5f, sz, toColor(clr));
-        canvas.clearRotation();
-    };
-
-    const bool none = eqCurrent_.name.empty();
-    {
-        Rect r = toRect(rail_.eqNone);
-        if (hoverSidebarItem_ == kSidebarHpNoneHit && !none)
-            canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
-        const float sz = metrics_.text.body;
-        // U+00D7 MULTIPLICATION SIGN, not a lowercase x: it is a symbol here,
-        // not a letter, and the letters beside it are all real initials.
-        canvas.textCentered("\xC3\x97", r.x + r.w * 0.5f, r.y + r.h * 0.5f - sz * 0.5f,
-                            sz, toColor(none ? CLR_ACCENT : CLR_TEXT_DIM));
-    }
-    {
-        Rect r = toRect(rail_.eqName);
-        if (hoverSidebarItem_ == kSidebarEqBoxHit)
-            canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
-        label(rail_.eqName, none ? "No AutoEQ" : eqCurrent_.name,
-              metrics_.text.secondary,
-              none ? CLR_TEXT_DIM
-                   : (eqCurrentTentative_ ? CLR_TEXT_SECONDARY : CLR_TEXT_PRIMARY));
-    }
-
-    if (!eqListOpen_) return;
-
-    // ── Unfurled ────────────────────────────────────────────────────────────
-    // The rows and their profile indices came from recalcLayout(); this only
-    // paints them. The list HIDES the filter letters rather than floating over
-    // them -- forced by the renderer, which emits every rect before every glyph
-    // (see RailInput::eqListOpen).
+    // Which profile a row IS stays app data. The on-trial profile heads the
+    // list and leads: while it is showing, a saved row with the same name is
+    // NOT the active one, or two rows would light up at once.
     const bool trialLeads = eqCurrentTentative_ && !eqCurrent_.name.empty();
-    for (size_t i = 0; i < hpRows_.size(); i++) {
-        const HpRow& hr = hpRows_[i];
-        const bool trial  = (hr.headphoneIdx < 0);
-        const std::string& name =
-            trial ? eqCurrent_.name : eqHeadphones_[hr.headphoneIdx].name;
-        const bool active = trial ? true
-                                  : (!trialLeads && name == eqCurrent_.name);
-
-        Rect r = toRect(hr.rc);
-        canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_BG_TRANSPORT));
-        if (active)
-            canvas.rect(r.x, r.y, r.w, r.h,
-                        toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
-        else if (hoverSidebarItem_ == kSidebarHpRowBase + (int)i)
-            canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
-
-        label(hr.rc, name, metrics_.text.secondary,
-              active ? CLR_ACCENT : (trial ? CLR_TEXT_DIM : CLR_TEXT_SECONDARY));
+    m.eqRows.reserve(hpRows_.size());
+    for (const HpRow& hr : hpRows_) {
+        const bool trial = (hr.headphoneIdx < 0);
+        BarAEqRow row;
+        row.rc     = hr.rc;
+        row.name   = trial ? eqCurrent_.name : eqHeadphones_[hr.headphoneIdx].name;
+        row.trial  = trial;
+        row.active = trial ? true : (!trialLeads && row.name == eqCurrent_.name);
+        m.eqRows.push_back(std::move(row));
     }
-    if (hpMoreRc_.right > hpMoreRc_.left) {
-        Rect r = toRect(hpMoreRc_);
-        canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_BG_TRANSPORT));
-        if (hoverSidebarItem_ == kSidebarHpMoreHit)
-            canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
-        label(hpMoreRc_, "Search more\xE2\x80\xA6", metrics_.text.caption, CLR_TEXT_DIM);
+    m.eqMore = hpMoreRc_;
+
+    m.hovered = sidebarHitToPick(hoverSidebarItem_);
+    return m;
+}
+
+// The desktop's integer hover/hit vocabulary, in both directions. It stays an
+// int in PlayerWindow because onLButtonDown() and every hover comparison in
+// this file already speak it, and because its low end IS AlbumTypeFilter --
+// which is exactly the coupling the shared layer must not inherit.
+BarAPick PlayerWindow::sidebarHitToPick(int nav) {
+    if (nav < 0) return {};
+    if (nav >= kSidebarHpRowBase) return { BarAItem::EqRow, nav - kSidebarHpRowBase };
+    switch (nav) {
+        case (int)AlbumTypeFilter::Album:       return { BarAItem::Filter, kRailAlbums };
+        case (int)AlbumTypeFilter::Ep:          return { BarAItem::Filter, kRailEps };
+        case (int)AlbumTypeFilter::Single:      return { BarAItem::Filter, kRailSingles };
+        case (int)AlbumTypeFilter::Compilation: return { BarAItem::Filter, kRailCompilations };
+        case (int)AlbumTypeFilter::Live:        return { BarAItem::Filter, kRailLive };
+        case (int)AlbumTypeFilter::Remix:       return { BarAItem::Filter, kRailRemixes };
+        case kSidebarPlaylistsHit:    return { BarAItem::Playlists, -1 };
+        case kSidebarSettingsHit:     return { BarAItem::Settings, -1 };
+        case kSidebarSearchHit:       return { BarAItem::Search, -1 };
+        case kSidebarSearchCloseHit:  return { BarAItem::SearchClose, -1 };
+        case kSidebarHpNoneHit:       return { BarAItem::EqNone, -1 };
+        case kSidebarEqBoxHit:        return { BarAItem::EqName, -1 };
+        case kSidebarHpMoreHit:       return { BarAItem::EqMore, -1 };
+        default:                      return {};
     }
 }
+
+int PlayerWindow::pickToSidebarHit(const BarAPick& p) {
+    switch (p.item) {
+        case BarAItem::Filter:
+            switch (p.index) {
+                case kRailAlbums:       return (int)AlbumTypeFilter::Album;
+                case kRailEps:          return (int)AlbumTypeFilter::Ep;
+                case kRailSingles:      return (int)AlbumTypeFilter::Single;
+                case kRailCompilations: return (int)AlbumTypeFilter::Compilation;
+                case kRailLive:         return (int)AlbumTypeFilter::Live;
+                case kRailRemixes:      return (int)AlbumTypeFilter::Remix;
+                default:                return -1;
+            }
+        case BarAItem::EqRow:       return kSidebarHpRowBase + p.index;
+        case BarAItem::Playlists:   return kSidebarPlaylistsHit;
+        case BarAItem::Settings:    return kSidebarSettingsHit;
+        case BarAItem::Search:      return kSidebarSearchHit;
+        case BarAItem::SearchClose: return kSidebarSearchCloseHit;
+        case BarAItem::EqNone:      return kSidebarHpNoneHit;
+        case BarAItem::EqName:      return kSidebarEqBoxHit;
+        case BarAItem::EqMore:      return kSidebarHpMoreHit;
+        case BarAItem::None:        return -1;
+    }
+    return -1;
+}
+
 
 void PlayerWindow::selectEqProfile(const EqAssignment& a) {
     ensureEqProfiles();

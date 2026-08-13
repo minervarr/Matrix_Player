@@ -9,6 +9,8 @@
 #include "core/decoder.h"    // matrix_core's Decoder (magic-byte format selection)
 #include "core/dsp/audio_convert.h"  // DitherLCG + floatToInt16Dither
 #include "core/library.h"    // Track, Album, scanLibrary
+#include "bar_a.hh"          // gui/src: the desktop's navigation rail, shared verbatim
+#include "ui_orientation.hh" // gui/src: Horizontal/Vertical from the window's shape
 
 class Canvas;
 
@@ -54,6 +56,14 @@ public:
     void onTouchUp(float x, float y);
 
 private:
+    // Bar A, exactly as the desktop draws it (gui/src/bar_a.cc). recalcLayout()
+    // is this class's much smaller cousin of PlayerWindow::recalcLayout(): it
+    // splits the safe area into the bar and the content beside it, and fills
+    // the model bar_a.cc consumes. Rotation on a phone arrives as an ordinary
+    // resize, so nothing here asks Android which way up it is.
+    void recalcLayout(float screenW, float screenH, float insetTop,
+                      float insetBottom, float insetLeft, float insetRight);
+
     void applyScanResult();
     void playTrack(size_t index);
     void stopPlayback();
@@ -72,7 +82,9 @@ private:
 
     // --- scroll/touch state ---
     float scrollY_            = 0.0f;
+    float touchStartX_        = 0.0f;
     float touchStartY_        = 0.0f;
+    bool  touchInBarA_        = false;
     float touchStartScrollY_  = 0.0f;
     bool  touchIsDrag_        = false;
 
@@ -83,6 +95,16 @@ private:
     float lastScreenH_ = 0.0f;
     float lastTop_     = 0.0f;
     float lastLeft_    = 0.0f;
+
+    // --- the shared frame ---
+    UiOrientation orient_ = UiOrientation::Vertical;
+    BarAModel     barA_;         // rebuilt every draw; also read by the hit-test
+    LayoutRect    rcContent_{};  // what is left between bar A and the far edge
+    // Which letter is lit. It moves when one is tapped, which is all it can do
+    // yet: this slice has no album sections to filter, so nothing downstream
+    // reads it. Drawn, not obeyed -- and said so out loud rather than left to
+    // look like a broken filter.
+    int activeLetter_ = kRailAlbums;
 
     // --- playback state ---
     Decoder        decoder_;

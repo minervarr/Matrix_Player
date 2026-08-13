@@ -19,6 +19,7 @@
 #include "audio_output.h"
 #include "ui_orientation.hh"
 #include "rail_layout.hh"
+#include "bar_a.hh"
 #ifdef _WIN32
 #include "wasapi_output.hh"
 #else
@@ -230,8 +231,13 @@ private:
     // what collapses the filter letters, and closing it takes the query back.
     void openSearch();
     void closeSearch();
-    void drawBarA(Canvas& canvas);          // the navigation rail
-    void drawEqBox(Canvas& canvas);         // the AutoEQ quick-switcher inside it
+    // Bar A draws and hit-tests itself from plain values (bar_a.hh), shared
+    // verbatim with Android. All that is left here is building those values
+    // out of this app's state, and translating the pick back into the integer
+    // hit vocabulary the rest of this class speaks.
+    BarAModel       barAModel() const;
+    static BarAPick sidebarHitToPick(int nav);
+    static int      pickToSidebarHit(const BarAPick& p);
 
     // ── Settings panels (Phase 7) — vk_canvas-native replacements for the
     // four native dialogs, identical on both platforms. See
