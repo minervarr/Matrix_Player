@@ -257,6 +257,16 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         target_compile_options(ui_metrics_test PRIVATE -Wall)
     endif()
 
+    # ui_orientation_test links the REAL src/ui_orientation.cc rather than
+    # restating its arithmetic. ui_orientation.hh includes NOTHING at all — no
+    # Canvas, no Host, no theme — which is what keeps this a pure-logic test and
+    # what lets the Android build consume the same file untouched.
+    add_executable(ui_orientation_test src/ui_orientation_test.cc src/ui_orientation.cc)
+    target_include_directories(ui_orientation_test PRIVATE src)
+    if(NOT WIN32)
+        target_compile_options(ui_orientation_test PRIVATE -Wall)
+    endif()
+
     # ui_icons_test links the REAL src/ui_icons.cc rather than restating its
     # arithmetic, which is why the icon placement math is split away from the
     # Canvas-dependent half (src/ui_icons_draw.cc). Needs no include dirs
