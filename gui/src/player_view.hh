@@ -18,6 +18,7 @@
 #include "art_view.hh"
 #include "audio_output.h"
 #include "ui_orientation.hh"
+#include "rail_layout.hh"
 #ifdef _WIN32
 #include "wasapi_output.hh"
 #else
@@ -225,7 +226,12 @@ private:
     bool isKnownHeadphone(const EqAssignment& a) const;
     // Bottom-anchored inside the sidebar. Draws nothing in bitperfect mode:
     // there is no EQ to pick a profile for.
-    void drawHeadphoneBlock(Canvas& canvas, const LayoutRect& sidebar);
+    // Search is a STATE of bar A, not just a focused text box: opening it is
+    // what collapses the filter letters, and closing it takes the query back.
+    void openSearch();
+    void closeSearch();
+    void drawBarA(Canvas& canvas);          // the navigation rail
+    void drawEqBox(Canvas& canvas);         // the AutoEQ quick-switcher inside it
 
     // ── Settings panels (Phase 7) — vk_canvas-native replacements for the
     // four native dialogs, identical on both platforms. See
@@ -339,6 +345,21 @@ private:
     // (The toggle is keyboard-only for now: Alt+L. No on-screen button.)
     UiOrientationState orientation_    = {};
     UiOrientation      curOrientation_ = UiOrientation::Horizontal;
+
+    // ── The frame ───────────────────────────────────────────────────────────
+    // Two bars of ONE thickness facing each other, content centred between.
+    // Bar A is navigation (top in Vertical, left in Horizontal), bar B is the
+    // transport (bottom / right). rcSidebar_ and rcTransport_ are the same two
+    // rectangles under the names the rest of this file already reads.
+    LayoutRect rcBarA_ = {};
+    LayoutRect rcBarB_ = {};
+    // Where everything inside bar A sits — computed by computeRailLayout(),
+    // never by hand. See rail_layout.hh.
+    RailLayout rail_ = {};
+    // Whether the search field has taken over bar A's middle. Distinct from
+    // searchFocused_, which is about the caret: the field only EXISTS while
+    // this is set, because opening it is what collapses the filter letters.
+    bool searchOpen_ = false;
 
     // Layout zones
     LayoutRect rcSidebar_    = {};
@@ -714,6 +735,10 @@ private:
     static constexpr int kSidebarHpMoreHit    = 7;  // the AutoEQ block's "Search more…"
     static constexpr int kSidebarPlaylistsHit = 8;  // the Playlists row
     static constexpr int kSidebarHpNoneHit    = 9;  // the AutoEQ block's "No AutoEQ"
+    static constexpr int kSidebarSearchHit    = 10; // the search letter
+    static constexpr int kSidebarSearchCloseHit = 11; // its close cell, while open
+    static constexpr int kSidebarEqBoxHit     = 12; // the AutoEQ box's name (unfurls)
+    static constexpr int kSidebarEqNoneHit    = 13; // the AutoEQ box's X (= no profile)
     static_assert(kSidebarSettingsHit > (int)AlbumTypeFilter::Live,
                   "sidebarHitTest sentinels must start above the last AlbumTypeFilter");
     static constexpr int kSidebarHpRowBase   = 100;  // + row index within hpRows_
@@ -1061,7 +1086,6 @@ private:
     // occupying the list. The credit is free: statsMsHeard_ already ticks for
     // the listening log, so there is no second timer.
     static constexpr int64_t kEqCreditMs   = 60000;  // 60 s of audio actually heard
-    static constexpr int     kEqHpMaxRows  = 4;      // sidebar rows, excluding the on-trial one
     std::vector<EqHeadphone> eqHeadphones_;
     EqAssignment eqCurrent_;                 // name empty = nothing applied
     bool    eqCurrentTentative_  = false;    // applied, but not yet in eqHeadphones_
@@ -1074,6 +1098,16 @@ private:
     std::vector<HpRow> hpRows_;
     LayoutRect hpNoneRc_ = {};   // "No AutoEQ" — the off position of the switch
     LayoutRect hpMoreRc_ = {};
+    LayoutRect eqNameRc_ = {};   // the AutoEQ box's name — click unfurls the list
+    // The AutoEQ box's list is UNFURLED, not clamped: it runs from the box to
+    // the far end of bar A and shows the saved list WHOLE. The old four-row cap
+    // and the sidebar block's height budget are gone with it — they existed
+    // only because three rows had to fit under Settings. With a typical inventory of
+    // about seven pairs, showing them all and letting the eye travel beats
+    // scrolling. Ordering (pinned, then most-used, then most-recent) and the
+    // 60-second credit gate are untouched: those decide WHICH profiles exist,
+    // not how many fit.
+    bool eqListOpen_ = false;
 
     FolderWatcher        watcher_;
     std::thread          scanThread_;
