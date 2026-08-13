@@ -165,7 +165,37 @@ matrix_player/
                                   had drifted into four copies (both hosts, openLogFile,
                                   tools/ui_capture)
       ui_metrics.hh/.cc         — the single scale factor: 5 type roles from one ratio,
-                                  plus space()/stroke(). Tested by ui_metrics_test.cc
+                                  plus space()/stroke(). Takes the window's SHORT SIDE,
+                                  not its height: identical for every window wider than
+                                  tall, but a 1080x1920 monitor would otherwise scale
+                                  1.78x because the screen is TALL, not big. Tested by
+                                  ui_metrics_test.cc
+      ui_orientation.hh/.cc     — Horizontal or Vertical, derived from the shape the
+                                  window ALREADY has and never asked of the OS, which is
+                                  why it works the same on Wayland (a client cannot size
+                                  or position itself), on Windows, and on Android (where
+                                  rotation arrives as an ordinary resize — the manifest
+                                  already declares configChanges=orientation and locks no
+                                  screenOrientation). Automatic by default; Alt+L takes a
+                                  manual override that STICKS, persisted in settings.
+                                  Replaces UiMode{Essential,Complete}, which was a window
+                                  rectangle wearing a mode's name. NAMED ui_orientation
+                                  because vk_canvas's Android platform already ships an
+                                  orientation.hh (physical device orientation, from the
+                                  accelerometer). PURE — ui_orientation_test links it alone
+      rail_layout.hh/.cc        — where everything in BAR A goes: the seven filter
+                                  initials, the search cell, Settings, the AutoEQ box.
+                                  Computed once along the bar's LONG AXIS and mapped at
+                                  the end, so horizontal is vertical rotated 90° CCW and
+                                  there is one layout rather than two. Settings is pinned
+                                  at the near end and never moves — opening search must
+                                  not cost what was typed. Cells SHRINK uniformly when
+                                  nine of them plus the box will not fit, which is the
+                                  ordinary vertical bar (its long extent is the window's
+                                  WIDTH). PURE: no Canvas, no theme, no metrics —
+                                  rail_layout_test asserts every anchor in all states,
+                                  including that the two orientations ARE that rotation
+                                  of each other, rect by rect
       ui_fonts.hh               — the ONE place the UI face paths and the atlas cache
                                   name live. PlayerWindow and ArtWindow share that cache,
                                   so both must agree on it; they used to keep duplicate
@@ -363,7 +393,7 @@ Both were latent bugs nobody had hit before this toolchain existed to compile th
 **Both platforms**: submodules first if empty —
 `git submodule update --init --recursive`.
 
-**Tests**: there is no ctest/gtest framework, but there are six assert-based
+**Tests**: there is no ctest/gtest framework, but there are eight assert-based
 pure-logic test executables, built **Debug-only** (see the bottom of
 `gui/CMakeLists.txt` and of `core/CMakeLists.txt`) and run directly. Convention
 matches `framework/vk_canvas/core/tests/*.cc`: plain `assert()`, `#undef NDEBUG`
@@ -375,6 +405,8 @@ scripts/linux/build.sh --debug
 ./build/linux_debug/gui/ui_metrics_test    # type scale + spacing/stroke math
 ./build/linux_debug/gui/ui_icons_test      # icon codepoints + placement math
 ./build/linux_debug/gui/ui_text_test       # ordinal suffixes (the teens: 11th, not 11st)
+./build/linux_debug/gui/ui_orientation_test # Horizontal/Vertical from window shape
+./build/linux_debug/gui/rail_layout_test   # bar A's anchors, and the 90-degree rotation
 ./build/linux_debug/core/variants_test     # album-variant grouping, edition terms, trackKey()
 ./build/linux_debug/core/stats_test        # listening log, aggregate queries, schema migration
 ./build/linux_debug/core/facets_test       # guided search: suggestions, counts, empty reasons
@@ -520,12 +552,20 @@ Five things here are load-bearing:
    that un-sticks by itself. Nothing has ever *written* `"global"`
    (`saveEqAssignment` has one call site and it always passes
    `getActiveDeviceKey()`), so any such row is legacy.
-5. **The sidebar shows what FITS, and it is not four.** `kEqHpMaxRows` is 4, but
-   the sidebar holds three rows below Settings, so `drawHeadphoneBlock()` clamps
-   the saved list to the space that exists and drops rows from the LIST rather
-   than hiding the block — the header, `No AutoEQ` and `Search more…` are its
-   minimum. Order is pinned → most-used → most-recent (`loadEqHeadphones`), and
-   with that few rows on screen the ordering is what decides reachability.
+5. **The switcher is a BOX that unfurls, and it no longer has a row budget.**
+   `drawEqBox()` shows two things — a discreet `×` meaning *no profile* and the
+   active profile's name — and touching the name unfurls the saved list WHOLE,
+   from the box to the far end of bar A. `kEqHpMaxRows`, `listCapacity` and
+   `drawHeadphoneBlock()`'s "drop rows from the LIST rather than hide the block"
+   are all gone: they existed only because the old sidebar had three rows'
+   worth of space below Settings. Order is still pinned → most-used →
+   most-recent (`loadEqHeadphones`).
+6. **The unfurled list HIDES the filter letters; it does not float over them.**
+   Not a style choice — the renderer emits every rect before every glyph, so a
+   panel drawn last still comes out UNDER text drawn earlier, and the letters
+   showed straight through the first version. It is handled in the GEOMETRY
+   (`RailInput::eqListOpen` → empty letter rects) so they also stop
+   hit-testing underneath it. Same trap the chip strip documents on `rcChips_`.
 
 The prune keeps 12 unpinned rows; pinned rows are exempt and are not counted
 against that budget. Pinning and removing happen only in the EQ panel's
@@ -838,7 +878,7 @@ real window, message pump, and monitor queries live behind `Host` (`host.hh`).
 ```cpp
 class Host {
 public:
-    virtual bool init(PlayerWindow* owner, UiMode initialMode) = 0;
+    virtual bool init(PlayerWindow* owner) = 0;
     virtual SurfaceProvider& surfaceProvider() = 0;
     virtual AssetReader&     assetReader()     = 0;
     virtual MonitorInfo primaryMonitor() const = 0;
@@ -866,12 +906,71 @@ That is a submodule change — commit it with `git_wrapper`, which pushes
 submodules before the parent.
 
 **What has no Wayland equivalent, by design** (documented narrowing, not a
-silent gap): global hotkeys (Alt+F/J/C/U/G/H/L edge-snap/mode-toggle) are
-system-wide `RegisterHotKey` calls on Windows but focused-window-only checks
-on Linux (no cross-compositor equivalent); `adaptToCurrentMonitor()`/
-`snapToEdge()` are no-ops on Linux (Wayland clients cannot query "which
-monitor" or reposition themselves); Essential UI mode has no Linux window-
-sizing logic yet (always opens at a 1200×700 default).
+silent gap): global hotkeys (Alt+F/J/C/U/G/H edge-snap) are system-wide
+`RegisterHotKey` calls on Windows but focused-window-only checks on Linux (no
+cross-compositor equivalent); `adaptToCurrentMonitor()`/`snapToEdge()` are
+no-ops on Linux (Wayland clients cannot query "which monitor" or reposition
+themselves).
+
+**Alt+L is NOT in that list any more**, and that is the point of the
+orientation work: it used to ask the compositor for a window size and wait for
+an asynchronous `configure`, which is why it felt slow on KDE. It now flips a
+layout the app draws itself, and needs nothing from the OS.
+
+### The frame: two symmetric bars (`ui_orientation.hh`, `rail_layout.hh`)
+
+The GUI is **two bars of one thickness facing each other, with the content
+centred between them**. Bar A is navigation, bar B is the transport. That
+thickness is `space(130)` — the transport bar's own height, the value this app
+has always drawn its now-playing strip at.
+
+| | bar A (navigation) | bar B (transport) |
+|---|---|---|
+| Vertical | top | bottom |
+| Horizontal | left | right |
+
+**Horizontal is Vertical rotated 90° counter-clockwise, and that is enforced,
+not intended.** `computeRailLayout()` places everything along the bar's long
+axis and maps to window rects in exactly one function; `rail_layout_test`
+asserts the two orientations are that rotation of each other rect by rect, so
+an edit that special-cases one of them fails the test. Bar B's drawing does the
+same thing at draw time — every line of its text is authored once for a *wide*
+bar and emitted under a −90° rotation when the layout is horizontal
+(`authored()`/`unauthored()` in `drawFrame()`).
+
+Five things here are load-bearing:
+
+1. **Orientation is derived, never requested.** It comes from the window's own
+   width and height. Nothing asks the OS for a size, which is why it works
+   identically on Wayland, Windows and Android — and why the old `Alt+L`
+   sluggishness on KDE is gone: that path used to request a fullscreen and wait
+   for an asynchronous `configure`.
+2. **The old sidebar was `space(277)`, 2.1× the bar.** Nothing that lived in it
+   survives at 130 with text, which is why bar A is a rail of *initials*
+   (A E S C L R P) rather than a narrower list of words. `MATRIX PLAYER` has no
+   home in it and is gone.
+3. **Three cells read `S`** — Singles, Search, Settings — and they are separated
+   by `theme.hh`'s existing text ladder: PRIMARY 242, SECONDARY 170, DIM 128.
+   That ladder is FULL: 128 is already the WCAG floor, so a fourth `S` has
+   nowhere to go. Position is what teaches them; colour only confirms.
+4. **The letters are NOT rotated in the horizontal layout**, though everything
+   else in the frame is. A single capital reads the same upright either way.
+   Rotation is for text whose LENGTH runs along the bar — the AutoEQ profile
+   name, the now-playing title. `Canvas` honours `setRotation()` for text but
+   **not** for `image()`, so nothing in either bar may depend on a rotated
+   bitmap; the transport artwork is square and needs none. The three transport
+   buttons are drawn unrotated on purpose: a Prev triangle turned on its side
+   points up, which is a different instruction.
+5. **Overlays inside a bar must HIDE what they cover, not float over it.** The
+   renderer emits every rect before every glyph, so a panel drawn last still
+   comes out under text drawn earlier. Both the open search field and the
+   unfurled AutoEQ list are handled in the geometry (`RailInput::searchOpen` /
+   `eqListOpen` return empty rects for what they cover), which also stops the
+   covered cells hit-testing underneath. Same trap `rcChips_` documents.
+
+The **simple variant** of each orientation (thumbnail + play button) is
+designed but deliberately not built — see
+`docs/superpowers/specs/2026-08-12-orientation-modes-design.md`.
 
 ### Settings panels (`gui/src/panels/settings_panels.hh/.cc`)
 
@@ -983,4 +1082,5 @@ identity/metadata lives, never encoded into a folder name.
    dispatch already exist (see "DoP (DSD-over-PCM)" above), the scanner just
    never finds these files today
 3. Parallel folder scan (`std::thread` pool, one per CPU core)
-4. Essential UI mode's Linux window-sizing (currently always 1200×700)
+4. The SIMPLE variant of each orientation (thumbnail + play button) — designed
+   but deliberately not built yet, see the orientation spec
