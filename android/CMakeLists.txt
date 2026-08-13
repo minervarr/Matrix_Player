@@ -149,7 +149,12 @@ target_include_directories(matrix_player_android PRIVATE
 
 target_link_libraries(matrix_player_android
     android log
-    ae_core ae_usb usb1 ae_flac ae_aaudio ae_mediacodec
+    # No ae_mediacodec: this engine decodes FLAC and MP3 with its own vendored
+    # libFLAC/libmpg123 on every platform, on purpose — some phones ship no
+    # FLAC decoder, and a per-device decode path would make "bit-perfect
+    # everywhere" depend on the handset. AMediaCodec would be a second,
+    # divergent decode path for formats already covered.
+    ae_core ae_usb usb1 ae_flac ae_aaudio
     matrix_core
     vk_canvas_core)
 
