@@ -1833,19 +1833,62 @@ void PlayerWindow::drawFrame() {
         // No on-screen close button — Escape closes the album view.
     }
 
-    // ── Transport bar ────────────────────────────────────────────────────
+    // ── Bar B: the transport ─────────────────────────────────────────────
     {
         Rect t = toRect(rcTransport_);
+
+        // ── One authoring frame, two orientations ───────────────────────────
+        //
+        // Everything textual below is written ONCE, for a WIDE bar. In the
+        // horizontal layout the bar is tall instead, so the text is emitted
+        // under a -90 degree rotation about the bar's own centre — the same
+        // counter-clockwise turn that maps the whole vertical layout onto the
+        // horizontal one, which is why the result reads bottom-to-top.
+        //
+        // `authored()` converts a real screen rect into the coordinates to
+        // author at so that the rotation lands it back where the layout put
+        // it; `unauthored()` goes the other way, for hit rects computed here.
+        // In the vertical layout both are the identity.
+        //
+        // The ARTWORK and the three BUTTONS are drawn OUTSIDE that rotation,
+        // at their real rects. Canvas::image() does not honour setRotation()
+        // at all (canvas.hh:124) — and the buttons must not rotate even
+        // though rect() would: a Prev triangle turned on its side points up,
+        // which is a different instruction.
+        const bool barBVert = (curOrientation_ == UiOrientation::Vertical);
+        const float bpx = t.x + t.w * 0.5f, bpy = t.y + t.h * 0.5f;
+        auto authored = [&](const LayoutRect& r) -> Rect {
+            if (barBVert) return toRect(r);
+            const float ax0 = bpx - ((float)r.bottom - bpy);
+            const float ax1 = bpx - ((float)r.top    - bpy);
+            const float ay0 = bpy + ((float)r.left   - bpx);
+            const float ay1 = bpy + ((float)r.right  - bpx);
+            return { ax0, ay0, ax1 - ax0, ay1 - ay0 };
+        };
+        auto unauthored = [&](float ax0, float ay0, float ax1, float ay1) -> LayoutRect {
+            if (barBVert) return { (int)ax0, (int)ay0, (int)ax1, (int)ay1 };
+            return { (int)(bpx + (ay0 - bpy)), (int)(bpy - (ax1 - bpx)),
+                     (int)(bpx + (ay1 - bpy)), (int)(bpy - (ax0 - bpx)) };
+        };
+        const float kQuarterTurn = -1.57079633f;   // 90 degrees counter-clockwise
+
         canvas.rect(t.x, t.y, t.w, t.h, toColor(CLR_BG_TRANSPORT));
-        canvas.rect(t.x, t.y, t.w, metrics_.stroke(1.0f), toColor(CLR_SEPARATOR));
+        // The hairline goes on the bar's INNER edge, the one facing the
+        // content: the top in Vertical, the left in Horizontal.
+        const float bHair = metrics_.stroke(1.0f);
+        if (barBVert) canvas.rect(t.x, t.y, t.w, bHair, toColor(CLR_SEPARATOR));
+        else          canvas.rect(t.x, t.y, bHair, t.h, toColor(CLR_SEPARATOR));
 
         Rect artR = toRect(rcTransportArt_);
         drawArtOrPlaceholder(canvas, transportArtTex_, artR.x, artR.y, artR.w, artR.h);
 
+        if (!barBVert) canvas.setRotation(kQuarterTurn, bpx, bpy);
+        const Rect tv = authored(rcTransport_);   // the bar, as a wide one
+
         // Now-playing title/artist. Title gets base-name priority: the
         // trailing "(Deluxe)"-class modifier is what truncates first, never
         // the name itself (see splitNameModifier).
-        Rect infoR = toRect(rcTransportInfo_);
+        Rect infoR = authored(rcTransportInfo_);
         drawNameWithModifier(canvas,
                              currentTitle_.empty() ? "No track" : currentTitle_,
                              infoR.x, infoR.y, infoR.w,
@@ -1858,9 +1901,13 @@ void PlayerWindow::drawFrame() {
                               metrics_.text.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Italic);
         }
 
+        if (!barBVert) canvas.clearRotation();
+
         // Three buttons only — prev / play-stop / next, same combined
         // play-stop toggle. No pause: this user only ever
-        // stops or starts from zero.
+        // stops or starts from zero. Drawn UNROTATED at their real rects:
+        // recalcLayout() already placed them along the bar's long axis, and a
+        // rotated Prev triangle would point up rather than back.
         struct BtnDef { LayoutRect rc; int idx; UiIcon icon; ColorRef clr; };
         BtnDef buttons[] = {
             { rcBtnPrev_, 0, UiIcon::Prev, CLR_TEXT_PRIMARY },
@@ -1876,7 +1923,9 @@ void PlayerWindow::drawFrame() {
             drawUiIcon(canvas, b.rc, b.icon, toColor(b.clr));
         }
 
-        // Right side, minimal: elapsed/total time, then the DSP state tag,
+        if (!barBVert) canvas.setRotation(kQuarterTurn, bpx, bpy);
+
+        // Far end, minimal: elapsed/total time, then the DSP state tag,
         // baseline-aligned and vertically centered in the bar. Hovering the
         // tag swaps the whole cluster for the full signal-path readout
         // (source format » DSP stage » output backend). '→' (U+2192) IS baked
@@ -1906,16 +1955,18 @@ void PlayerWindow::drawFrame() {
             // space(24) between clock and badge, below). At 16 it did not, so
             // the reading and the state sat closer to the window edge than to
             // each other and read as one run of text.
-            float rightEdge = t.x + t.w - metrics_.space(SP_LG);
-            float cy = t.y + t.h * 0.5f;
+            float rightEdge = tv.x + tv.w - metrics_.space(SP_LG);
+            float cy = tv.y + tv.h * 0.5f;
             float tagW = canvas.textWidthStyled(dsp, metrics_.text.caption, FontStyle::Math);
 
             // Hover hit rect always tracks the compact tag's home (with a
             // little slop), so the hover state stays stable while the
             // expanded readout is showing.
             const float badgeSlop = metrics_.space(8.0f);
-            rcDspBadge_ = { (int)(rightEdge - tagW - badgeSlop), (int)(cy - metrics_.text.caption),
-                            (int)(rightEdge + badgeSlop),        (int)(cy + metrics_.text.caption) };
+            // Back to SCREEN coordinates: this one is a hit rect, and
+            // onMouseMove tests it against a real pointer position.
+            rcDspBadge_ = unauthored(rightEdge - tagW - badgeSlop, cy - metrics_.text.caption,
+                                     rightEdge + badgeSlop,        cy + metrics_.text.caption);
 
             if (hoverDspBadge_) {
                 std::string src;
@@ -1963,6 +2014,7 @@ void PlayerWindow::drawFrame() {
                                   metrics_.text.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Math);
             }
         }
+        if (!barBVert) canvas.clearRotation();
     }
 
     // (No on-screen orientation toggle — Alt+L switches Horizontal/Vertical.)
@@ -3056,9 +3108,11 @@ void PlayerWindow::onMouseMove(int x, int y) {
 // Runs off the hover state onMouseMove just computed plus the few rects that
 // are clickable without one (search box, artwork, prose column).
 CursorShape PlayerWindow::cursorForPoint(int x, int y) const {
-    // Typing surface first: it sits inside the sidebar, whose own rows are
-    // hands, so the more specific rect has to win.
-    if (ptInRect(rcSearch_, x, y)) return CursorShape::Text;
+    // Typing surface first: it sits inside bar A, whose own cells are hands, so
+    // the more specific rect has to win. Only while the field EXISTS, though —
+    // closed, that same rect is the letter that opens it, and a text caret
+    // over a button says the wrong thing about what a click will do.
+    if (searchOpen_ && ptInRect(rcSearch_, x, y)) return CursorShape::Text;
 
     if (hoverSidebarItem_   >= 0) return CursorShape::Hand;
     if (hoverTransportBtn_  >= 0) return CursorShape::Hand;
