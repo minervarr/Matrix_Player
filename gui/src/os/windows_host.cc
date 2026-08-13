@@ -1,8 +1,8 @@
 // Windows Host implementation — window creation, message loop, monitor
 // rects, all moved (behavior-preserving, not rewritten) from what used to be
 // PlayerWindow::create()/run()/wndProc()/handleMsg()/computeCompleteWindowRect()/
-// computeEssentialWindowRect()/adaptToCurrentMonitor()/snapToEdge() before the
-// host abstraction (see ../host.hh).
+// adaptToCurrentMonitor()/snapToEdge() before the host abstraction (see
+// ../host.hh).
 #include "host.hh"
 #include "app_paths.hh"
 #include "player_view.hh"
@@ -27,9 +27,9 @@ namespace {
 
 const wchar_t* kMainClass = L"MatrixPlayerMain";
 
-// Borderless: no title bar/icon/min-max-close buttons at all. Both UI modes
-// are fixed sizes the app sets itself (see PlayerWindow::toggleUiMode()), so
-// there's no resize/maximize to offer anyway; positioning is via the
+// Borderless: no title bar/icon/min-max-close buttons at all. The window is a
+// fixed size the app sets itself (true fullscreen), so there's no
+// resize/maximize to offer anyway; positioning is via the
 // Alt+F/J/C/U edge-snap hotkeys instead of title-bar dragging. Taskbar/
 // Alt-Tab presence (and the app icon there) still comes from
 // WS_EX_APPWINDOW — only the on-window chrome is gone. Alt+F4 and the
@@ -55,41 +55,13 @@ RECT computeCompleteWindowRect(HMONITOR mon) {
     return mi.rcMonitor;
 }
 
-RECT computeEssentialWindowRect(HMONITOR mon) {
-    MONITORINFO mi = { sizeof(mi) };
-    GetMonitorInfoW(mon, &mi);
-    int monW = mi.rcWork.right - mi.rcWork.left;
-    int monH = mi.rcWork.bottom - mi.rcWork.top;
-
-    // Anchor to whichever dimension is the monitor's constraint, phone-shaped
-    // (9:16) on the OPPOSITE axis from the monitor's own orientation — a
-    // portrait "phone" on a landscape monitor, a landscape one on a portrait
-    // monitor. Self-fitting by construction; see host.hh's UiMode comment.
-    int contentW, contentH;
-    if (monW >= monH) {
-        contentH = monH;
-        contentW = (int)std::lround(contentH * 9.0 / 16.0);
-    } else {
-        contentW = monW;
-        contentH = (int)std::lround(contentW * 9.0 / 16.0);
-    }
-
-    RECT r = { 0, 0, contentW, contentH };
-    AdjustWindowRectEx(&r, kFixedWindowStyle, FALSE, kFixedWindowExStyle);
-    int w = std::min((int)(r.right - r.left), monW);
-    int h = std::min((int)(r.bottom - r.top), monH);
-    int x = mi.rcWork.left + (monW - w) / 2;
-    int y = mi.rcWork.top + (monH - h) / 2;
-    return { x, y, x + w, y + h };
-}
-
 } // namespace
 
 class WindowsHost : public Host {
 public:
     std::string exeDir() const override { return app_paths::exeDir(); }
 
-    bool init(PlayerWindow* owner, UiMode initialMode) override {
+    bool init(PlayerWindow* owner) override {
         owner_ = owner;
         hInst_ = GetModuleHandleW(nullptr);
 
@@ -106,9 +78,7 @@ public:
         RegisterClassExW(&wc);
 
         HMONITOR primaryMon = MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
-        RECT startRect = (initialMode == UiMode::Complete)
-            ? computeCompleteWindowRect(primaryMon)
-            : computeEssentialWindowRect(primaryMon);
+        RECT startRect = computeCompleteWindowRect(primaryMon);
 
         hwnd_ = CreateWindowExW(kFixedWindowExStyle, kMainClass, L"Matrix Player",
             kFixedWindowStyle, startRect.left, startRect.top,
@@ -129,8 +99,8 @@ public:
         RegisterHotKey(hwnd_, kHotkeySnapTop,     MOD_ALT | MOD_NOREPEAT, 'U');
         RegisterHotKey(hwnd_, kHotkeySnapCenterG, MOD_ALT | MOD_NOREPEAT, 'G');
         RegisterHotKey(hwnd_, kHotkeySnapCenterH, MOD_ALT | MOD_NOREPEAT, 'H');
-        // Alt+L toggles Essential/Complete — keyboard only.
-        RegisterHotKey(hwnd_, kHotkeyToggleMode,  MOD_ALT | MOD_NOREPEAT, 'L');
+        // Alt+L toggles Horizontal/Vertical layout — keyboard only.
+        RegisterHotKey(hwnd_, kHotkeyToggleOrientation,  MOD_ALT | MOD_NOREPEAT, 'L');
 
         vkSurface_ = std::make_unique<Win32SurfaceProvider>(hwnd_);
         return true;
@@ -151,22 +121,7 @@ public:
         return { toLayoutRect(mi.rcMonitor), toLayoutRect(mi.rcWork) };
     }
 
-    void applyUiMode(UiMode mode) override {
-        HMONITOR mon = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
-        RECT r = (mode == UiMode::Complete)
-            ? computeCompleteWindowRect(mon)
-            : computeEssentialWindowRect(mon);
-        SetWindowPos(hwnd_, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top,
-                     SWP_NOZORDER | SWP_NOACTIVATE);
-        // The window just jumped straight to its new size in one step
-        // (Essential <-> Complete, the latter now fullscreen) rather than
-        // resizing gradually — the renderer only discovers a resize lazily
-        // otherwise, so the very next frame would render at the stale
-        // swapchain extent and come out corrupted/torn.
-        owner_->onHostResized();
-    }
-
-    void adaptToCurrentMonitor(UiMode mode) override {
+    void adaptToCurrentMonitor() override {
         // A minimized window's rect is Windows' off-screen placeholder
         // (conventionally around (-32000,-32000)), not a real position —
         // fitting against "whichever monitor is nearest that" is
@@ -181,9 +136,7 @@ public:
         lastMonitor_ = mon;  // set first: avoids re-entering via the
                              // WM_WINDOWPOSCHANGED this SetWindowPos triggers
 
-        RECT r = (mode == UiMode::Complete)
-            ? computeCompleteWindowRect(mon)
-            : computeEssentialWindowRect(mon);
+        RECT r = computeCompleteWindowRect(mon);
 
         RECT cur{};
         GetWindowRect(hwnd_, &cur);
@@ -325,10 +278,10 @@ private:
 
         switch (msg) {
         case WM_SIZE:
-            // Routine resize (also fires as a side effect of applyUiMode()'s
-            // own SetWindowPos, which already called notifyResized() itself
-            // directly — not repeated here to avoid telling the renderer
-            // "resized" twice for one logical change).
+            // Routine resize (also fires as a side effect of
+            // adaptToCurrentMonitor()'s own SetWindowPos, which already called
+            // notifyResized() itself directly — not repeated here to avoid
+            // telling the renderer "resized" twice for one logical change).
             owner_->onHostLayoutInvalidated();
             return 0;
 
@@ -347,8 +300,8 @@ private:
         case WM_WINDOWPOSCHANGED: {
             // Covers the window ending up on a different monitor by any
             // means (Win+Shift+Arrow, dragging a secondary monitor's taskbar
-            // icon, etc.) — not just snapToEdge()/toggleUiMode(), which stay
-            // on the current monitor by construction anyway.
+            // icon, etc.) — not just snapToEdge(), which stays on the
+            // current monitor by construction anyway.
             if (!IsIconic(hwnd_)) {
                 HMONITOR mon = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
                 if (mon != lastMonitor_) owner_->adaptToCurrentMonitor();
@@ -443,7 +396,7 @@ private:
             UnregisterHotKey(hwnd_, kHotkeySnapTop);
             UnregisterHotKey(hwnd_, kHotkeySnapCenterG);
             UnregisterHotKey(hwnd_, kHotkeySnapCenterH);
-            UnregisterHotKey(hwnd_, kHotkeyToggleMode);
+            UnregisterHotKey(hwnd_, kHotkeyToggleOrientation);
 
             owner_->shutdown();
 

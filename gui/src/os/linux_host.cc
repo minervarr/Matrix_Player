@@ -23,8 +23,9 @@
 #include <vector>
 
 namespace {
-// Default windowed size when Essential mode can't derive one from a real
-// monitor query (Wayland has no "work area" concept — see host.hh).
+// Default surface size, used until the compositor's first configure lands and
+// as the primaryMonitor() fallback when no output has been advertised yet
+// (Wayland has no "work area" concept — see host.hh).
 constexpr int kDefaultW = 1200;
 constexpr int kDefaultH = 700;
 }
@@ -32,9 +33,8 @@ constexpr int kDefaultH = 700;
 class LinuxHost : public Host, public InputSink {
 public:
     // The Wayland connection (and its output/monitor list) is established
-    // here, not in init() — PlayerWindow::create() queries primaryMonitor()
-    // BEFORE calling init() (to decide the initial UiMode), the same way
-    // Windows' MonitorFromPoint works without any window existing yet.
+    // here, not in init(), so primaryMonitor() can be answered before any
+    // window exists — the same way Windows' MonitorFromPoint can.
     LinuxHost() : display_(std::make_unique<WaylandDisplay>()) {}
 
     ~LinuxHost() override {
@@ -43,7 +43,7 @@ public:
 
     std::string exeDir() const override { return app_paths::exeDir(); }
 
-    bool init(PlayerWindow* owner, UiMode initialMode) override {
+    bool init(PlayerWindow* owner) override {
         owner_ = owner;
         if (!display_->valid()) {
             fprintf(stderr, "[LinuxHost] Failed to connect to Wayland display\n");
@@ -60,7 +60,11 @@ public:
 
         surfaceProvider_ = std::make_unique<WaylandSurfaceProvider>(*display_, *window_);
 
-        if (initialMode == UiMode::Complete) window_->set_fullscreen(nullptr);
+        // Fullscreen unconditionally: Complete was the only surviving mode, so
+        // this is what the app has always done. The compositor answers with a
+        // configure asynchronously (unlike Windows' synchronous SetWindowPos),
+        // and pump() calls onHostResized() once that resize actually lands.
+        window_->set_fullscreen(nullptr);
 
         seekTimerFd_ = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
         return true;
@@ -91,16 +95,7 @@ public:
         return mi;
     }
 
-    void applyUiMode(UiMode mode) override {
-        if (mode == UiMode::Complete) window_->set_fullscreen(nullptr);
-        else                          window_->unset_fullscreen();
-        // The actual resize is reported asynchronously by the compositor's
-        // next configure (checked in pump() via take_resized()), unlike
-        // Windows' synchronous SetWindowPos — so onHostResized() isn't
-        // called here directly; pump() calls it once the resize lands.
-    }
-
-    void adaptToCurrentMonitor(UiMode) override {
+    void adaptToCurrentMonitor() override {
         // No-op: Wayland clients cannot query "which monitor am I nearest"
         // or reposition themselves — see host.hh's class comment.
     }
@@ -250,7 +245,7 @@ public:
             case 'U': owner_->onHotkey(kHotkeySnapTop);     return;
             case 'G': owner_->onHotkey(kHotkeySnapCenterG); return;
             case 'H': owner_->onHotkey(kHotkeySnapCenterH); return;
-            case 'L': owner_->onHotkey(kHotkeyToggleMode);  return;
+            case 'L': owner_->onHotkey(kHotkeyToggleOrientation);  return;
             }
         }
         owner_->onKeyDownPortable(e.keyCode);

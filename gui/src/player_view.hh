@@ -17,6 +17,7 @@
 #include "core/streamer_db.h"
 #include "art_view.hh"
 #include "audio_output.h"
+#include "ui_orientation.hh"
 #ifdef _WIN32
 #include "wasapi_output.hh"
 #else
@@ -58,14 +59,9 @@
 // docs/superpowers/specs/2026-07-28-ui-design-system-rigor-pass-design.md.
 
 // The smallest role IS the floor, so the minimum content height at which the
-// scale is not clamped is exactly the reference height. Complete mode's window
-// sizing must be at least this tall (see UiMode in host.hh); below it the whole
+// scale is not clamped is exactly the reference height; below it the whole
 // scale clamps uniformly rather than distorting.
 static constexpr float kMinWindowContentH = kUiReferenceHeight;
-
-// UiMode itself is declared in host.hh (Host's window-sizing methods need it
-// too): Complete = today's full browsing UI, true fullscreen; Essential = a
-// minimal "now playing" widget for monitors too short for Complete.
 
 // Output backend selection (Audio Settings panel / db "audio_backend" key).
 // Usb is primary/bit-perfect on both platforms; Wasapi is Windows' secondary
@@ -259,9 +255,8 @@ private:
     // Layout
     void recalcLayout();
 
-    // UI mode (Essential/Complete) — see UiMode's comment in host.hh.
-    void toggleUiMode();
-    int  essentialHitTest(int x, int y) const;  // -1 none, else EssentialBtn index
+    // Layout orientation — see ui_orientation.hh.
+    void toggleOrientation();
     void snapToEdge(int hotkeyId);  // Alt+F/J/C/U/G/H — thin wrapper over host_->snapToEdge()
 
     // Vulkan rendering (vk_canvas). Constructed in create() once the host
@@ -335,17 +330,15 @@ private:
     // drawUiIcon() in player_view.cc for the primitive fallback used when the
     // icon font is missing.
 
-    // UI mode state
-    UiMode  uiMode_ = UiMode::Complete;
-    // (Essential/Complete toggle is keyboard-only: Alt+L. No on-screen button.)
-
-    // Essential-mode layout zones (see toggleUiMode())
-    LayoutRect rcEssentialArt_      = {};
-    LayoutRect rcEssentialTitle_    = {};
-    LayoutRect rcEssentialPrev_     = {};
-    LayoutRect rcEssentialPlayStop_ = {};
-    LayoutRect rcEssentialNext_     = {};
-    int  hoverEssentialBtn_   = -1;  // 0=prev,1=playStop,2=next
+    // Orientation state. `orientation_` is the POLICY (automatic, or a manual
+    // choice that sticks); `curOrientation_` is the ANSWER for the window as it
+    // is right now, recomputed once per recalcLayout() so every drawing and
+    // hit-testing site reads one consistent value for the whole frame. Calling
+    // resolve() ad hoc from draw code would let two halves of one frame
+    // disagree during a resize.
+    // (The toggle is keyboard-only for now: Alt+L. No on-screen button.)
+    UiOrientationState orientation_    = {};
+    UiOrientation      curOrientation_ = UiOrientation::Horizontal;
 
     // Layout zones
     LayoutRect rcSidebar_    = {};

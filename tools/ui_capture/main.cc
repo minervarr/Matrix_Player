@@ -55,7 +55,7 @@ public:
 
     std::string exeDir() const override { return app_paths::exeDir(); }
 
-    bool init(PlayerWindow*, UiMode) override { return true; }
+    bool init(PlayerWindow*) override { return true; }
 
     // Background completions. A real Host wakes its message pump and dispatches
     // these on the UI thread; there is no pump here, so they queue and main()
@@ -99,8 +99,7 @@ public:
         return { r, r };
     }
 
-    void applyUiMode(UiMode) override {}
-    void adaptToCurrentMonitor(UiMode) override {}
+    void adaptToCurrentMonitor() override {}
     void snapToEdge(int) override {}
     void invalidate() override {}
     void setCursor(CursorShape) override {}

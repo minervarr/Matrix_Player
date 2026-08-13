@@ -16,12 +16,6 @@ struct AssetReader;
 
 class PlayerWindow;
 
-// Complete: today's full browsing UI, true fullscreen. Essential: a minimal
-// "now playing" widget, phone-shaped, for monitors too short for Complete.
-// Defined here (not player_view.hh) because Host's window-sizing methods
-// need it too.
-enum class UiMode { Essential, Complete };
-
 // Pointer images the UI distinguishes. Kept to what a hit-test can honestly
 // answer — "this is clickable", "you can type here" — and deliberately
 // separate from vk_canvas's own CursorShape so the portable seam doesn't
@@ -68,11 +62,16 @@ public:
     // same discovery FileAssetReader's own per-platform impl already uses.)
     virtual std::string exeDir() const = 0;
 
-    // Creates the native window sized/positioned for the initial UiMode
-    // (queried via primaryMonitor()/kMinWindowContentH by the caller before
-    // this is called). owner's on*()/handle*() methods are what pump()
-    // dispatches into. Returns false on failure.
-    virtual bool init(PlayerWindow* owner, UiMode initialMode) = 0;
+    // Creates the native window, sized to the monitor (true fullscreen).
+    // owner's on*()/handle*() methods are what pump() dispatches into.
+    // Returns false on failure.
+    //
+    // There is no mode argument any more: which LAYOUT the app draws is
+    // derived from the window's own shape (see ui_orientation.hh) and is none
+    // of the host's business. That removal is also what killed applyUiMode(),
+    // whose Wayland implementation could only ask the compositor for a
+    // fullscreen and wait for an asynchronous configure to come back.
+    virtual bool init(PlayerWindow* owner) = 0;
 
     virtual SurfaceProvider& surfaceProvider() = 0;
     virtual AssetReader&     assetReader()     = 0;
@@ -91,15 +90,10 @@ public:
 
     virtual MonitorInfo primaryMonitor() const = 0;
 
-    // Re-applies sizing/positioning for a UI mode change (toggleUiMode()) —
-    // fullscreen request on Linux, monitor-sized rect + SetWindowPos on
-    // Windows. Calls owner->onHostResized() if the renderer needs to know.
-    virtual void applyUiMode(UiMode mode) = 0;
-
     // Re-fits the window if it moved to a different monitor since the last
     // call. No-op on Linux (see class comment) — Wayland has no client-side
     // "which monitor am I on, reposition to fit" capability.
-    virtual void adaptToCurrentMonitor(UiMode mode) = 0;
+    virtual void adaptToCurrentMonitor() = 0;
 
     // Alt+F/J/C/U/G/H edge-snap. No-op on Linux (see class comment).
     virtual void snapToEdge(int hotkeyId) = 0;

@@ -196,19 +196,15 @@ static void pruneStaleCaches(const std::string& dir, const std::string& keepPath
 bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
     host_ = injectedHost ? std::move(injectedHost) : make_host();
 
-    // Fixed, non-resizable window — both UI modes are fixed sizes the app
-    // itself sets on toggle (toggleUiMode()), never left to interactive
-    // resize/maximize. Starting mode: Complete (true fullscreen) if the
-    // primary monitor is tall enough to clear kMinWindowContentH, the font's
-    // geometric legibility floor (see player_view.hh); otherwise Essential,
-    // which always fits by construction (its size is *derived* from the
-    // monitor's own dimensions — see Host::applyUiMode()'s implementation).
-    MonitorInfo primaryMon = host_->primaryMonitor();
-    int monitorH = primaryMon.bounds.bottom - primaryMon.bounds.top;
-    uiMode_ = (monitorH >= (int)std::ceil(kMinWindowContentH))
-        ? UiMode::Complete : UiMode::Essential;
-
-    if (!host_->init(this, uiMode_)) return false;
+    // Fixed, non-resizable window: the app sets its size once (true
+    // fullscreen) and never leaves it to interactive resize/maximize.
+    //
+    // Orientation is therefore derived from the shape that size gives us — on
+    // desktop that is the monitor's own shape, so a vertical monitor gets the
+    // vertical layout; on Android it is whatever the device reports, and
+    // rotation follows for free. Alt+L overrides it either way. Nothing is
+    // asked of the OS here, which is the point.
+    if (!host_->init(this)) return false;
 
     // Vulkan rendering (vk_canvas). Must come after host_->init() (the
     // surface provider wraps the now-created native window) and before the
@@ -233,6 +229,13 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
     // codepoints it must cover.
     std::string exeDir = host_->exeDir();
     db_.open(app_paths::stateDir() + "matrix_player.db");
+
+    // Orientation preference. An absent key means "automatic", which is the
+    // right default for a fresh install: the window's own shape is a better
+    // first guess than any stored value. Only an explicit "0" disables it.
+    orientation_.autoEnabled = (db_.loadSetting("orientation_auto") != "0");
+    orientation_.manual = (db_.loadSetting("orientation_manual") == "v")
+        ? UiOrientation::Vertical : UiOrientation::Horizontal;
 
     // Restore library from DB
     {
@@ -1004,41 +1007,6 @@ void PlayerWindow::drawFrame() {
     // black, and a screen-wide clear here would hide album art drawn as a
     // background image layer. Each panel below fills only its own rect.
 
-    if (uiMode_ == UiMode::Essential) {
-        canvas.rect(0, 0, canvas.w(), canvas.h(), toColor(CLR_BG_MAIN));
-
-        Rect artR = toRect(rcEssentialArt_);
-        if (transportArtTex_ != kInvalidTexture)
-            canvas.imageFg(transportArtTex_, artR.x, artR.y, artR.w, artR.h);
-        else
-            canvas.rect(artR.x, artR.y, artR.w, artR.h, toColor(CLR_TILE_PLACEHOLDER));
-
-        Rect titleR = toRect(rcEssentialTitle_);
-        std::string titleStr = currentTitle_.empty() ? "No track" : currentTitle_;
-        float titleW = canvas.textWidthStyled(titleStr, metrics_.text.title, FontStyle::Bold);
-        canvas.textStyled(titleStr, titleR.x + std::max(0.0f, (titleR.w - titleW) * 0.5f), titleR.y,
-                          metrics_.text.title, toColor(CLR_TEXT_PRIMARY), FontStyle::Bold);
-
-        // Single combined Play/Stop button (per design: not a separate
-        // resume-vs-restart-from-zero distinction in Essential mode).
-        struct EBtn { LayoutRect rc; int idx; UiIcon icon; ColorRef clr; };
-        EBtn ebuttons[] = {
-            { rcEssentialPrev_,     0, UiIcon::Prev, CLR_TEXT_PRIMARY },
-            { rcEssentialPlayStop_, 1, isPlaying_ ? UiIcon::Stop : UiIcon::Play,
-                                       isPlaying_ ? CLR_TEXT_PRIMARY : CLR_ACCENT },
-            { rcEssentialNext_,     2, UiIcon::Next, CLR_TEXT_PRIMARY },
-        };
-        for (auto& b : ebuttons) {
-            if (hoverEssentialBtn_ == b.idx) {
-                Rect r = toRect(b.rc);
-                canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
-            }
-            drawUiIcon(canvas, b.rc, b.icon, toColor(b.clr));
-        }
-
-        renderer_->draw(frameCurves_, /*overlay_rotation_deg=*/0, frameImages_, frameImagesFg_, msdfQuads_, frameShapes_);
-        return;
-    }
 
     // ── Sidebar ──────────────────────────────────────────────────────────
     {
@@ -2015,7 +1983,7 @@ void PlayerWindow::drawFrame() {
         }
 
         // Three buttons only — prev / play-stop / next, same combined
-        // play-stop toggle as Essential mode. No pause: this user only ever
+        // play-stop toggle. No pause: this user only ever
         // stops or starts from zero.
         struct BtnDef { LayoutRect rc; int idx; UiIcon icon; ColorRef clr; };
         BtnDef buttons[] = {
@@ -2121,7 +2089,7 @@ void PlayerWindow::drawFrame() {
         }
     }
 
-    // (No on-screen mode toggle — Alt+L switches Essential/Complete.)
+    // (No on-screen orientation toggle — Alt+L switches Horizontal/Vertical.)
 
     // ── Audio notice strip (non-modal, both platforms) — see audioNotice_ ──
     if (!audioNotice_.empty()) {
@@ -2177,68 +2145,15 @@ void PlayerWindow::recalcLayout() {
                                           gridTileSize_ + gridRowGap_,
                                           gridCols_);
 
+    // Resolved ONCE per layout pass, so every drawing and hit-testing site in
+    // the frame reads the same answer even while a resize is in flight.
+    curOrientation_ = orientation_.resolve(W, H);
+
     // Type roles + geometry factor, both from the window's SHORT SIDE — see
     // computeUiMetrics()'s comment. Identical to the old `(float)H` for every
     // window wider than tall, which is every window that existed before the
     // vertical layout.
     metrics_ = computeUiMetrics((float)std::min(W, H));
-
-
-    // ── Essential-mode geometry — computed in BOTH modes, deliberately ──────
-    //
-    // Not just when Essential is active: loadTransportArtTexture() sizes the
-    // now-playing texture for max(transportArt, essentialArt) so that toggling
-    // modes never stretches it. With rcEssentialArt_ left at {} in Complete
-    // mode, that max() picked the ~92px transport thumb, and Alt+L then scaled
-    // it ~5.4x — the blurry-art bug. Its tell was that the art snapped sharp on
-    // the next track change, because that reload finally saw a populated rect.
-    //
-    // This block is pure arithmetic on W/H (no cache side effects), so running
-    // it in Complete mode costs nothing.
-    {
-        // Phone-shaped panel: art fills most of it, title band below,
-        // prev/play-stop/next centered near the bottom. No seek bar, no artist
-        // text, per design. Geometry is deliberately proportional to the window
-        // (W/20, H/5, ...) rather than going through metrics_.space() — a
-        // compact mode sized off window fractions is a valid choice, not drift,
-        // and it is what lets this mode work at sizes Complete mode refuses.
-        int margin = std::max(12, W / 20);
-        int btnSize = std::max(40, W / 8);
-        int btnGap  = std::max(16, W / 12);
-        int titleH  = (int)(metrics_.text.title * 1.6f);
-        int titleGap = 12;
-
-        // The bottom stack (title + buttons) is laid out FIRST and the art takes
-        // whatever is left. The old code did the reverse — it sized the art
-        // against a `bottomReserve = max(120, H/5)` that had no relationship to
-        // what actually goes in it, then placed W/8-sized buttons inside. At
-        // this mode's own default 1200x700 that reserve was 140px against a
-        // 12 + 40 + 150 + 60 = 262px stack, so the buttons overlapped the bottom
-        // 70px of the album art AND sat on top of the title band. Deriving the
-        // art from the stack cannot overlap by construction, and it keeps the
-        // controls at full size — this is a now-playing widget, so the buttons
-        // are the last thing that should shrink.
-        int bottomStack = titleGap * 2 + titleH + btnSize;
-        int artSize = std::min(W - margin * 2, H - margin * 2 - bottomStack);
-        artSize = std::max(artSize, 1);   // degenerate windows: never negative
-        int artX = (W - artSize) / 2;
-        int artY = margin;  // (no corner toggle button to clear anymore)
-        rcEssentialArt_ = { artX, artY, artX + artSize, artY + artSize };
-
-        int titleY = rcEssentialArt_.bottom + titleGap;
-        rcEssentialTitle_ = { margin, titleY, W - margin, titleY + titleH };
-
-        int totalBtnW = btnSize * 3 + btnGap * 2;
-        int btnX = (W - totalBtnW) / 2;
-        int btnY = H - margin - btnSize;
-        rcEssentialPrev_     = { btnX, btnY, btnX + btnSize, btnY + btnSize };
-        btnX += btnSize + btnGap;
-        rcEssentialPlayStop_ = { btnX, btnY, btnX + btnSize, btnY + btnSize };
-        btnX += btnSize + btnGap;
-        rcEssentialNext_     = { btnX, btnY, btnX + btnSize, btnY + btnSize };
-    }
-
-    if (uiMode_ == UiMode::Essential) return;
 
     // Every fixed-pixel value below is authored at the 1080 reference height
     // and passed through metrics_.space() — see ui_metrics.hh. Values that used
@@ -2440,31 +2355,33 @@ void PlayerWindow::recalcLayout() {
                                     (float)(rcGrid_.bottom - rcGrid_.top));
 }
 
-// ── UI mode (Essential/Complete) ─────────────────────────────────────────────
-// The actual monitor-fitting/positioning math (computeCompleteWindowRect,
-// computeEssentialWindowRect equivalents) now lives in os/windows_host.cc /
+// ── Orientation, and the window-position hotkeys ─────────────────────────────
+// The monitor-fitting/positioning math lives in os/windows_host.cc /
 // os/linux_host.cc — see host.hh's class comment for why Linux's versions of
 // adaptToCurrentMonitor/snapToEdge are real no-ops (Wayland clients cannot
-// query monitor work areas or set their own position) while applyUiMode's
-// Complete-mode fullscreen has a real Wayland equivalent.
+// query monitor work areas or set their own position).
 
-void PlayerWindow::toggleUiMode() {
-    uiMode_ = (uiMode_ == UiMode::Complete) ? UiMode::Essential : UiMode::Complete;
-    host_->applyUiMode(uiMode_);
+// Alt+L. Leaves automatic orientation and flips to the other layout; a later
+// window resize will NOT take the choice back (see UiOrientationState).
+//
+// There is no host call here on purpose. Orientation is a layout decision, not
+// a window size — which is exactly why it works on Wayland, where the old
+// applyUiMode() path could only ask the compositor and wait for a configure.
+void PlayerWindow::toggleOrientation() {
+    // PlayerWindow caches no window size of its own: recalcLayout() reads it
+    // straight off the renderer each pass, and so does this. The null guard
+    // matters because a hotkey can arrive before create() constructs it.
+    if (!renderer_) return;
+    orientation_.toggleManual((int)renderer_->width(), (int)renderer_->height());
+    db_.saveSetting("orientation_auto", orientation_.autoEnabled ? "1" : "0");
+    db_.saveSetting("orientation_manual",
+                    orientation_.manual == UiOrientation::Vertical ? "v" : "h");
+    recalcLayout();
+    invalidate();
 }
 
 void PlayerWindow::adaptToCurrentMonitor() {
-    host_->adaptToCurrentMonitor(uiMode_);
-}
-
-int PlayerWindow::essentialHitTest(int x, int y) const {
-    auto in = [&](const LayoutRect& r) {
-        return x >= r.left && x < r.right && y >= r.top && y < r.bottom;
-    };
-    if (in(rcEssentialPrev_))     return 0;
-    if (in(rcEssentialPlayStop_)) return 1;
-    if (in(rcEssentialNext_))     return 2;
-    return -1;
+    host_->adaptToCurrentMonitor();
 }
 
 // Alt+F/J/C/U/G/H — the window-move mechanism in place of title-bar dragging
@@ -2780,18 +2697,15 @@ void PlayerWindow::loadTransportArtTexture(const std::string& artPath) {
         if (!img.empty()) artWin_.updateImage(img);
     }
     if (!artPath.empty()) {
-        // This one texture is shown in two different-sized contexts without a
-        // reload between them (Complete mode's small rcTransportArt_ and
-        // Essential mode's much larger rcEssentialArt_, toggled via
-        // toggleUiMode() which doesn't touch this texture) — size for
-        // whichever context is larger so switching modes never shows a
-        // stretched-blurry version.
-        int transportW = rcTransportArt_.right - rcTransportArt_.left;
-        int transportH = rcTransportArt_.bottom - rcTransportArt_.top;
-        int essentialW = rcEssentialArt_.right - rcEssentialArt_.left;
-        int essentialH = rcEssentialArt_.bottom - rcEssentialArt_.top;
-        int targetW = std::max(transportW, essentialW);
-        int targetH = std::max(transportH, essentialH);
+        // Sized for the transport bar's thumbnail, the only place it is drawn.
+        // It used to take max(transport, essential) because Alt+L switched to a
+        // much larger now-playing widget WITHOUT reloading this texture, and
+        // sizing for the small one made the big one blurry. Essential mode is
+        // gone, so there is one size again — and orientation, unlike the old
+        // mode toggle, goes through recalcLayout() and cannot change how big
+        // this thumbnail is: both orientations draw it at the same square.
+        int targetW = rcTransportArt_.right - rcTransportArt_.left;
+        int targetH = rcTransportArt_.bottom - rcTransportArt_.top;
         FileByteReader reader;
         transportArtTex_ = createTextureFromImageFile(*renderer_, reader, artPath.c_str(),
                                                        targetW, targetH);
@@ -3159,14 +3073,6 @@ void PlayerWindow::onMouseMove(int x, int y) {
         if (oldChip != hoverChipIdx_ || oldSugg != hoverSuggestIdx_) invalidate();
     }
 
-    if (uiMode_ == UiMode::Essential) {
-        int oldHoverEssential = hoverEssentialBtn_;
-        hoverEssentialBtn_ = essentialHitTest(x, y);
-        if (hoverEssentialBtn_ != oldHoverEssential)
-            invalidate();
-        return;
-    }
-
     int oldHoverAlbum = hoverAlbumIdx_;
     int oldHoverTrack = hoverTrackIdx_;
     int oldHoverVariant = hoverVariantIdx_;
@@ -3227,9 +3133,6 @@ void PlayerWindow::onMouseMove(int x, int y) {
 // Runs off the hover state onMouseMove just computed plus the few rects that
 // are clickable without one (search box, artwork, prose column).
 CursorShape PlayerWindow::cursorForPoint(int x, int y) const {
-    if (uiMode_ == UiMode::Essential)
-        return essentialHitTest(x, y) >= 0 ? CursorShape::Hand : CursorShape::Arrow;
-
     // Typing surface first: it sits inside the sidebar, whose own rows are
     // hands, so the more specific rect has to win.
     if (ptInRect(rcSearch_, x, y)) return CursorShape::Text;
@@ -3276,21 +3179,12 @@ void PlayerWindow::onMouseLeave() {
     hoverTransportBtn_ = -1;
     hoverSettingsItem_ = -1;
     hoverDspBadge_ = false;
-    hoverEssentialBtn_ = -1;
     plHoverRow_ = plHoverTile_ = plHoverRangeTab_ = -1;
     invalidate();
 }
 
 void PlayerWindow::onLButtonDown(int x, int y) {
     if (activePanel_ != SettingsPanel::None) { onPanelClick(x, y); return; }
-
-    if (uiMode_ == UiMode::Essential) {
-        int btn = essentialHitTest(x, y);
-        if (btn == 0) { onPrev(); return; }
-        if (btn == 1) { if (isPlaying_) onStop(); else onPlay(); return; }
-        if (btn == 2) { onNext(); return; }
-        return;
-    }
 
     // The suggestion dropdown is tested FIRST: it floats over the nav rows,
     // so without this a click meant for "1990s" would land on whichever
@@ -6627,7 +6521,7 @@ void PlayerWindow::onScanDone() {
 // actually go away).
 
 void PlayerWindow::onHotkey(int hotkeyId) {
-    if (hotkeyId == kHotkeyToggleMode) toggleUiMode();
+    if (hotkeyId == kHotkeyToggleOrientation) toggleOrientation();
     else                               snapToEdge(hotkeyId);
 }
 
@@ -6817,12 +6711,10 @@ void PlayerWindow::applyViewState(const ViewState& s) {
 }
 
 void PlayerWindow::onNavBack() {
-    if (uiMode_ == UiMode::Essential) return;   // nothing to go back FROM
     goBack();
 }
 
 void PlayerWindow::onNavForward() {
-    if (uiMode_ == UiMode::Essential) return;
     if (!navForwardValid_) return;
     ViewState s = navForward_;
     navForwardValid_ = false;   // one step forward, then the stack is spent

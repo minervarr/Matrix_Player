@@ -12,5 +12,5 @@ enum HotkeyId {
     kHotkeySnapTop,
     kHotkeySnapCenterG,  // Alt+G and Alt+H both center — two ids, same action
     kHotkeySnapCenterH,
-    kHotkeyToggleMode,   // Alt+L: Essential <-> Complete
+    kHotkeyToggleOrientation,  // Alt+L: Horizontal <-> Vertical
 };
