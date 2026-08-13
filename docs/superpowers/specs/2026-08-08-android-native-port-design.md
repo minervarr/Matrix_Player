@@ -163,6 +163,24 @@ style, same place in the file). This does not touch or replace
 an independent, valid path for a Java-consuming app; this port simply doesn't
 use it.
 
+> **What actually happened (2026-08-13).** That block was designed here and
+> then **never written**. `android/CMakeLists.txt` linked `ae_aaudio` and
+> `ae_mediacodec` from the start and nothing defined either —
+> `git log -S ae_aaudio` over audio_engine's `CMakeLists.txt` returns no commit
+> at all. Nobody noticed because nobody built this target: the first attempt to
+> do so failed three times before even reaching it (missing SDK platform,
+> `ui_min_text_size.gen.h` looked for only under `build/windows/`, then this).
+>
+> It exists now, with one deliberate narrowing from the design above:
+> **`ae_aaudio` is the SINK ONLY, and `ae_mediacodec` is not built.**
+> `aaudio_source.cpp` is capture, which this slice has no use for. Dropping
+> MediaCodec is the more interesting call: this engine decodes FLAC and MP3
+> with its own vendored libFLAC/libmpg123 on every platform ON PURPOSE, because
+> some phones ship no FLAC decoder — so `AMediaCodec` would be a second,
+> device-dependent decode path for formats already covered, and would make
+> "bit-perfect everywhere" a claim that varies by handset. Adding either back
+> is one line.
+
 ## Rendering integration
 
 `android/CMakeLists.txt` also does `add_subdirectory(framework/vk_canvas/core)`

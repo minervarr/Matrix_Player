@@ -39,16 +39,17 @@ streamer_gui --selftest    ok (117 assertions)
 core/input.hh          idéntico byte a byte en los dos checkouts
 ```
 
-**Queda un paso, y es de esta sesión:** el repo padre de Matrix_Player tiene el puntero del
-submódulo movido y sin commitear:
-
-```
- M framework/vk_canvas
-?? docs/android-platform-reuse.md    <- este archivo
-```
-
-Commitea ambos cuando te parezca. El remoto local `streamer-local` quedó configurado; se
+**Ese paso ya está hecho** (2026-08-13, sesión de Matrix_Player): el puntero del submódulo
+y este archivo están commiteados en `a0266c1`, después de verificar contra `e926966` que
+los ocho tests de escritorio pasan. El remoto local `streamer-local` quedó configurado; se
 quita con `git remote remove streamer-local` cuando estorbe.
+
+**Y una corrección al inventario de abajo, encontrada al construir:** el APK de
+Matrix_Player **tampoco se había construido nunca**. `android/CMakeLists.txt` enlazaba
+`ae_aaudio` y `ae_mediacodec`, y ningún CMake del repo definía ninguno de los dos. Ahora
+`ae_aaudio` existe en `framework/audio_engine/CMakeLists.txt` (sólo el sink; mediacodec
+queda fuera a propósito), y el APK compila y empaqueta sus assets para arm64-v8a y x86_64.
+Sigue sin ejecutarse en un dispositivo, igual que el de streamer.
 
 Lo que sigue en esta sección es el procedimiento, por si hay que repetirlo o revertirlo.
 

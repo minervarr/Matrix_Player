@@ -1038,7 +1038,12 @@ this turns into a mess:
    implement; and a touch, phone-sized UI is genuinely different from a
    sidebar-and-grid desktop one. They are structural siblings that share
    *primitives*, not code: the same `Canvas`, the same `theme.hh` and
-   `ui_metrics.hh`, unmodified.
+   `ui_metrics.hh`, unmodified — plus, since the orientation work,
+   `ui_orientation.cc` and `rail_layout.cc`, which are pure enough to cross
+   with no shim. What has NOT crossed yet is the drawing: bar A and bar B still
+   live in `player_view.cc`, so the phone still shows the flat track list and
+   not the desktop's frame. Closing that gap means lifting the two bars behind
+   a plain-data view model, not widening `Host`.
 2. **What it reuses, it reuses UNCHANGED** — `matrix_core` (`scanLibrary`,
    `Decoder`, and `facets` when guided search reaches the phone) and
    `vk_canvas_core`, both added by `add_subdirectory` straight from this tree.
@@ -1052,6 +1057,56 @@ this turns into a mess:
 from the **desktop** root list into `app/src/main/assets/shaders/` (vk_canvas's
 own Android demo list omits MSDF, and this app draws text) — both documented in
 place, and neither is a fork.
+
+### Building it, and four things that were wrong until 2026-08-13
+
+```bash
+cd android && VULKAN_SDK=/opt/shader-slang sh gradlew assembleDebug --no-daemon
+# SUCCESSFUL is not enough — check the APK actually carries its assets:
+unzip -l app/build/outputs/apk/debug/app-arm64-v8a-debug.apk | grep -c "assets/fonts/"   # 69
+```
+
+`gradlew` has no execute bit in the repo, hence `sh gradlew`.
+
+**This target had never built.** All four causes were silent in different ways:
+
+1. **`ae_aaudio` did not exist.** `android/CMakeLists.txt` linked it and no
+   CMake in either repo defined it — `git log -S ae_aaudio` over
+   `framework/audio_engine/CMakeLists.txt` returns *no commit at all*. The
+   sources were committed; the build rule never was, because audio_engine's own
+   `platform/android/` Gradle project compiles them into one library for its
+   own app and exports nothing. Fixed in the submodule, beside `ae_alsa`/
+   `ae_jack`. **Sink only** — `aaudio_source.cpp` is capture, and
+   `backends/mediacodec/` stays unbuilt on purpose: this engine decodes FLAC
+   and MP3 with its own vendored libraries everywhere, because some phones ship
+   no FLAC decoder and a per-device decode path would make "bit-perfect
+   everywhere" depend on the handset.
+2. **`compileSdkVersion` named a platform that is not installed**, and the SDK
+   is root-owned, so Gradle's attempt to install it failed with *"The SDK
+   directory is not writable"*. Now 36, and `targetSdkVersion` is 36 too:
+   Android 16 stops honouring orientation and resizability restrictions on
+   large screens, which is what `ui_orientation.hh` already assumes.
+3. **`ui_min_text_size.gen.h` was looked for only under `build/windows/`**, so
+   an Android build on a Linux-only machine failed telling the developer to run
+   a desktop build they had already run. It now searches all four desktop build
+   trees; the file is identical in each.
+4. **No typeface was wired at all.** `AndroidHost` passed `font=nullptr` to
+   `Canvas`, so every string fell through to the engine's built-in stroke font.
+   Text appeared, which is exactly why nobody noticed. `AndroidHost::initFonts()`
+   is now the desktop path from `PlayerWindow::create()` with one substitution —
+   an `AndroidAssetReader` where the desktop reads files, because the faces live
+   inside the APK. Paths come from `gui/src/ui_fonts.hh`, so the two platforms
+   cannot drift onto different faces.
+
+**It is a `RasterFont`, not MTSDF, on BOTH platforms.** `Canvas::useMsdf()`,
+`Renderer::initMsdf()` and the `.msdf.cache` filename all keep the name from
+when it was `MsdfFont`; the class bakes per-size coverage instead
+(`raster_font.hh:18`). Baking is on the CPU on both, too — the desktop's GPU
+baker is opt-in behind `MATRIX_GPU_GLYPHS` and was *measured slower*
+(`player_view.cc:362`).
+
+**Still not verified: none of this has run on a device.** It compiles, links,
+and packages its assets. Nothing more is claimed.
 
 ---
 
