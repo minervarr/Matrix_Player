@@ -268,6 +268,18 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         target_compile_options(ui_orientation_test PRIVATE -Wall)
     endif()
 
+    # rail_layout_test links the REAL src/rail_layout.cc. Bar A's geometry is
+    # the part of the orientation work most likely to break in silence -- a
+    # wrong anchor in one of the eight states (2 orientations x bit-perfect x
+    # search open) does not crash, it just looks wrong somewhere nobody looked
+    # -- so it is arithmetic over a rectangle, tested without a Canvas.
+    add_executable(rail_layout_test src/rail_layout_test.cc src/rail_layout.cc
+                                    src/ui_orientation.cc)
+    target_include_directories(rail_layout_test PRIVATE src)
+    if(NOT WIN32)
+        target_compile_options(rail_layout_test PRIVATE -Wall)
+    endif()
+
     # ui_icons_test links the REAL src/ui_icons.cc rather than restating its
     # arithmetic, which is why the icon placement math is split away from the
     # Canvas-dependent half (src/ui_icons_draw.cc). Needs no include dirs
