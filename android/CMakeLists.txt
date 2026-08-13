@@ -139,6 +139,17 @@ add_library(matrix_player_android SHARED
     ${MATRIX_GUI_SRC}/ui_metrics.cc
     ${MATRIX_GUI_SRC}/ui_icons.cc
     ${MATRIX_GUI_SRC}/ui_icons_draw.cc
+    # The frame's two pure modules. ui_orientation.cc decides Horizontal vs
+    # Vertical from the window's own shape -- on a phone that is rotation, and
+    # it arrives as an ordinary resize because the manifest declares
+    # configChanges=orientation and locks no screenOrientation. rail_layout.cc
+    # places everything in bar A along the bar's long axis.
+    #
+    # Neither includes anything at all beyond layout_rect.hh, which is why they
+    # cross without a shim. Compiling them here also puts them through libc++
+    # and the NDK, which is where non-portable code that GCC accepts shows up.
+    ${MATRIX_GUI_SRC}/ui_orientation.cc
+    ${MATRIX_GUI_SRC}/rail_layout.cc
     ${NATIVE_APP_GLUE}/android_native_app_glue.c)
 
 target_include_directories(matrix_player_android PRIVATE
