@@ -150,6 +150,14 @@ void AndroidHost::onPause() {
 // the faces live inside the APK rather than beside an executable. The face
 // paths themselves come from gui/src/ui_fonts.hh, so the two platforms cannot
 // drift onto different typefaces.
+//
+// The atlas is a RasterFont -- per-size rasterized coverage, NOT MTSDF
+// (raster_font.hh:18 spells out the difference). Canvas::useMsdf() and
+// Renderer::initMsdf() keep the old name from when it was MsdfFont. Baking is
+// on the CPU, which is also what the desktop does by default: its GPU baker is
+// opt-in behind MATRIX_GPU_GLYPHS and measured SLOWER, not faster
+// (player_view.cc:362). So the two platforms take the same path, not merely a
+// similar one.
 void AndroidHost::initFonts() {
     if (fontsReady_ || !assets_) return;
 
@@ -160,7 +168,7 @@ void AndroidHost::initFonts() {
         uiFont_.loadFromMemory(regular.data(), regular.size());
 
     if (!msdfFont_.open(*assets_, ui_fonts::regular())) {
-        LOGI("MTSDF font failed to open (%s) -- falling back to vector text",
+        LOGI("glyph atlas failed to open (%s) -- falling back to vector text",
              ui_fonts::regular());
         return;
     }
@@ -210,8 +218,8 @@ void AndroidHost::drawFrame() {
     msdfQuads_.clear();
     Canvas canvas(curves, renderer_->width(), renderer_->height(), &uiFont_,
                  0.0f, 0.0f, 0.0f, 0.0f);
-    // MTSDF text when the atlas is up; the vector face above is the fallback
-    // for the frames before it is, and for any glyph the atlas lacks.
+    // Atlas text when it is up; the vector face above is the fallback for the
+    // frames before it is, and for any glyph the atlas lacks.
     if (fontsReady_) canvas.useMsdf(&msdfFont_, &msdfQuads_);
 
     if (view_) {

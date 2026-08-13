@@ -7,7 +7,7 @@
 #include "android_platform.hh"  // AndroidSurfaceProvider, AndroidAssetReader
 #include "orientation.hh"       // vce::platform::Orientation
 #include "font.hh"              // vk_canvas: Font (vector fallback)
-#include "raster_font.hh"       // vk_canvas: RasterFont (the MTSDF atlas)
+#include "raster_font.hh"       // vk_canvas: RasterFont (the glyph atlas)
 
 class Renderer;
 class AndroidPlayerView;
@@ -65,6 +65,14 @@ private:
     // used to pass font=nullptr to Canvas, so every string fell through to the
     // engine's built-in stroke font -- legible, but not the app's typeface, and
     // no amount of sharing the LAYOUT would have made the two look alike.
+    //
+    // RasterFont, NOT MsdfFont: it bakes actual coverage at each size the UI
+    // draws at, rather than one distance field the shader rescales
+    // (raster_font.hh:18). The useMsdf()/initMsdf() names on Canvas and
+    // Renderer are left over from when this WAS MsdfFont and mean "the glyph
+    // atlas" now -- they are the reason it is easy to say MTSDF here and be
+    // wrong. Desktop bakes on the CPU too: its GPU path is opt-in behind
+    // MATRIX_GPU_GLYPHS and was measured slower (player_view.cc:362).
     Font           uiFont_;
     RasterFont     msdfFont_;
     std::vector<float>    msdfQuads_;
