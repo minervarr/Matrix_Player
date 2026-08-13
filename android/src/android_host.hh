@@ -2,8 +2,12 @@
 #include <android_native_app_glue.h>
 #include <memory>
 
+#include <vector>
+
 #include "android_platform.hh"  // AndroidSurfaceProvider, AndroidAssetReader
 #include "orientation.hh"       // vce::platform::Orientation
+#include "font.hh"              // vk_canvas: Font (vector fallback)
+#include "raster_font.hh"       // vk_canvas: RasterFont (the MTSDF atlas)
 
 class Renderer;
 class AndroidPlayerView;
@@ -42,6 +46,11 @@ private:
     void onPause();
 
     void drawFrame();
+    // Loads the UI faces out of the APK's assets and bakes the glyph set the
+    // UI actually draws. Called once the renderer exists, because initMsdf()
+    // needs it. See the definition for why text looked nothing like the
+    // desktop's before this existed.
+    void initFonts();
 
     android_app*       state_ = nullptr;
     AndroidPlayerView*  view_  = nullptr;
@@ -51,6 +60,16 @@ private:
     std::unique_ptr<Renderer>               renderer_;
 
     vce::platform::Orientation orientation_;
+
+    // The SAME type family and the SAME text engine the desktop uses. Android
+    // used to pass font=nullptr to Canvas, so every string fell through to the
+    // engine's built-in stroke font -- legible, but not the app's typeface, and
+    // no amount of sharing the LAYOUT would have made the two look alike.
+    Font           uiFont_;
+    RasterFont     msdfFont_;
+    std::vector<float>    msdfQuads_;
+    std::vector<int>      glyphSizes_;
+    bool           fontsReady_ = false;
 
     int64_t lastFrameNs_ = 0;
 };
