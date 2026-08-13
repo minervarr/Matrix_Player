@@ -69,6 +69,12 @@ struct RailInput {
     UiOrientation orient    = UiOrientation::Horizontal;
     bool          bitPerfect = false;                   // no AutoEQ box
     bool          searchOpen = false;
+    // The AutoEQ list is unfurled over the letter group. It HIDES the letters
+    // rather than floating above them, and that is forced by the renderer, not
+    // chosen: every rect is emitted before every glyph (see the note on
+    // rcChips_ in recalcLayout()), so an overlay's background can never cover
+    // text drawn earlier -- the letters would show straight through it.
+    bool          eqListOpen = false;
 
     // The DESIRED extent of one cell along the long axis; the cross-axis
     // extent is always the bar's full thickness, so a cell is square when this
@@ -88,7 +94,7 @@ struct RailInput {
 // Every rect is in window coordinates. A hidden element is returned as {} —
 // an empty rect, which every hit-test in this codebase already misses.
 struct RailLayout {
-    LayoutRect letters[kRailLetterCount]{};  // all empty while search is open
+    LayoutRect letters[kRailLetterCount]{};  // empty while search or the EQ list is open
     LayoutRect search{};    // the search letter, or the text field while open
     LayoutRect settings{};
     LayoutRect close{};     // only while search is open

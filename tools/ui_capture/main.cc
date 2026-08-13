@@ -150,6 +150,7 @@ const char* kStates[] = {
     "40-search",
     "41-search-suggest",
     "42-search-chips",
+    "43-autoeq-unfurled",
 };
 
 } // namespace

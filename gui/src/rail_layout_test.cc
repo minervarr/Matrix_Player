@@ -181,6 +181,27 @@ int main() {
         assert(same(bpOpen.close,    v.close));
     }
 
+    // ── The unfurled AutoEQ list HIDES the letters, it does not float ──────
+    // Forced by the renderer, not chosen: every rect is emitted before every
+    // glyph, so an overlay background can never cover text drawn earlier --
+    // the letters would show straight through it. Hiding them also stops them
+    // hit-testing underneath the list.
+    {
+        RailInput in = vertical(false, false);
+        in.eqListOpen = true;
+        const RailLayout l = computeRailLayout(in);
+
+        for (int i = 0; i < kRailLetterCount; i++) assert(empty(l.letters[i]));
+        assert(empty(l.search));
+        assert(empty(l.close));
+
+        // The box and Settings do NOT move: the list unfurls FROM the box, so
+        // its anchor has to stay where the listener just touched it.
+        const RailLayout closed = computeRailLayout(vertical(false, false));
+        assert(same(l.eqBox,    closed.eqBox));
+        assert(same(l.settings, closed.settings));
+    }
+
     // ── The vertical bar is NARROW, and the cells shrink to fit ─────────────
     // Not a corner case: a vertical bar's long extent is the window's WIDTH.
     // On a 1080-wide screen nine 130px cells plus a 300px AutoEQ box plus the

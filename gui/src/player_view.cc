@@ -2125,6 +2125,7 @@ void PlayerWindow::recalcLayout() {
         ri.orient      = curOrientation_;
         ri.bitPerfect  = bitperfectMode_.load();
         ri.searchOpen  = searchOpen_;
+        ri.eqListOpen  = eqListOpen_;
         ri.cell        = barThickness;              // square by default
         ri.eqBoxExtent = (int)metrics_.space(300.0f);
         ri.pad         = (int)metrics_.space(10.0f);
@@ -5314,7 +5315,7 @@ void PlayerWindow::drawBarA(Canvas& canvas) {
     // reworkings of it (Remixes), then Playlists. NOT the AlbumTypeFilter
     // enum's order, which is frozen by the albums table and means nothing on
     // screen.
-    if (!searchOpen_) {
+    if (!searchOpen_ && !eqListOpen_) {
         struct L { const char* g; int rail; AlbumTypeFilter f; };
         static const L kFilters[] = {
             { "A", kRailAlbums,       AlbumTypeFilter::Album       },
@@ -5339,7 +5340,7 @@ void PlayerWindow::drawBarA(Canvas& canvas) {
         // does not sit level with them.
         cell(rail_.search, "S", CLR_TEXT_SECONDARY, searchOpen_,
              hoverSidebarItem_ == kSidebarSearchHit);
-    } else {
+    } else if (searchOpen_) {
         // Open search: the field spans the middle, with a close cell at the
         // far end. The filter letters and the AutoEQ box are both gone — see
         // computeRailLayout(), which is why this state looks identical in
@@ -7233,6 +7234,19 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
         onCharPortable(0x09);                       // Tab: accept the top row
         for (char c : std::string("24")) onCharPortable((uint32_t)c);
         onCharPortable(0x09);
+        return true;
+    }
+
+    // The AutoEQ switcher unfurled. Reached the way a listener reaches it —
+    // by clicking the box's name — so the capture exercises the real toggle
+    // and the real row layout, not a flag set from outside.
+    if (state == "43-autoeq-unfurled") {
+        // The box's rects are computed during DRAW (the same contract hpRows_
+        // has always used), so the frame has to happen before the click —
+        // the draw-then-click order the EQ tabs and playlist tiles need too.
+        drawFrame();
+        if (eqNameRc_.right <= eqNameRc_.left) return false;
+        click(eqNameRc_);
         return true;
     }
 

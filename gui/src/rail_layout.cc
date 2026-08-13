@@ -86,6 +86,11 @@ RailLayout computeRailLayout(const RailInput& in) {
         return out;
     }
 
+    // The unfurled AutoEQ list takes the letter group's space, for the same
+    // reason open search does -- see RailInput::eqListOpen. Settings and the
+    // box itself stay exactly where they were.
+    if (in.eqListOpen) return out;
+
     // Search letter + the seven filter letters travel together as one group of
     // eight cells, with search on the NEAR side of the group: reading outward
     // from Settings it goes search, then Albums..Playlists.
