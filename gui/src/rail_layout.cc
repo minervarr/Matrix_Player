@@ -73,6 +73,28 @@ RailLayout computeRailLayout(const RailInput& in) {
     if (eqLen > 0) {
         Span box{ nearEnd, nearEnd + eqLen };
         out.eqBox = place(in, box);
+
+        // The box's two halves: a SQUARE × at its near end (no profile), the
+        // active name taking the rest. Computed HERE rather than during the
+        // draw, so the hit-test and the drawing read one source instead of the
+        // drawing writing what the hit-test will read next frame.
+        //
+        // Square means the bar's THICKNESS, not `cell`. Those are the same
+        // number until the cells shrink, and they shrink on exactly the bar
+        // whose long extent is the window's height -- the ordinary horizontal
+        // one. Using `cell` there made the × a 82x130 rectangle and shifted
+        // both it and the name 24 px toward the near end.
+        const int thick = (in.orient == UiOrientation::Vertical)
+                              ? (in.bar.bottom - in.bar.top)
+                              : (in.bar.right - in.bar.left);
+        const int sq = (thick < eqLen) ? thick : eqLen;
+        out.eqNone = place(in, Span{ box.a, box.a + sq });
+        out.eqName = place(in, Span{ box.a + sq, box.b });
+
+        // The unfurled list runs from the box to the far end of the bar. It
+        // takes the letter group's space -- see RailInput::eqListOpen.
+        if (in.eqListOpen) out.eqList = place(in, Span{ box.b, L });
+
         nearEnd = box.b;
     }
 
@@ -120,4 +142,27 @@ RailLayout computeRailLayout(const RailInput& in) {
         out.letters[i] = place(in, Span{ a, a + cell });
     }
     return out;
+}
+
+// ── Rows inside an unfurled list ─────────────────────────────────────────────
+// `list` is already a window rect, so these need no RailInput: the long axis is
+// implied by the orientation, and rows run from the list's NEAR end (its left
+// in Vertical, its bottom in Horizontal) outward.
+
+int railListCapacity(const LayoutRect& list, UiOrientation orient, int rowExtent) {
+    if (rowExtent <= 0) return 0;
+    const int room = (orient == UiOrientation::Vertical) ? (list.right - list.left)
+                                                         : (list.bottom - list.top);
+    return room > 0 ? room / rowExtent : 0;
+}
+
+LayoutRect railListRow(const LayoutRect& list, UiOrientation orient,
+                       int rowExtent, int i) {
+    if (rowExtent <= 0 || i < 0) return {};
+    if (i >= railListCapacity(list, orient, rowExtent)) return {};
+    if (orient == UiOrientation::Vertical)
+        return { list.left + i * rowExtent, list.top,
+                 list.left + (i + 1) * rowExtent, list.bottom };
+    return { list.left, list.bottom - (i + 1) * rowExtent,
+             list.right, list.bottom - i * rowExtent };
 }

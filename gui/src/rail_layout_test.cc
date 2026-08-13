@@ -55,28 +55,33 @@ LayoutRect rotateCcw(const LayoutRect& r) {
 }
 
 // Every rect of a layout, in one order, so the rotation check can walk both.
-void collect(const RailLayout& l, const LayoutRect* (&out)[kRailLetterCount + 4]) {
+void collect(const RailLayout& l, const LayoutRect* (&out)[kRailLetterCount + 7]) {
     int n = 0;
     for (int i = 0; i < kRailLetterCount; i++) out[n++] = &l.letters[i];
     out[n++] = &l.search;
     out[n++] = &l.settings;
     out[n++] = &l.close;
     out[n++] = &l.eqBox;
+    out[n++] = &l.eqNone;
+    out[n++] = &l.eqName;
+    out[n++] = &l.eqList;
 }
 
 // ── Rule 3: the two orientations are ONE layout and a rotation ──────────────
 // This is the assertion that makes it impossible for the two to drift apart.
 // If someone later special-cases an anchor for one orientation, this fails.
-void assertRotationHolds(bool bitPerfect, bool searchOpen) {
-    const RailLayout v = computeRailLayout(vertical(bitPerfect, searchOpen));
-    const RailLayout h = computeRailLayout(horizontal(bitPerfect, searchOpen));
+void assertRotationHolds(bool bitPerfect, bool searchOpen, bool eqListOpen = false) {
+    RailInput vi = vertical(bitPerfect, searchOpen);   vi.eqListOpen = eqListOpen;
+    RailInput hi = horizontal(bitPerfect, searchOpen); hi.eqListOpen = eqListOpen;
+    const RailLayout v = computeRailLayout(vi);
+    const RailLayout h = computeRailLayout(hi);
 
-    const LayoutRect* vr[kRailLetterCount + 4];
-    const LayoutRect* hr[kRailLetterCount + 4];
+    const LayoutRect* vr[kRailLetterCount + 7];
+    const LayoutRect* hr[kRailLetterCount + 7];
     collect(v, vr);
     collect(h, hr);
 
-    for (int i = 0; i < kRailLetterCount + 4; i++) {
+    for (int i = 0; i < kRailLetterCount + 7; i++) {
         // Hidden in one orientation must mean hidden in the other -- rotating
         // an empty rect would otherwise produce a plausible-looking rectangle.
         assert(empty(*vr[i]) == empty(*hr[i]));
@@ -202,6 +207,84 @@ int main() {
         assert(same(l.settings, closed.settings));
     }
 
+    // ── The AutoEQ box's two halves come from the LAYOUT, not the draw ──────
+    // They used to be written by drawEqBox() and read by the hit-test a frame
+    // later. Computing them here is what lets both read one source.
+    {
+        const RailLayout v = computeRailLayout(vertical(false, false));
+        assert(!empty(v.eqNone) && !empty(v.eqName));
+
+        // The × takes a SQUARE at the box's near end; the name takes the rest.
+        assert(v.eqNone.left  == v.eqBox.left);
+        assert(wide(v.eqNone) == tall(v.eqNone));        // square, by definition
+        assert(wide(v.eqNone) == kT);                    // ...of the bar's thickness
+        assert(v.eqName.left  == v.eqNone.right);
+        assert(v.eqName.right == v.eqBox.right);
+        assert(tall(v.eqNone) == kT && tall(v.eqName) == kT);
+
+        // Rotated, the × is BELOW the name: the near end of a left bar is its
+        // bottom, so the symbol sits under the label the same way it sits
+        // before it when the bar is on top.
+        const RailLayout h = computeRailLayout(horizontal(false, false));
+        assert(h.eqNone.bottom == h.eqBox.bottom);
+        assert(h.eqName.bottom == h.eqNone.top);
+
+        // Hidden with the box, in both the states that hide it.
+        assert(empty(computeRailLayout(vertical(true,  false)).eqName));
+        assert(empty(computeRailLayout(vertical(false, true )).eqName));
+
+        // The square follows the THICKNESS, never the shrunken cell. On a
+        // narrow bar the two diverge, and using the cell made the × an
+        // 82x130 rectangle -- caught by comparing captures, not by reasoning.
+        RailInput narrow = vertical(false, false);
+        narrow.bar = { 0, 0, 1080, kT };
+        const RailLayout n = computeRailLayout(narrow);
+        assert(wide(n.settings) < kCell);                // cells really did shrink
+        assert(wide(n.eqNone) == tall(n.eqNone));        // ...and the square did not
+        assert(wide(n.eqNone) == kT);
+    }
+
+    // ── The unfurled list: one span, split by a pure function ───────────────
+    {
+        RailInput in = vertical(false, false);
+        in.eqListOpen = true;
+        const RailLayout l = computeRailLayout(in);
+
+        // The span runs from the far edge of the box to the far end of the bar.
+        assert(!empty(l.eqList));
+        assert(l.eqList.left  == l.eqBox.right);
+        assert(l.eqList.right == kW);
+
+        // Closed, there is no span at all.
+        assert(empty(computeRailLayout(vertical(false, false)).eqList));
+
+        // Rows run from the list's near end outward, flush, no gaps.
+        const int rowExtent = 52;
+        const int cap = railListCapacity(l.eqList, UiOrientation::Vertical, rowExtent);
+        assert(cap == wide(l.eqList) / rowExtent);
+        assert(cap > 1);
+        for (int i = 1; i < cap; i++) {
+            const LayoutRect prev = railListRow(l.eqList, UiOrientation::Vertical, rowExtent, i - 1);
+            const LayoutRect cur  = railListRow(l.eqList, UiOrientation::Vertical, rowExtent, i);
+            assert(cur.left == prev.right);
+            assert(wide(cur) == rowExtent);
+            assert(tall(cur) == kT);
+        }
+        // Past capacity is empty, never a rect off the end of the bar.
+        assert(empty(railListRow(l.eqList, UiOrientation::Vertical, rowExtent, cap)));
+        assert(empty(railListRow(l.eqList, UiOrientation::Vertical, rowExtent, -1)));
+        assert(empty(railListRow(l.eqList, UiOrientation::Vertical, 0, 0)));
+
+        // Horizontal: rows stack UPWARD from the bottom, the same rotation.
+        RailInput hin = horizontal(false, false);
+        hin.eqListOpen = true;
+        const RailLayout hl = computeRailLayout(hin);
+        const LayoutRect h0 = railListRow(hl.eqList, UiOrientation::Horizontal, rowExtent, 0);
+        const LayoutRect h1 = railListRow(hl.eqList, UiOrientation::Horizontal, rowExtent, 1);
+        assert(h0.bottom == hl.eqList.bottom);
+        assert(h1.bottom == h0.top);
+    }
+
     // ── The vertical bar is NARROW, and the cells shrink to fit ─────────────
     // Not a corner case: a vertical bar's long extent is the window's WIDTH.
     // On a 1080-wide screen nine 130px cells plus a 300px AutoEQ box plus the
@@ -234,6 +317,7 @@ int main() {
     assertRotationHolds(/*bitPerfect=*/true,  /*searchOpen=*/false);
     assertRotationHolds(/*bitPerfect=*/false, /*searchOpen=*/true);
     assertRotationHolds(/*bitPerfect=*/true,  /*searchOpen=*/true);
+    assertRotationHolds(/*bitPerfect=*/false, /*searchOpen=*/false, /*eqListOpen=*/true);
 
     // ── Degenerate bars produce nothing, and never a negative rect ──────────
     // A layout pass can run before the first configure lands (see

@@ -99,6 +99,30 @@ struct RailLayout {
     LayoutRect settings{};
     LayoutRect close{};     // only while search is open
     LayoutRect eqBox{};     // empty when bit-perfect, or while search is open
+
+    // The AutoEQ box's two halves. `eqNone` is the discreet × meaning "no
+    // profile"; `eqName` is the active profile's name, and touching it unfurls
+    // the list. Both empty whenever eqBox is.
+    LayoutRect eqNone{};
+    LayoutRect eqName{};
+
+    // The whole span the unfurled list may occupy: from the far edge of the box
+    // to the far end of the bar. Empty unless the list is open. Split into rows
+    // with railListRow() below — this is deliberately NOT a vector of rows,
+    // because how many rows there are is the app's business, not the layout's.
+    LayoutRect eqList{};
 };
 
 RailLayout computeRailLayout(const RailInput& in);
+
+// ── Splitting an unfurled list into rows ─────────────────────────────────────
+//
+// `list` is a span along the bar's long axis (RailLayout::eqList). Rows are
+// laid out from its NEAR end outward, each `rowExtent` long on that axis and
+// the bar's full thickness across it.
+//
+// One pair of functions serves both the drawing and the hit-testing, which is
+// the point: the two cannot disagree about where row 3 is. Pure, and allocating
+// nothing — a list is walked, never built.
+int        railListCapacity(const LayoutRect& list, UiOrientation orient, int rowExtent);
+LayoutRect railListRow(const LayoutRect& list, UiOrientation orient, int rowExtent, int i);

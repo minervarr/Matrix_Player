@@ -2132,6 +2132,44 @@ void PlayerWindow::recalcLayout() {
         ri.gap         = (int)metrics_.space(16.0f);
         rail_ = computeRailLayout(ri);
     }
+    // ── The AutoEQ box's hit model ──────────────────────────────────────────
+    //
+    // Built HERE, in the layout pass, not during the draw. It used to be the
+    // other way round: drawEqBox() wrote hpRows_/hpNoneRc_/hpMoreRc_/eqNameRc_
+    // and the hit-test read them a frame later — the "computed during draw,
+    // read by hit-test" contract this file uses in several places. That
+    // contract is exactly what stops a draw function from being a pure
+    // function of plain values, which is what bar A has to become to be
+    // shared with Android.
+    //
+    // Which profile a row IS still belongs here rather than in rail_layout.cc:
+    // that is app data (eqHeadphones_, the on-trial profile), not geometry.
+    hpRows_.clear();
+    hpNoneRc_ = rail_.eqNone;
+    eqNameRc_ = rail_.eqName;
+    hpMoreRc_ = {};
+    if (rail_.eqBox.right <= rail_.eqBox.left) {
+        // No box: nothing to unfurl FROM. Closing it here rather than in the
+        // draw is the point — an open/closed flag is state, and a paint pass
+        // has no business writing state.
+        eqListOpen_ = false;
+    } else if (eqListOpen_) {
+        const int rowLen = (int)metrics_.space(52.0f);
+        const int cap    = railListCapacity(rail_.eqList, curOrientation_, rowLen);
+        int row = 0;
+        // The on-trial profile heads the list: it is what the listener just
+        // picked, so hiding it to preserve a saved row would hide the one thing
+        // they are looking for. -1 marks it (see HpRow).
+        if (eqCurrentTentative_ && !eqCurrent_.name.empty() && row < cap)
+            hpRows_.push_back({ railListRow(rail_.eqList, curOrientation_, rowLen, row++), -1 });
+        for (int i = 0; i < (int)eqHeadphones_.size() && row < cap; i++)
+            hpRows_.push_back({ railListRow(rail_.eqList, curOrientation_, rowLen, row++), i });
+        // "Search more…" earns the last slot it can: without it there is no
+        // route from the switcher to the full catalogue.
+        if (row < cap)
+            hpMoreRc_ = railListRow(rail_.eqList, curOrientation_, rowLen, row++);
+    }
+
     // The existing hit-testing and drawing read these rects by name, so the
     // rail feeds them rather than replacing them — one source of geometry.
     rcNavAlbum_       = rail_.letters[kRailAlbums];
@@ -5382,12 +5420,11 @@ void PlayerWindow::drawBarA(Canvas& canvas) {
 // to be read. computeRailLayout() hides it while searching too, which is what
 // makes open-search identical in both EQ modes.
 void PlayerWindow::drawEqBox(Canvas& canvas) {
-    hpRows_.clear();
-    hpNoneRc_ = {};
-    hpMoreRc_ = {};
-    eqNameRc_ = {};
-    if (rail_.eqBox.right <= rail_.eqBox.left) { eqListOpen_ = false; return; }
+    if (rail_.eqBox.right <= rail_.eqBox.left) return;
 
+    // Pure paint. Every rect below was computed by recalcLayout() from
+    // computeRailLayout() -- this function writes nothing, which is what lets
+    // it move into the shared UI layer later.
     const bool vertical = (curOrientation_ == UiOrientation::Vertical);
     Rect box = toRect(rail_.eqBox);
 
@@ -5403,27 +5440,31 @@ void PlayerWindow::drawEqBox(Canvas& canvas) {
         canvas.rect(box.x, box.y + box.h - hair, box.w, hair, toColor(CLR_SEPARATOR));
     }
 
-    // The X takes one square at the box's near end; the name takes the rest.
-    const int thick = vertical ? (rail_.eqBox.bottom - rail_.eqBox.top)
-                               : (rail_.eqBox.right - rail_.eqBox.left);
-    LayoutRect noneRc, nameRc;
-    if (vertical) {
-        noneRc = { rail_.eqBox.left, rail_.eqBox.top,
-                   rail_.eqBox.left + thick, rail_.eqBox.bottom };
-        nameRc = { noneRc.right, rail_.eqBox.top, rail_.eqBox.right, rail_.eqBox.bottom };
-    } else {
-        // Rotated: the near end of bar A is the BOTTOM, so the X sits below the
-        // name and the name runs upward.
-        noneRc = { rail_.eqBox.left, rail_.eqBox.bottom - thick,
-                   rail_.eqBox.right, rail_.eqBox.bottom };
-        nameRc = { rail_.eqBox.left, rail_.eqBox.top, rail_.eqBox.right, noneRc.top };
-    }
-    hpNoneRc_ = noneRc;
-    eqNameRc_ = nameRc;
+    // Rotated label: the AutoEQ name is exactly the text whose LENGTH runs
+    // along the bar, so upright would not fit. Canvas honours setRotation()
+    // for text (canvas.hh:175); it does not for image(), which is why nothing
+    // in either bar depends on a rotated bitmap.
+    auto label = [&](const LayoutRect& lr, const std::string& text, float sz,
+                     ColorRef clr) {
+        Rect r = toRect(lr);
+        const float pad = metrics_.space(SP_SM);
+        if (vertical) {
+            canvas.text(truncateToWidth(canvas, text, r.w - pad * 2, sz, FontStyle::Roman),
+                        r.x + pad, r.y + r.h * 0.5f - sz * 0.5f, sz, toColor(clr));
+            return;
+        }
+        const float cx = r.x + r.w * 0.5f, cy = r.y + r.h * 0.5f;
+        canvas.setRotation(-1.57079633f, cx, cy);
+        const std::string shown =
+            truncateToWidth(canvas, text, r.h - pad * 2, sz, FontStyle::Roman);
+        const float tw = canvas.textWidth(shown, sz);
+        canvas.text(shown, cx - tw * 0.5f, cy - sz * 0.5f, sz, toColor(clr));
+        canvas.clearRotation();
+    };
 
     const bool none = eqCurrent_.name.empty();
     {
-        Rect r = toRect(noneRc);
+        Rect r = toRect(rail_.eqNone);
         if (hoverSidebarItem_ == kSidebarHpNoneHit && !none)
             canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
         const float sz = metrics_.text.body;
@@ -5432,115 +5473,49 @@ void PlayerWindow::drawEqBox(Canvas& canvas) {
         canvas.textCentered("\xC3\x97", r.x + r.w * 0.5f, r.y + r.h * 0.5f - sz * 0.5f,
                             sz, toColor(none ? CLR_ACCENT : CLR_TEXT_DIM));
     }
-
-    // The active profile's name. In Horizontal it is drawn rotated to read
-    // bottom-to-top — this is exactly the text whose LENGTH runs along the bar,
-    // so upright would not fit. Canvas honours setRotation() for text
-    // (canvas.hh:175); it does not for image(), which is why nothing in either
-    // bar depends on a rotated bitmap.
     {
-        Rect r = toRect(nameRc);
+        Rect r = toRect(rail_.eqName);
         if (hoverSidebarItem_ == kSidebarEqBoxHit)
             canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
-        const std::string label = none ? "No AutoEQ" : eqCurrent_.name;
-        const ColorRef clr = none ? CLR_TEXT_DIM
-                                  : (eqCurrentTentative_ ? CLR_TEXT_SECONDARY
-                                                         : CLR_TEXT_PRIMARY);
-        const float sz  = metrics_.text.secondary;
-        const float pad = metrics_.space(SP_SM);
-        if (vertical) {
-            canvas.text(truncateToWidth(canvas, label, r.w - pad * 2, sz, FontStyle::Roman),
-                        r.x + pad, r.y + r.h * 0.5f - sz * 0.5f, sz, toColor(clr));
-        } else {
-            // -90 degrees about the cell's centre: the baseline then runs
-            // upward, which is the same counter-clockwise turn that maps the
-            // whole vertical layout onto the horizontal one.
-            const float cx = r.x + r.w * 0.5f, cy = r.y + r.h * 0.5f;
-            canvas.setRotation(-1.57079633f, cx, cy);
-            const std::string shown = truncateToWidth(canvas, label, r.h - pad * 2, sz, FontStyle::Roman);
-            const float tw = canvas.textWidth(shown, sz);
-            canvas.text(shown, cx - tw * 0.5f, cy - sz * 0.5f, sz, toColor(clr));
-            canvas.clearRotation();
-        }
+        label(rail_.eqName, none ? "No AutoEQ" : eqCurrent_.name,
+              metrics_.text.secondary,
+              none ? CLR_TEXT_DIM
+                   : (eqCurrentTentative_ ? CLR_TEXT_SECONDARY : CLR_TEXT_PRIMARY));
     }
 
     if (!eqListOpen_) return;
 
-    // ── Unfurled: from the box to the far end of the bar ────────────────────
-    // Every saved pair, plus the on-trial one at the head of the list. The
-    // on-trial row is what the listener just picked, so it leads: hiding it to
-    // preserve a saved row would hide the one thing they are looking for.
-    const bool showTrial = eqCurrentTentative_ && !eqCurrent_.name.empty();
-    const int  rowLen    = (int)metrics_.space(52.0f);
-    // The list grows AWAY from the near end, into the space the letters occupy
-    // -- it floats over them, which is why it is drawn after they are.
-    int a0 = vertical ? rail_.eqBox.right : rail_.eqBox.top;
-    const int aEnd = vertical ? rcBarA_.right : rcBarA_.top;
+    // ── Unfurled ────────────────────────────────────────────────────────────
+    // The rows and their profile indices came from recalcLayout(); this only
+    // paints them. The list HIDES the filter letters rather than floating over
+    // them -- forced by the renderer, which emits every rect before every glyph
+    // (see RailInput::eqListOpen).
+    const bool trialLeads = eqCurrentTentative_ && !eqCurrent_.name.empty();
+    for (size_t i = 0; i < hpRows_.size(); i++) {
+        const HpRow& hr = hpRows_[i];
+        const bool trial  = (hr.headphoneIdx < 0);
+        const std::string& name =
+            trial ? eqCurrent_.name : eqHeadphones_[hr.headphoneIdx].name;
+        const bool active = trial ? true
+                                  : (!trialLeads && name == eqCurrent_.name);
 
-    auto rowRect = [&](int i) -> LayoutRect {
-        if (vertical)
-            return { a0 + i * rowLen, rcBarA_.top, a0 + (i + 1) * rowLen, rcBarA_.bottom };
-        return { rcBarA_.left, a0 - (i + 1) * rowLen, rcBarA_.right, a0 - i * rowLen };
-    };
-    const int room = vertical ? (aEnd - a0) : (a0 - rcBarA_.top);
-    const int fits = rowLen > 0 ? room / rowLen : 0;
-
-    int drawn = 0;
-    auto rowLabel = [&](const std::string& label, bool active, bool trial, int hitIdx) {
-        if (drawn >= fits) return;
-        LayoutRect lr = rowRect(drawn++);
-        Rect r = toRect(lr);
+        Rect r = toRect(hr.rc);
         canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_BG_TRANSPORT));
         if (active)
             canvas.rect(r.x, r.y, r.w, r.h,
                         toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
-        else if (hoverSidebarItem_ == kSidebarHpRowBase + hitIdx)
+        else if (hoverSidebarItem_ == kSidebarHpRowBase + (int)i)
             canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
-        const float sz  = metrics_.text.secondary;
-        const float pad = metrics_.space(SP_SM);
-        const ColorRef clr = active ? CLR_ACCENT
-                                    : (trial ? CLR_TEXT_DIM : CLR_TEXT_SECONDARY);
-        if (vertical) {
-            canvas.text(truncateToWidth(canvas, label, r.w - pad * 2, sz, FontStyle::Roman),
-                        r.x + pad, r.y + r.h * 0.5f - sz * 0.5f, sz, toColor(clr));
-        } else {
-            const float cx = r.x + r.w * 0.5f, cy = r.y + r.h * 0.5f;
-            canvas.setRotation(-1.57079633f, cx, cy);
-            const std::string shown = truncateToWidth(canvas, label, r.h - pad * 2, sz, FontStyle::Roman);
-            const float tw = canvas.textWidth(shown, sz);
-            canvas.text(shown, cx - tw * 0.5f, cy - sz * 0.5f, sz, toColor(clr));
-            canvas.clearRotation();
-        }
-        hpRows_.push_back({ lr, hitIdx });
-    };
 
-    if (showTrial) rowLabel(eqCurrent_.name, true, true, -1);
-    for (int i = 0; i < (int)eqHeadphones_.size(); i++) {
-        const auto& h = eqHeadphones_[i];
-        rowLabel(h.name, !eqCurrentTentative_ && h.name == eqCurrent_.name, false, i);
+        label(hr.rc, name, metrics_.text.secondary,
+              active ? CLR_ACCENT : (trial ? CLR_TEXT_DIM : CLR_TEXT_SECONDARY));
     }
-    // "Search more…" always earns the last slot it can: without it there is no
-    // route from the switcher to the full catalogue.
-    if (drawn < fits) {
-        LayoutRect lr = rowRect(drawn++);
-        Rect r = toRect(lr);
+    if (hpMoreRc_.right > hpMoreRc_.left) {
+        Rect r = toRect(hpMoreRc_);
         canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_BG_TRANSPORT));
         if (hoverSidebarItem_ == kSidebarHpMoreHit)
             canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
-        const float sz  = metrics_.text.caption;
-        const float pad = metrics_.space(SP_SM);
-        if (vertical) {
-            canvas.text("Search more\xE2\x80\xA6", r.x + pad,
-                        r.y + r.h * 0.5f - sz * 0.5f, sz, toColor(CLR_TEXT_DIM));
-        } else {
-            const float cx = r.x + r.w * 0.5f, cy = r.y + r.h * 0.5f;
-            canvas.setRotation(-1.57079633f, cx, cy);
-            const float tw = canvas.textWidth("Search more\xE2\x80\xA6", sz);
-            canvas.text("Search more\xE2\x80\xA6", cx - tw * 0.5f, cy - sz * 0.5f,
-                        sz, toColor(CLR_TEXT_DIM));
-            canvas.clearRotation();
-        }
-        hpMoreRc_ = lr;
+        label(hpMoreRc_, "Search more\xE2\x80\xA6", metrics_.text.caption, CLR_TEXT_DIM);
     }
 }
 
