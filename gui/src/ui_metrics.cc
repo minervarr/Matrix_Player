@@ -7,16 +7,15 @@ float UiMetrics::stroke(float authored) const {
     return std::max(1.0f, std::round(authored * scale));
 }
 
-UiMetrics computeUiMetrics(float contentHeight) {
+UiMetrics computeUiMetrics(float contentShortSide) {
     UiMetrics m;
 
     // floorScale = 1.0 (not UiScale's 0.5 default): "never smaller than the
-    // reference". The app force-fullscreens in Complete mode and gates the
-    // mode choice on monitor height (see kMinWindowContentH), so shrinking
-    // below the reference is not a case worth serving — and allowing it is
-    // what let the old type scale collapse flat.
+    // reference". The app force-fullscreens, so shrinking below the reference
+    // is not a case worth serving — and allowing it is what let the old type
+    // scale collapse flat.
     UiScale s{ kUiReferenceHeight, /*floorScale=*/1.0f };
-    m.scale = s.factor(contentHeight);
+    m.scale = s.factor(contentShortSide);
 
     const float caption = kMinReadableTextSizePx * m.scale;
     m.text.caption   = caption;

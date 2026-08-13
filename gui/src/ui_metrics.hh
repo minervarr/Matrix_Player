@@ -49,7 +49,19 @@ struct UiMetrics {
     float stroke(float authored) const;
 };
 
-UiMetrics computeUiMetrics(float contentHeight);
+// The argument is the window's SHORT SIDE — min(width, height) — not its
+// height.
+//
+// This used to take the height alone, which was the same thing while every
+// window was wider than tall. It stops being the same thing the moment a
+// vertical layout exists: a 1080x1920 monitor would scale 1.78x and a 1080x2400
+// phone 2.22x, inflating every bar and every type role because the screen is
+// TALL, not because it is big. What limits how much fits is the short side.
+//
+// Backward-compatible by construction: for any window with w >= h — every case
+// that exists today — min(w,h) == h, so no existing pixel moves. Pinned in
+// ui_metrics_test.
+UiMetrics computeUiMetrics(float contentShortSide);
 
 // The album grid's TOP pad, derived from its horizontal pad and the cell's
 // own centering slack — never authored independently.

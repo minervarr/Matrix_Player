@@ -294,7 +294,9 @@ void ArtWindow::openFonts(const std::string& boldPath, const std::string& italic
     // — arrives through the miss path in drawFrame().
     std::vector<uint32_t> cps;
     for (uint32_t cp = 0x0020; cp <= 0x00FF; cp++) cps.push_back(cp);
-    const int body = (int)(computeUiMetrics((float)renderer_->height()).text.body + 0.5f);
+    const int body = (int)(computeUiMetrics((float)std::min(renderer_->width(),
+                                                            renderer_->height()))
+                               .text.body + 0.5f);
     if (msdfFont_.ensureGlyphs(cps, {body}) > 0 || !renderer_->msdfReady())
         renderer_->initMsdf(msdfFont_);
 }
@@ -410,7 +412,8 @@ void ArtWindow::drawFrame() {
         // album-art window actually exists for. computeUiMetrics() is a free
         // function, so this window can use the same scale without a PlayerWindow.
         canvas.textCentered("No artwork", canvas.w() * 0.5f, canvas.h() * 0.5f,
-                            computeUiMetrics(canvas.h()).text.body, toColor(CLR_TEXT_DIM));
+                            computeUiMetrics(std::min(canvas.w(), canvas.h())).text.body,
+                            toColor(CLR_TEXT_DIM));
     }
     renderer_->draw(frameCurves_, /*overlay_rotation_deg=*/0, frameImages_, {}, msdfQuads_,
                     frameShapes_);

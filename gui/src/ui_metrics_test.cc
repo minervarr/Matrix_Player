@@ -4,10 +4,14 @@
 #include <cmath>
 #include <cstdio>
 #include <initializer_list>
+#include <utility>
 
 #include "ui_metrics.hh"
 
 static bool nearlyEqual(float a, float b) { return std::fabs(a - b) < 0.001f; }
+
+// The rule the call sites follow: the argument is the window's SHORT side.
+static float shortSide(float w, float h) { return w < h ? w : h; }
 
 int main() {
     // ── The factor floors at 1.0 and grows only above the reference height ──
@@ -16,6 +20,35 @@ int main() {
     assert(nearlyEqual(computeUiMetrics(1080.0f).scale, 1.0f));
     assert(nearlyEqual(computeUiMetrics(1440.0f).scale, 1440.0f / 1080.0f));
     assert(nearlyEqual(computeUiMetrics(2160.0f).scale, 2.0f));
+
+    // ── The short side IS the height for every window that existed before the
+    //    vertical layout, so the change costs no existing pixel ──────────────
+    // This is the whole backward-compatibility argument, and it is arithmetic
+    // rather than a promise: for w >= h, min(w,h) == h.
+    for (auto wh : { std::pair<float,float>{1920, 1080},
+                     std::pair<float,float>{2560, 1440},
+                     std::pair<float,float>{3440, 1440},   // ultrawide
+                     std::pair<float,float>{3840, 2160},
+                     std::pair<float,float>{1200,  700},   // the old small default
+                     std::pair<float,float>{1080, 1080} }) {
+        assert(nearlyEqual(computeUiMetrics(shortSide(wh.first, wh.second)).scale,
+                           computeUiMetrics(wh.second).scale));
+    }
+
+    // ── A TALL window scales by its width, not its height ───────────────────
+    // Deriving from the height would scale a 1080x1920 monitor 1.78x and a
+    // 1080x2400 phone 2.22x -- inflating every bar and every type role because
+    // the screen is tall, not because it is big. What limits how much fits is
+    // the short side.
+    assert(nearlyEqual(computeUiMetrics(shortSide(1080, 1920)).scale, 1.0f));
+    assert(nearlyEqual(computeUiMetrics(shortSide(1080, 2400)).scale, 1.0f));
+    assert(nearlyEqual(computeUiMetrics(shortSide(1440, 2560)).scale,
+                       1440.0f / 1080.0f));
+
+    // A portrait and a landscape window of the SAME screen scale identically,
+    // which is what makes rotating a phone a re-layout rather than a re-scale.
+    assert(nearlyEqual(computeUiMetrics(shortSide(1080, 2400)).scale,
+                       computeUiMetrics(shortSide(2400, 1080)).scale));
 
     // ── Roles at the reference height: floor * ratio^n ──
     UiMetrics m = computeUiMetrics(1080.0f);

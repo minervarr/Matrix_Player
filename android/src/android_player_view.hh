@@ -79,6 +79,7 @@ private:
     // Layout as of the last draw() call — touch hit-testing (next frame's
     // input, arriving between draws) reads these rather than recomputing a
     // possibly-stale layout from scratch.
+    float lastScreenW_ = 0.0f;
     float lastScreenH_ = 0.0f;
     float lastTop_     = 0.0f;
     float lastLeft_    = 0.0f;

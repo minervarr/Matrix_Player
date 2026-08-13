@@ -1,6 +1,7 @@
 #include "android_player_view.hh"
 
 #include <android/log.h>
+#include <algorithm>
 #include <cmath>
 
 #include "canvas.hh"    // vk_canvas: Canvas, Color
@@ -74,18 +75,24 @@ void AndroidPlayerView::applyScanResult() {
 }
 
 float AndroidPlayerView::rowHeight() const {
-    UiMetrics m = computeUiMetrics(lastScreenH_ > 0.0f ? lastScreenH_ : kUiReferenceHeight);
+    // computeUiMetrics() takes the SHORT SIDE, which on a phone held upright is
+    // the width -- passing the height would scale the whole UI by 2.2x on a
+    // 1080x2400 display because the screen is tall, not because it is big.
+    const float shortSide = (lastScreenW_ > 0.0f && lastScreenH_ > 0.0f)
+        ? std::min(lastScreenW_, lastScreenH_) : kUiReferenceHeight;
+    UiMetrics m = computeUiMetrics(shortSide);
     return m.space(72.0f);
 }
 
 void AndroidPlayerView::draw(Canvas& canvas, float screenW, float screenH,
                              float insetTop, float insetBottom,
                              float insetLeft, float insetRight) {
+    lastScreenW_ = screenW;
     lastScreenH_ = screenH;
 
     canvas.clear(toColor(CLR_BG_MAIN));
 
-    UiMetrics m = computeUiMetrics(screenH);
+    UiMetrics m = computeUiMetrics(std::min(screenW, screenH));
     const float rowH = m.space(72.0f);
     const float pad  = m.space(SP_MD);
 

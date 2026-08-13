@@ -2177,8 +2177,11 @@ void PlayerWindow::recalcLayout() {
                                           gridTileSize_ + gridRowGap_,
                                           gridCols_);
 
-    // Type roles + geometry factor, both from the window's content height.
-    metrics_ = computeUiMetrics((float)H);
+    // Type roles + geometry factor, both from the window's SHORT SIDE — see
+    // computeUiMetrics()'s comment. Identical to the old `(float)H` for every
+    // window wider than tall, which is every window that existed before the
+    // vertical layout.
+    metrics_ = computeUiMetrics((float)std::min(W, H));
 
 
     // ── Essential-mode geometry — computed in BOTH modes, deliberately ──────
