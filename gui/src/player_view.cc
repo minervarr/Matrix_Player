@@ -7241,6 +7241,11 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
     // by clicking the box's name — so the capture exercises the real toggle
     // and the real row layout, not a flag set from outside.
     if (state == "43-autoeq-unfurled") {
+        // States run in sequence and the search ones come first, so this has to
+        // put the bar back: with search open there IS no AutoEQ box (see
+        // computeRailLayout), and the capture would silently report the state
+        // as unreachable rather than as broken.
+        closeSearch();
         // The box's rects are computed during DRAW (the same contract hpRows_
         // has always used), so the frame has to happen before the click —
         // the draw-then-click order the EQ tabs and playlist tiles need too.
