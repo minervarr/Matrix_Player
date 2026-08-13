@@ -9,16 +9,24 @@ android {
         disable 'ExpiredTargetSdkVersion'
     }
 
-    // Only platform 35 / build-tools 35.0.0 are installed in this SDK
-    // (matches framework/audio_engine's own Android build); vk_canvas's demo
-    // uses 37, but nothing here needs it.
-    compileSdkVersion 35
+    // This said 35, and 35 is NOT installed here (/opt/android-sdk has 36 and
+    // 37). Gradle then tried to install it and failed with "The SDK directory
+    // is not writable" — the SDK is root-owned, so the build could not even
+    // start. Verified by running it, not inferred.
+    compileSdkVersion 36
     ndkVersion "29.0.14206865"
 
     defaultConfig {
         applicationId "io.nava.matrixplayer"
         minSdkVersion 26          // AAudio floor
-        targetSdkVersion 35       // >=30 needed for MANAGE_EXTERNAL_STORAGE semantics
+        // >=30 is what MANAGE_EXTERNAL_STORAGE semantics need; 36 is what this
+        // app actually wants. Android 16 stops honouring orientation and
+        // resizability restrictions on large screens, and this UI derives its
+        // orientation from the window's own shape (gui/src/ui_orientation.hh)
+        // rather than asking for one — so 36's behaviour IS the design, not a
+        // hazard to guard against. Edge-to-edge likewise stops being optional,
+        // and AndroidHost already queries the safe area every frame.
+        targetSdkVersion 36
         versionCode 1
         versionName "0.1.0-android-slice"
 

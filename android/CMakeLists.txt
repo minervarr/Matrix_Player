@@ -77,15 +77,34 @@ vce_compile_slang(compile_vk_canvas_shaders
 # cross-compiler. It's pure font-geometry math (platform-independent output),
 # so copy the already-generated copy from an existing desktop build instead
 # of re-deriving it here.
-set(UI_MIN_TEXT_SIZE_SRC ${REPO_ROOT}/build/windows/generated/ui_min_text_size.gen.h)
-if(NOT EXISTS ${UI_MIN_TEXT_SIZE_SRC})
+#
+# ANY desktop build tree will do, and it must: this used to name
+# build/windows/generated/ alone, so an Android build on a machine that had
+# only ever built for Linux failed with "not found" and told the developer to
+# do something they had already done. The output is identical everywhere — it
+# is derived from the shipped font outlines, not from the toolchain.
+set(UI_MIN_TEXT_SIZE_CANDIDATES
+    ${REPO_ROOT}/build/linux/generated/ui_min_text_size.gen.h
+    ${REPO_ROOT}/build/linux_debug/generated/ui_min_text_size.gen.h
+    ${REPO_ROOT}/build/windows/generated/ui_min_text_size.gen.h
+    ${REPO_ROOT}/build/windows_debug/generated/ui_min_text_size.gen.h)
+set(UI_MIN_TEXT_SIZE_SRC "")
+foreach(candidate ${UI_MIN_TEXT_SIZE_CANDIDATES})
+    if(EXISTS ${candidate})
+        set(UI_MIN_TEXT_SIZE_SRC ${candidate})
+        break()
+    endif()
+endforeach()
+if(NOT UI_MIN_TEXT_SIZE_SRC)
     message(FATAL_ERROR
-        "ui_min_text_size.gen.h not found at ${UI_MIN_TEXT_SIZE_SRC}. Run a "
-        "desktop build first (scripts/windows/build.ps1 -Release or "
-        "scripts/linux/build.sh --release) to generate it — see "
+        "ui_min_text_size.gen.h not found in any desktop build tree "
+        "(looked in build/{linux,linux_debug,windows,windows_debug}/generated/). "
+        "Run a desktop build first (scripts/linux/build.sh --debug or "
+        "scripts/windows/build.ps1 -Release) to generate it — see "
         "docs/superpowers/specs/2026-08-08-android-native-port-design.md's "
         "'Three findings' section.")
 endif()
+message(STATUS "ui_min_text_size.gen.h taken from ${UI_MIN_TEXT_SIZE_SRC}")
 set(UI_MIN_TEXT_SIZE_DIR ${CMAKE_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${UI_MIN_TEXT_SIZE_DIR})
 configure_file(${UI_MIN_TEXT_SIZE_SRC} ${UI_MIN_TEXT_SIZE_DIR}/ui_min_text_size.gen.h COPYONLY)
