@@ -10,7 +10,9 @@ audio mixer entirely) and renders its GUI through a first-party Vulkan engine,
 `vk_canvas`. **Windows and Linux are equal peers** — both build a real,
 running GUI from this same source tree. ALSA and JACK2 are Linux's secondary
 output backends (parallel to WASAPI on Windows); USB direct is primary and
-bit-perfect everywhere.
+bit-perfect everywhere. `android/` holds a **vertical slice** of the same app
+(one touch track list over the same `core/`), not a third full platform — see
+its own section below.
 
 Both engines are consumed as git submodules, each authored by "minervarr" and
 developed independently — read their own `CLAUDE.md` files
@@ -53,6 +55,34 @@ matrix_player/
                                  re-ripping at a higher rate never orphans history.
                                  PURE: no OS, no Canvas, no sqlite — variants_test
                                  links it alone. Keep it that way
+    include/core/facets.h      — GUIDED SEARCH's vocabulary: Chip/Suggestion/EmptyReason.
+    src/facets.cpp             — ...and its whole implementation. The search box does not
+                                 parse a sentence — the listener builds the query out of
+                                 CHIPS accepted from suggestions computed against the REAL
+                                 library, so a value that does not exist can never be
+                                 typed in. Chips of the SAME kind OR together, chips of
+                                 DIFFERENT kinds AND; the listener never picks the
+                                 connective (sameGroup() only tells the UI which word to
+                                 DRAW). Two rules carry the design: a value present
+                                 nowhere is never suggested at all, and a value present
+                                 but not ALONGSIDE the chips already placed IS suggested,
+                                 disabled, and can name the chip that killed it — "24-bit
+                                 (0)" alone cannot tell those two apart, which is the
+                                 confusion the split exists to remove. albumYear() is here
+                                 because Album carries no year: it is the modal non-zero
+                                 Track::year, and 0 means UNKNOWN, never 1970. PURE — no
+                                 sqlite, no Canvas, no OS; facets_test links this TU alone,
+                                 and Android consumes the same code. Keep it that way
+    include/core/streamer_db.h — read-only reader for a FOREIGN database:
+    src/streamer_db.cpp          <music root>/.streamer/library.db (or its sibling one
+                                 level up), belonging to an external Qobuz-style download
+                                 tool. Artist bios/photos and extra album metadata come
+                                 from it, keyed by Album::name (== that DB's albums.id ==
+                                 the folder name). Never written, never migrated, never
+                                 merged into Db's schema, and "no match" is the expected
+                                 common case rather than an error — most libraries have no
+                                 such folder at all. PlayerWindow keeps one per music root
+                                 (streamerDbs_), since only some roots have one
     include/core/stats.h       — listening-analytics vocabulary: StartCause/EndCause,
                                  the aggregate result types (Totals, TopEntry,
                                  HourBucket, DayBucket, PlayEvent, SessionStats) and
@@ -86,6 +116,10 @@ matrix_player/
                                  a decoder or a filesystem walk to answer a question
                                  about history; if this target ever needs another
                                  source, something leaked in
+    tests/facets_test.cc       — guided search: what is suggested, what is suggested
+                                 DISABLED, and which chip an empty result blames.
+                                 Links src/facets.cpp and NOTHING else — not even
+                                 variants.cpp
     CMakeLists.txt             — builds matrix_core (STATIC), links ae_core + sqlite3
   gui/
     src/
@@ -168,13 +202,28 @@ matrix_player/
                                   fallback faces (CJK/Hangul). Greek/Cyrillic come from NewCM
                                   itself, so base and fallback text are one design
     icons/matrix-icons.otf      — the UI icon glyphs, generated (see tools/icon_font/)
+  android/                      — the Android VERTICAL SLICE (see its own section below).
+                                  Gradle + NDK, its own CMakeLists.txt reaching UP into
+                                  core/ and framework/; src/ holds AndroidHost +
+                                  AndroidPlayerView, which is deliberately NOT a port of
+                                  PlayerWindow
+  packaging/
+    arch/                        — PKGBUILD + .desktop + icon (Arch package)
+    windows/matrix-player.iss    — Inno Setup installer script (built by
+                                  scripts/windows/package.ps1)
   scripts/
     linux/build.sh               — cmake+ninja -> build/linux/ (see flags below)
-    windows/build.ps1            — vswhere -> vcvars64 -> cmake+ninja -> build/windows/ or build/windows_debug/
+    windows/build.ps1            — MSYS2/Clang -> cmake+ninja -> build/windows/ or build/windows_debug/
+    windows/package.ps1          — Release build + Inno Setup -> the Windows installer
   docs/
     UI_DESIGN_SYSTEM.md          — the GUI's visual language (colors, type, layout rules) —
                                   single source of truth alongside theme.hh
     ref_eq_pipeline.md           — Reference EQ signal chain (biquad → resample → dither/quantize)
+    superpowers/specs/*.md       — the design doc PER FEATURE, dated, written before the
+                                  code. Read the matching one before reopening a decision:
+                                  the release-type/quality colors, the two UI typography
+                                  passes, the raster glyph cache, the Android port, the
+                                  audio startup notice, fixture-gen, the Windows installer
   tools/
     ab_test.cpp                  — Windows-only A/B EQ listening-test tool (matrix_ab_test),
                                   opt-in via -DMATRIX_BUILD_AB_TEST=ON — not built by default
@@ -186,6 +235,19 @@ matrix_player/
                                   overlap resolver), and each icon's design box is sized
                                   to where it's drawn (denser is NOT better — over-baking
                                   causes minification smear)
+    fixture_gen.cpp              — writes a small SYNTHETIC library (real sine-tone WAVs
+                                  in a real folder layout) so every release-type view and
+                                  the variant grouping can be exercised without a music
+                                  collection. Debug-only, both platforms, built by
+                                  core/CMakeLists.txt as matrix_fixture_gen — it links
+                                  variants.cpp alone and self-verifies each album it
+                                  writes against the REAL classifyReleaseType(), so the
+                                  fixtures cannot drift from the classifier they exercise
+    ui_capture/                  — headless screenshotter: injects its own Host into the
+                                  REAL PlayerWindow (see create()'s injectedHost) and
+                                  reaches a named UI state by SYNTHESIZING the clicks on
+                                  the rects recalcLayout() itself computed, so captures
+                                  follow the layout instead of drifting behind it
     icon_preview/                — Debug+Linux-only standalone window drawing ONLY the
                                   icons, at a size ladder + the app's real sizes. Run
                                   ./build/linux_debug/gui/icon_preview to judge icon
@@ -301,7 +363,7 @@ Both were latent bugs nobody had hit before this toolchain existed to compile th
 **Both platforms**: submodules first if empty —
 `git submodule update --init --recursive`.
 
-**Tests**: there is no ctest/gtest framework, but there are four assert-based
+**Tests**: there is no ctest/gtest framework, but there are six assert-based
 pure-logic test executables, built **Debug-only** (see the bottom of
 `gui/CMakeLists.txt` and of `core/CMakeLists.txt`) and run directly. Convention
 matches `framework/vk_canvas/core/tests/*.cc`: plain `assert()`, `#undef NDEBUG`
@@ -312,8 +374,10 @@ linkage against the engine.
 scripts/linux/build.sh --debug
 ./build/linux_debug/gui/ui_metrics_test    # type scale + spacing/stroke math
 ./build/linux_debug/gui/ui_icons_test      # icon codepoints + placement math
+./build/linux_debug/gui/ui_text_test       # ordinal suffixes (the teens: 11th, not 11st)
 ./build/linux_debug/core/variants_test     # album-variant grouping, edition terms, trackKey()
 ./build/linux_debug/core/stats_test        # listening log, aggregate queries, schema migration
+./build/linux_debug/core/facets_test       # guided search: suggestions, counts, empty reasons
 ```
 
 Keep them pure. `ui_icons.cc` is deliberately split from `ui_icons_draw.cc`
@@ -562,6 +626,97 @@ that view was already following the music.
 
 ---
 
+## Guided search (`core/src/facets.cpp`, the sidebar's search box)
+
+The box does **not** parse a sentence. The listener types, the app offers
+values that exist in *this* library, and an accepted suggestion becomes a
+**chip**:
+
+```
+[ Björk ]  AND  [ 1990–1999 ]  AND  [ 24-bit ]
+```
+
+Chips of the same **group** OR together, chips of different groups AND. The
+listener never picks the connective — `matches()` applies it and the UI only
+*draws* the word `sameGroup()` implies. Year and Decade are deliberately one
+group: both answer "when".
+
+What is load-bearing:
+
+1. **Two kinds of nothing, and they must not be confused.** A value present
+   nowhere in the library is never suggested at all; a value present but not
+   *alongside the chips already placed* IS suggested, **disabled**, and can
+   name the chip that killed it. `"24-bit (0)"` alone cannot tell those two
+   apart — which is exactly the confusion the split exists to remove. Both
+   rules are asserted in `core/tests/facets_test.cc`.
+2. **A suggestion is counted against the chips NOT in its own group**
+   (`withoutGroup()`). Counting it against its own siblings would make picking
+   one option grey out all the alternatives to it, which is backwards.
+3. **`explainEmpty()` blames the CONSTRAINT, not the wish.** The last chip is
+   the subject of the sentence (it is what the listener just asked for); the
+   culprit is whichever *earlier* chip, removed, brings results back. So the
+   screen reads "No 24-bit in 1990s — your 24-bit releases are from 2002
+   onward", never "24-bit matched nothing". When no single removal helps, the
+   combination itself is impossible and it says so.
+4. **The suggestions come from the WHOLE library, never from the section on
+   screen.** Asking for "1990s" while Singles is open is a question about the
+   library; filtering the menu by the open tab would hide most of the answer
+   and report counts that mean nothing.
+5. **A chip is indivisible.** Backspace on an empty box takes the last chip
+   back *whole* — deleting it letter by letter would pass through half-values
+   that were never valid queries. Tab and Enter both accept, because the box
+   behaves like a completion field.
+6. **`albumYear()` is derived and 0 means UNKNOWN.** `Album` carries no year;
+   it is the modal non-zero `Track::year`. Nothing reads ID3, so an MP3-only
+   album genuinely has none — it must render as "Unknown" and never as 1970.
+7. **The grid filter matches ANY member of a variant group**
+   (`rebuildGridIndices()`), for the same reason search always has: grouping
+   must not HIDE a result whose track title only exists on the variant sitting
+   behind the tile.
+8. **`facets.cpp` links nothing.** Not even `variants.cpp`. It reads
+   `Album`/`Track` as plain data, which is what lets the Android build consume
+   the search unchanged.
+9. **`normalize()` is the ONE definition of "matches by name"** — the
+   suggestions and `rebuildGridIndices()`'s live filter both go through it.
+   They did not always: the grid used to compare raw bytes, so typing `bjork`
+   offered Björk as a chip while simultaneously filtering the grid to nothing.
+   The needle is normalized once per rebuild, never per album.
+
+### Why `suggest()` is shaped the way it is
+
+It runs on the UI thread on **every keystroke**, so its cost is a UI
+property, not an implementation detail. It was quadratic (measured: 344 ms per
+keystroke at 2000 albums, 1443 ms at 4000, from re-deriving each album's
+year/quality/genre once per *candidate*). Three things keep it linear, and all
+three are easy to undo by accident:
+
+- **`Facts` is derived once per album.** The public `matches()` is a one-album
+  adapter over the same internal matcher the fast path uses — deliberately, so
+  there is no second implementation that could drift from it and make the grid
+  and the counts beside it disagree.
+- **Counting is bucketed, one library pass per chip GROUP.** For every kind
+  except Name a chip test is an equality on one derived value, so an album
+  contributes to exactly one candidate of that group — two in the Year/Decade
+  group, which is why those two kinds share a group *and* share a pass. Going
+  back to "one full library scan per candidate" is what made it quadratic.
+- **Name candidates are CAPPED (`kMaxNameCands`), and that is a real
+  narrowing.** A fuzzy match cannot be bucketed, and one common letter typed
+  into a large library matches most artists and most titles. The cap keeps the
+  best matches by how well they match what was typed (prefix beats middle,
+  shorter label beats longer, ties alphabetically) — and the survivors are the
+  only rows built, because a row whose count was never computed would render as
+  "exists but blocked", the one thing a disabled row is supposed to mean.
+
+`explainEmpty()` walks the library once per chip, and the GUI's
+`searchEmptyReason()` calls it again per blocked suggestion row — up to nine
+scans. It used to run **every frame** the grid was empty; the sentence is now
+cached behind `markSearchEmptyDirty()`, the same pattern as the EQ panel's
+header lines. `refreshSuggestions()` is the funnel that invalidates it;
+`onScanDone()` marks it separately, since a rescan changes the answer with
+nothing typed.
+
+---
+
 ## Audio engine (`framework/audio_engine/`)
 
 **`UsbAudioDriver`** (`framework/audio_engine/backends/usb/usb_audio.h`) — the
@@ -746,7 +901,7 @@ whenever the look changes, not left to drift.
 | Decision | Choice | Why |
 |---|---|---|
 | GUI | vk_canvas (Vulkan) | Custom-rendered, no OS control chrome anywhere — "squeeze the most of every platform," not generic dialogs bolted onto custom UI |
-| Platforms | Windows + Linux, equal peers | Both build and run the real GUI from this tree; no platform is "the" project |
+| Platforms | Windows + Linux, equal peers (+ an Android vertical slice in `android/`) | Both build and run the real GUI from this tree; no platform is "the" project. Android runs a smaller touch UI over the same `core/` — see its section above |
 | Decoding | `audio_engine`'s own backends: libFLAC, libmpg123, DFF/DSF | First-party and already written for Android — one implementation decodes identically on every platform. Chosen by magic bytes, never by extension. Not FFmpeg |
 | WAV | vendored dr_wav (single-header) | The one format the engine has no decoder for |
 | DB | SQLite (embedded) | Single file, same model as the Android sibling player |
@@ -760,13 +915,44 @@ whenever the look changes, not left to drift.
 
 ---
 
-## Reference: Android sibling player
+## Android (`android/`) — a vertical slice, in this tree
 
-A separate Android music player by the same author shares this project's
-architecture (scan strategy, artwork cache, gapless pipeline, EQ, DSD
-handling). Its path is a **Windows-machine-specific local clone path** from
-earlier work on this project and is **unconfirmed from this (Linux) machine**
-— don't assume it still exists at any specific path; ask before relying on it.
+There is a real Android target **in this repository** (Gradle + NDK,
+`android/CMakeLists.txt` reaching up into `core/` and `framework/`; build it
+with `android/gradlew`). Read
+`docs/superpowers/specs/2026-08-08-android-native-port-design.md` before
+touching it.
+
+It is a **vertical slice, not a third peer platform**: scan a folder, draw a
+flat touch-scrollable track list, tap to play through `ae::AAudioSink`.
+Deliberately out of scope for now — sidebar, grid, album view, EQ, settings
+panels, the gapless coordinator, `Db`-backed persistence and the listening
+log. So the header of this file still holds: Windows and Linux are the two
+platforms that build the *whole* app.
+
+Two boundaries here are the point of the design, and re-crossing them is how
+this turns into a mess:
+
+1. **`AndroidPlayerView` is NOT a port of `PlayerWindow`,** and
+   `AndroidHost` is NOT an implementation of `Host`. `Host::init()` is
+   hard-typed to the concrete `PlayerWindow`, with no seam another owner could
+   implement; and a touch, phone-sized UI is genuinely different from a
+   sidebar-and-grid desktop one. They are structural siblings that share
+   *primitives*, not code: the same `Canvas`, the same `theme.hh` and
+   `ui_metrics.hh`, unmodified.
+2. **What it reuses, it reuses UNCHANGED** — `matrix_core` (`scanLibrary`,
+   `Decoder`, and `facets` when guided search reaches the phone) and
+   `vk_canvas_core`, both added by `add_subdirectory` straight from this tree.
+   That is exactly why the purity rules above (`core/`'s zero OS headers,
+   `facets.cpp`/`variants.cpp` linking nothing) are worth keeping: they are
+   what makes one `add_subdirectory` enough. Under the NDK toolchain
+   `PLATFORM_ID` is `Android`, so `FolderWatcher` already falls through to the
+   inotify backend — no new platform split was needed.
+
+`android/CMakeLists.txt` defines `sqlite3` itself and compiles the shader set
+from the **desktop** root list into `app/src/main/assets/shaders/` (vk_canvas's
+own Android demo list omits MSDF, and this app draws text) — both documented in
+place, and neither is a fork.
 
 ---
 

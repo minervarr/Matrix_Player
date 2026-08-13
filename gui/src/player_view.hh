@@ -553,11 +553,24 @@ private:
     int  hoverChipIdx_    = -1;
     int  hoverSuggestIdx_ = -1;
     void refreshSuggestions();
+    // Arrow-key movement through the suggestion strip. False = nothing to move
+    // through, so the key keeps whatever meaning it had. See the definition for
+    // why it is bounded by suggestRects_ rather than by searchSuggest_.
+    bool moveSuggestSel(int step);
     void acceptSuggestion(int i);
     void removeChip(int i);
     // Why the current chips found nothing, and which chip to blame — the
     // difference between "you own no 24-bit" and "none in the nineties".
+    //
+    // EXPENSIVE: not one library scan but up to nine (see the definition), so
+    // the sentence it produces is cached and the draw pass reads the cache.
+    // Everything that can change the answer — a chip added or removed, the
+    // typed text, a finished rescan — must call markSearchEmptyDirty(); empty
+    // string means "no reason to give", not "not computed yet".
     facets::EmptyReason searchEmptyReason() const;
+    std::string         searchEmptyMsg_;
+    bool                searchEmptyDirty_ = true;
+    void markSearchEmptyDirty() { searchEmptyDirty_ = true; }
 
     // Album variants (see core/include/core/variants.h). The grid shows one
     // tile per GROUP — its best member — instead of one per folder, so the

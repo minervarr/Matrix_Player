@@ -111,10 +111,23 @@ fi
 # unless the caller already passed -DVCE_SLANGC or has VULKAN_SDK set.
 SLANGC_ARG=()
 if [[ "${CMAKE_ARGS[*]:-}" != *"VCE_SLANGC"* && -z "${VULKAN_SDK:-}" ]]; then
+    # Neither Arch package puts slangc on PATH, and they install to DIFFERENT
+    # prefixes named after themselves: shader-slang-bin (the upstream
+    # precompiled release) lands in /opt/shader-slang-bin, while shader-slang
+    # / shader-slang-git (built from source) lands in /opt/shader-slang. Only
+    # the first was probed, so a source-built Slang — which is the one you get
+    # if you build it yourself — failed the whole build at the first shader
+    # with a bare exit 127.
     if command -v slangc >/dev/null 2>&1; then
         SLANGC_ARG=(-DVCE_SLANGC="$(command -v slangc)")
-    elif [[ -x /opt/shader-slang-bin/bin/slangc ]]; then
-        SLANGC_ARG=(-DVCE_SLANGC=/opt/shader-slang-bin/bin/slangc)
+    else
+        for _slangc in /opt/shader-slang-bin/bin/slangc \
+                       /opt/shader-slang/bin/slangc; do
+            if [[ -x "$_slangc" ]]; then
+                SLANGC_ARG=(-DVCE_SLANGC="$_slangc")
+                break
+            fi
+        done
     fi
 fi
 

@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <map>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace facets {
 namespace {
@@ -70,26 +72,6 @@ int majority(const std::map<int, int>& counts) {
     return best;
 }
 
-// "24-bit" / "16-bit", or "DSD". Empty when the album carries no bit depth.
-std::string albumQuality(const Album& a) {
-    if (a.hasDsd) return "DSD";
-    std::map<int, int> depths;
-    for (const Track& t : a.tracks) depths[t.bitDepth]++;
-    int d = majority(depths);
-    return d > 0 ? std::to_string(d) + "-bit" : std::string();
-}
-
-std::string albumGenre(const Album& a) {
-    std::map<std::string, int> counts;
-    for (const Track& t : a.tracks)
-        if (!t.genre.empty()) counts[t.genre]++;
-    std::string best;
-    int bestN = 0;
-    for (const auto& kv : counts)
-        if (kv.second > bestN) { best = kv.first; bestN = kv.second; }
-    return best;
-}
-
 const char* typeName(Album::ReleaseType t) {
     switch (t) {
         case Album::ReleaseType::Album:       return "Album";
@@ -102,58 +84,157 @@ const char* typeName(Album::ReleaseType t) {
     return "Album";
 }
 
-// ── Matching one chip ───────────────────────────────────────────────────────
+// ── Facts: everything the matcher can ask about ONE album, derived once ─────
+//
+// This struct is the whole performance story of this file. The matching code
+// used to call albumYear()/albumQuality()/albumGenre() from inside the
+// per-chip test, so every one of them ran once per album PER CANDIDATE, each
+// building a fresh std::map — and suggest() has a candidate per distinct value
+// in the library. That product, not the library walk, is what made one
+// keystroke cost 344 ms at 2000 albums and 1.5 s at 4000.
+//
+// The tie-breaks below are load-bearing and easy to lose in a rewrite: the
+// year and the bit depth resolve to the SMALLEST value on a tie (majority()
+// over an ordered map), and the genre resolves to the alphabetically first.
+// Anything that replaces the maps must keep both, or the answers change
+// silently for exactly the albums whose tags disagree.
+struct Facts {
+    int         year   = 0;      // 0 = nothing tagged, and it renders "Unknown"
+    int         decade = 0;      // 0 whenever year is 0
+    std::string quality;         // "24-bit" / "16-bit" / "DSD", empty if absent
+    std::string genre;           // empty if absent
+    const char* type = "Album";  // never null — typeName() is total
 
-bool nameHit(const Album& a, const std::string& needle) {
-    if (needle.empty()) return true;
-    auto hit = [&](const std::string& hay) {
-        std::string h = normalize(hay);
-        if (h.find(needle) != std::string::npos) return true;
-        // A chip's value came from a suggestion, so it is already a real
-        // library value; the distance check only absorbs the listener's own
-        // typo when the chip was accepted from partial text.
-        return editDistance(h, needle, 2) <= 2;
-    };
-    if (hit(a.artist) || hit(a.displayName)) return true;
-    for (const Track& t : a.tracks)
-        if (hit(t.title)) return true;
-    return false;
+    // The name haystacks, ALREADY NORMALIZED, in the order nameHit() tried
+    // them: artist, then displayName, then every track title. Hoisting the
+    // normalization here is the single largest constant-factor win, because it
+    // used to run per candidate per album per field.
+    std::vector<std::string> hay;
+    // Which character classes each haystack contains — see charMask(). Lets a
+    // needle be ruled out of a substring search by one AND, which matters
+    // because the name path is the one that cannot be bucketed by value.
+    std::vector<uint64_t>    hayMask;
+};
+
+// A set bit per character class present: a-z, 0-9, space, and ONE catch-all
+// bit for everything else (which after normalize() means non-Latin scripts).
+// Collapsing those into a single bit is safe in the only direction that
+// matters: it can only make the prune below say "might match" when it does
+// not, never "cannot match" when it can.
+uint64_t charMask(const std::string& s) {
+    uint64_t m = 0;
+    for (unsigned char c : s) {
+        if (c >= 'a' && c <= 'z')      m |= 1ull << (c - 'a');
+        else if (c >= '0' && c <= '9') m |= 1ull << (26 + (c - '0'));
+        else if (c == ' ')             m |= 1ull << 36;
+        else                           m |= 1ull << 37;
+    }
+    return m;
 }
 
-bool chipHit(const Album& a, const Chip& c) {
-    switch (c.kind) {
-        case Kind::Name:    return nameHit(a, normalize(c.value));
-        case Kind::Year:
-        case Kind::Decade: {
-            int y = albumYear(a);
-            return y != 0 && y >= c.from && y <= c.to;
-        }
-        case Kind::Quality: return albumQuality(a) == c.value;
-        case Kind::Type:    return typeName(a.releaseType) == c.value;
-        case Kind::Genre:   return albumGenre(a) == c.value;
+Facts makeFacts(const Album& a) {
+    Facts f;
+
+    std::map<int, int>         years;
+    std::map<int, int>         depths;
+    std::map<std::string, int> genres;
+    for (const Track& t : a.tracks) {
+        years[t.year]++;
+        depths[t.bitDepth]++;
+        if (!t.genre.empty()) genres[t.genre]++;
+    }
+
+    f.year   = majority(years);
+    f.decade = f.year != 0 ? (f.year / 10) * 10 : 0;
+
+    if (a.hasDsd) {
+        f.quality = "DSD";
+    } else {
+        int d = majority(depths);
+        if (d > 0) f.quality = std::to_string(d) + "-bit";
+    }
+
+    int bestN = 0;
+    for (const auto& kv : genres)
+        if (kv.second > bestN) { f.genre = kv.first; bestN = kv.second; }
+
+    f.type = typeName(a.releaseType);
+
+    f.hay.reserve(2 + a.tracks.size());
+    f.hay.push_back(normalize(a.artist));
+    f.hay.push_back(normalize(a.displayName));
+    for (const Track& t : a.tracks) f.hay.push_back(normalize(t.title));
+
+    f.hayMask.reserve(f.hay.size());
+    for (const std::string& h : f.hay) f.hayMask.push_back(charMask(h));
+    return f;
+}
+
+std::vector<Facts> makeFacts(const std::vector<Album>& lib) {
+    std::vector<Facts> out;
+    out.reserve(lib.size());
+    for (const Album& a : lib) out.push_back(makeFacts(a));
+    return out;
+}
+
+// ── Matching one chip ───────────────────────────────────────────────────────
+
+// `needle` is already normalized. An EMPTY needle matches everything, which is
+// correct for its other caller (an empty box means "no name constraint") and
+// is exactly why suggest() must never build a Name candidate out of an
+// untagged field — see the guard there.
+bool nameHitFacts(const Facts& f, const std::string& needle) {
+    if (needle.empty()) return true;
+    const uint64_t needleMask = charMask(needle);
+    const size_t   nlen       = needle.size();
+
+    for (size_t i = 0; i < f.hay.size(); i++) {
+        const std::string& h = f.hay[i];
+
+        // The substring search is the expensive half, and a needle holding a
+        // character this haystack does not contain anywhere cannot possibly be
+        // inside it. One AND rules that out without touching the bytes — which
+        // is what keeps this path affordable, since a fuzzy name match cannot
+        // be bucketed by value the way every other kind is.
+        if ((needleMask & ~f.hayMask[i]) == 0 &&
+            h.find(needle) != std::string::npos)
+            return true;
+
+        // A chip's value came from a suggestion, so it is already a real
+        // library value; the distance check only absorbs the listener's own
+        // typo when the chip was accepted from partial text. Two edits cannot
+        // bridge a length gap of more than two, so the window is checked here
+        // rather than inside the O(n·m) loop.
+        const size_t hlen = h.size();
+        const size_t gap  = hlen > nlen ? hlen - nlen : nlen - hlen;
+        if (gap <= 2 && editDistance(h, needle, 2) <= 2) return true;
     }
     return false;
 }
 
+bool chipHitFacts(const Facts& f, const Chip& c) {
+    switch (c.kind) {
+        case Kind::Name:    return nameHitFacts(f, normalize(c.value));
+        case Kind::Year:
+        case Kind::Decade:  return f.year != 0 && f.year >= c.from && f.year <= c.to;
+        case Kind::Quality: return f.quality == c.value;
+        case Kind::Type:    return c.value == f.type;
+        case Kind::Genre:   return f.genre == c.value;
+    }
+    return false;
+}
+
+bool matchesFacts(const Facts& f, const std::vector<Chip>& chips);
+
 // Year and Decade are one group: they are alternative ways to say "when".
 Kind groupOf(Kind k) { return k == Kind::Year ? Kind::Decade : k; }
 
-int countMatching(const std::vector<Album>& lib, const std::vector<Chip>& chips) {
+int countMatchingFacts(const std::vector<Facts>& facts,
+                       const std::vector<Chip>& chips) {
     int n = 0;
-    for (const Album& a : lib)
-        if (matches(a, chips)) n++;
+    for (const Facts& f : facts)
+        if (matchesFacts(f, chips)) n++;
     return n;
-}
-
-// The chips that are NOT in the same group as `k` — the context a suggestion
-// of kind `k` is counted against. Counting a suggestion against its own group
-// would make picking one option grey out all its siblings, which is exactly
-// backwards: siblings are alternatives (OR), not extra filters.
-std::vector<Chip> withoutGroup(const std::vector<Chip>& chips, Kind k) {
-    std::vector<Chip> out;
-    for (const Chip& c : chips)
-        if (groupOf(c.kind) != groupOf(k)) out.push_back(c);
-    return out;
 }
 
 bool alreadyPlaced(const std::vector<Chip>& chips, const Chip& c) {
@@ -191,8 +272,14 @@ bool typedMatches(const std::string& typedNorm, const std::string& label, const 
 
     if (allDigits(typedNorm) && (c.kind == Kind::Year || c.kind == Kind::Decade)) {
         if (label.rfind(typedNorm, 0) == 0) return true;      // prefix: "199" → 1993, 1990s
+        // The width test guards the CONVERSION, and that order is load-bearing:
+        // a search box accepts as many digits as the listener cares to hold
+        // down, and stoi answers anything past INT_MAX by THROWING. Testing
+        // size() afterwards — which is what this did — meant thirteen digits
+        // aborted the process outright.
+        if (typedNorm.size() != 4) return false;
         int v = std::stoi(typedNorm);
-        return typedNorm.size() == 4 && v >= c.from && v <= c.to;  // 1993 → its decade
+        return v >= c.from && v <= c.to;                      // 1993 → its decade
     }
 
     std::string l = normalize(label);
@@ -265,7 +352,24 @@ bool sameGroup(const Chip& a, const Chip& b) {
     return groupOf(a.kind) == groupOf(b.kind);
 }
 
+// The public entry point is a one-album adapter over the same code the fast
+// path uses. That is deliberate: an internal "fast matcher" beside a public
+// "reference matcher" would be two answers to one question, and the day they
+// disagree the grid and the counts beside it disagree. Here there is nothing
+// to keep in agreement.
+//
+// rebuildGridIndices() in the GUI calls this per album, and it is CHEAPER than
+// what it replaced — the old body re-derived year/quality/genre once per chip
+// and re-normalized every haystack per Name chip.
 bool matches(const Album& a, const std::vector<Chip>& chips) {
+    return matchesFacts(makeFacts(a), chips);
+}
+
+// Same anonymous namespace as above — declared before matches() so the adapter
+// can call it, defined here so the reading order stays public-first.
+namespace {
+
+bool matchesFacts(const Facts& f, const std::vector<Chip>& chips) {
     // OR inside a group, AND across groups: walk the groups present and
     // require a hit in each.
     for (const Chip& c : chips) {
@@ -279,66 +383,248 @@ bool matches(const Album& a, const std::vector<Chip>& chips) {
 
         bool any = false;
         for (const Chip& e : chips)
-            if (groupOf(e.kind) == g && chipHit(a, e)) { any = true; break; }
+            if (groupOf(e.kind) == g && chipHitFacts(f, e)) { any = true; break; }
         if (!any) return false;
     }
     return true;
 }
 
+}  // namespace
+
 std::vector<Suggestion> suggest(const std::vector<Album>& library,
                                 const std::string& typed,
                                 const std::vector<Chip>& chips) {
     const std::string typedNorm = normalize(typed);
+    const std::vector<Facts> facts = makeFacts(library);
 
     // Candidates are built ONLY from values the library actually holds, which
     // is what guarantees a value that exists nowhere is never offered — the
     // listener never meets a dead "(0)" row for something they cannot have.
+    //
+    // Dedup goes through a hash of the SAME four fields Chip::operator==
+    // compares. It used to be a linear scan over everything accepted so far,
+    // which with two Name candidates per album made building the list
+    // quadratic in the library on its own. A field added to Chip must be added
+    // to this key too, or two different chips start colliding.
     std::vector<Chip> cands;
     std::vector<std::string> labels;
+    std::unordered_set<std::string> seen;
     auto add = [&](const Chip& c, const std::string& label) {
-        for (size_t i = 0; i < cands.size(); i++)
-            if (cands[i] == c) return;
+        std::string key = std::to_string((int)c.kind) + '\x1f' + c.value + '\x1f' +
+                          std::to_string(c.from) + '-' + std::to_string(c.to);
+        if (!seen.insert(std::move(key)).second) return;
         cands.push_back(c);
         labels.push_back(label);
     };
 
-    for (const Album& a : library) {
-        int y = albumYear(a);
-        if (y != 0) {
-            add(mkChip(Kind::Year, std::to_string(y), y, y), std::to_string(y));
-            int d = (y / 10) * 10;
-            add(mkChip(Kind::Decade, std::to_string(d) + "s", d, d + 9),
-                std::to_string(d) + "s");
+    for (size_t i = 0; i < library.size(); i++) {
+        const Album& a = library[i];
+        const Facts& f = facts[i];
+
+        if (f.year != 0) {
+            add(mkChip(Kind::Year, std::to_string(f.year), f.year, f.year),
+                std::to_string(f.year));
+            add(mkChip(Kind::Decade, std::to_string(f.decade) + "s",
+                       f.decade, f.decade + 9),
+                std::to_string(f.decade) + "s");
         }
-        std::string q = albumQuality(a);
-        if (!q.empty()) add(mkChip(Kind::Quality, q), q);
+        if (!f.quality.empty()) add(mkChip(Kind::Quality, f.quality), f.quality);
 
-        add(mkChip(Kind::Type, typeName(a.releaseType)), typeName(a.releaseType));
+        add(mkChip(Kind::Type, f.type), f.type);
 
-        std::string g = albumGenre(a);
-        if (!g.empty()) add(mkChip(Kind::Genre, g), g);
+        if (!f.genre.empty()) add(mkChip(Kind::Genre, f.genre), f.genre);
 
         // Names are only offered once the listener is actually typing —
         // with an empty box they would bury the handful of attribute rows
         // under every artist and record in the library.
+        //
+        // Both are guarded like quality and genre above, and for a sharper
+        // reason than tidiness: nameHitFacts() treats an EMPTY needle as
+        // matching everything, so an untagged artist would put up a chip with
+        // no text on it that filtered nothing — and being a match for the whole
+        // library, the count ranking would sort it FIRST, which is the row
+        // Tab/Enter accepts. The guard is on the NORMALIZED form (f.hay), so a
+        // name that is nothing but punctuation is caught by the same test.
         if (!typedNorm.empty()) {
-            add(mkChip(Kind::Name, a.artist), a.artist);
-            add(mkChip(Kind::Name, a.displayName), a.displayName);
+            if (!f.hay[0].empty()) add(mkChip(Kind::Name, a.artist),      a.artist);
+            if (!f.hay[1].empty()) add(mkChip(Kind::Name, a.displayName), a.displayName);
         }
     }
 
-    std::vector<Suggestion> out;
+    // ── Which candidates survive, before anything is counted ────────────────
+    // Filtering first is what bounds the counting below: a typed query throws
+    // away most of the attribute candidates and all but a few names.
+    std::vector<size_t> live;
+    live.reserve(cands.size());
     for (size_t i = 0; i < cands.size(); i++) {
         if (alreadyPlaced(chips, cands[i])) continue;
         if (!typedMatches(typedNorm, labels[i], cands[i])) continue;
+        live.push_back(i);
+    }
 
-        std::vector<Chip> ctx = withoutGroup(chips, cands[i].kind);
-        ctx.push_back(cands[i]);
+    // ── The context every candidate is counted against, computed ONCE ───────
+    // A candidate of group g is counted against withoutGroup(chips, g) — every
+    // OTHER placed group satisfied. So instead of rebuilding that chip vector
+    // and rescanning the library per candidate, record per album which placed
+    // groups it satisfies, and the per-candidate question becomes one integer
+    // compare: "all placed groups except possibly my own".
+    std::vector<Kind> chipGroups;              // distinct, in first-seen order
+    for (const Chip& c : chips) {
+        Kind g = groupOf(c.kind);
+        bool known = false;
+        for (Kind k : chipGroups) known = known || k == g;
+        if (!known) chipGroups.push_back(g);
+    }
+    const uint32_t allGroups = chipGroups.empty()
+        ? 0u : (uint32_t)((1u << chipGroups.size()) - 1u);
 
+    auto bitOf = [&](Kind g) -> uint32_t {
+        for (size_t i = 0; i < chipGroups.size(); i++)
+            if (chipGroups[i] == g) return 1u << i;
+        return 0u;   // a group with no chip placed constrains nothing
+    };
+
+    std::vector<uint32_t> okMask(facts.size(), 0u);
+    for (size_t gi = 0; gi < chipGroups.size(); gi++) {
+        const uint32_t bit = 1u << gi;
+        for (const Chip& c : chips) {
+            if (groupOf(c.kind) != chipGroups[gi]) continue;
+            for (size_t ai = 0; ai < facts.size(); ai++) {
+                if (okMask[ai] & bit) continue;           // this group already hit
+                if (chipHitFacts(facts[ai], c)) okMask[ai] |= bit;
+            }
+        }
+    }
+
+    // ── Counting, one library pass per GROUP rather than per candidate ──────
+    // For every kind except Name, a chip test is an equality on ONE derived
+    // value of the album, so an album contributes to exactly one candidate of
+    // that group — two in the Year/Decade group, which is precisely why those
+    // two kinds share a group and share this pass. Bucketing those hits counts
+    // every candidate of the group in a single walk.
+    std::vector<int> count(cands.size(), 0);
+
+    auto bucketPass = [&](Kind group, const std::vector<size_t>& members) {
+        if (members.empty()) return;
+        std::unordered_map<std::string, size_t> byValue;   // chip value → cands index
+        for (size_t i : members) byValue.emplace(cands[i].value, i);
+
+        const uint32_t ownBit = bitOf(group);
+        for (size_t ai = 0; ai < facts.size(); ai++) {
+            if ((okMask[ai] | ownBit) != allGroups) continue;
+            const Facts& f = facts[ai];
+
+            auto bump = [&](const std::string& value) {
+                if (value.empty()) return;
+                auto it = byValue.find(value);
+                if (it != byValue.end()) count[it->second]++;
+            };
+            if (group == Kind::Decade) {
+                if (f.year == 0) continue;      // matches chipHitFacts's own guard
+                bump(std::to_string(f.year));                 // the Year candidate
+                bump(std::to_string(f.decade) + "s");         // the Decade candidate
+            } else if (group == Kind::Quality) {
+                bump(f.quality);
+            } else if (group == Kind::Genre) {
+                bump(f.genre);
+            } else if (group == Kind::Type) {
+                bump(f.type);
+            }
+        }
+    };
+
+    std::vector<size_t> byGroup[5];   // Decade(Year+Decade), Quality, Type, Genre, Name
+    std::vector<size_t> nameCands;
+    for (size_t i : live) {
+        switch (groupOf(cands[i].kind)) {
+            case Kind::Decade:  byGroup[0].push_back(i); break;
+            case Kind::Quality: byGroup[1].push_back(i); break;
+            case Kind::Type:    byGroup[2].push_back(i); break;
+            case Kind::Genre:   byGroup[3].push_back(i); break;
+            case Kind::Name:    nameCands.push_back(i);  break;
+            default: break;
+        }
+    }
+    bucketPass(Kind::Decade,  byGroup[0]);
+    bucketPass(Kind::Quality, byGroup[1]);
+    bucketPass(Kind::Type,    byGroup[2]);
+    bucketPass(Kind::Genre,   byGroup[3]);
+
+    // ── Names: the one group that cannot be bucketed ────────────────────────
+    // A name hit is FUZZY, so one album can satisfy several name candidates at
+    // once and the value is not a key — the count has to be a real scan per
+    // distinct needle. Two things bound it: names only exist while the box has
+    // text in it, and the needle is deduplicated NORMALIZED, since that is all
+    // chipHitFacts() looks at.
+    //
+    // Neither bound is enough on its own. One common letter typed into a large
+    // library matches most artists AND most record titles, which is thousands
+    // of needles times thousands of albums — so the field is also CAPPED, and
+    // the cap is a real narrowing of what gets offered, not an optimization
+    // that hides behind an unchanged answer:
+    //
+    //   * The row on screen holds eight suggestions (kMaxSuggestRows in the
+    //     GUI). A search that offers two thousand names is not offering
+    //     anything, so the ones past the cap could never be reached anyway.
+    //   * Which ones survive is decided by how well they match what was
+    //     TYPED — a prefix beats a match in the middle, and a shorter label
+    //     beats a longer one (typing "rad" should reach the artist Radiohead
+    //     before every track whose title happens to contain it). Ties go
+    //     alphabetically, so the choice never depends on library order.
+    //
+    // Attribute candidates (year, decade, quality, type, genre) are NOT capped:
+    // there are only ever a handful of them and they are counted by bucketing,
+    // which costs one pass regardless.
+    static constexpr size_t kMaxNameCands = 64;
+    if (nameCands.size() > kMaxNameCands) {
+        std::stable_sort(nameCands.begin(), nameCands.end(),
+                         [&](size_t a, size_t b) {
+            const std::string la = normalize(labels[a]);
+            const std::string lb = normalize(labels[b]);
+            const bool pa = la.rfind(typedNorm, 0) == 0;
+            const bool pb = lb.rfind(typedNorm, 0) == 0;
+            if (pa != pb) return pa;
+            if (la.size() != lb.size()) return la.size() < lb.size();
+            return la < lb;
+        });
+        nameCands.resize(kMaxNameCands);
+    }
+
+    if (!nameCands.empty()) {
+        const uint32_t ownBit = bitOf(Kind::Name);
+        std::unordered_map<std::string, int> byNeedle;
+        for (size_t i : nameCands) {
+            const std::string needle = normalize(cands[i].value);
+            auto it = byNeedle.find(needle);
+            if (it == byNeedle.end()) {
+                int n = 0;
+                for (size_t ai = 0; ai < facts.size(); ai++) {
+                    if ((okMask[ai] | ownBit) != allGroups) continue;
+                    if (nameHitFacts(facts[ai], needle)) n++;
+                }
+                it = byNeedle.emplace(needle, n).first;
+            }
+            count[i] = it->second;
+        }
+    }
+
+    // Built from the groups that were actually COUNTED, not from `live` — a
+    // name dropped by the cap above must not come back as a row whose count
+    // was never computed, which would read on screen as "this exists but is
+    // blocked", the one thing a disabled row is supposed to mean.
+    std::vector<size_t> kept;
+    kept.reserve(live.size());
+    for (int g = 0; g < 4; g++)
+        kept.insert(kept.end(), byGroup[g].begin(), byGroup[g].end());
+    kept.insert(kept.end(), nameCands.begin(), nameCands.end());
+
+    std::vector<Suggestion> out;
+    out.reserve(kept.size());
+    for (size_t i : kept) {
         Suggestion s;
         s.chip    = cands[i];
         s.label   = labels[i];
-        s.count   = countMatching(library, ctx);
+        s.count   = count[i];
         s.enabled = s.count > 0;
         out.push_back(s);
     }
@@ -356,7 +642,14 @@ std::vector<Suggestion> suggest(const std::vector<Album>& library,
 EmptyReason explainEmpty(const std::vector<Album>& library,
                          const std::vector<Chip>& chips) {
     EmptyReason r;
-    if (chips.empty() || countMatching(library, chips) > 0) return r;
+    if (chips.empty()) return r;
+
+    // Derived once for every scan below. This function walks the library once
+    // per chip (dropping each in turn), and the GUI's searchEmptyReason() calls
+    // it again per blocked suggestion row — so re-deriving per walk multiplied
+    // the same work several times over.
+    const std::vector<Facts> facts = makeFacts(library);
+    if (countMatchingFacts(facts, chips) > 0) return r;
     r.empty = true;
 
     // The LAST chip is what the listener just asked for, so it is the subject
@@ -368,19 +661,18 @@ EmptyReason explainEmpty(const std::vector<Album>& library,
         std::vector<Chip> without;
         for (size_t j = 0; j < chips.size(); j++)
             if (j != i) without.push_back(chips[j]);
-        if (countMatching(library, without) == 0) continue;
+        if (countMatchingFacts(facts, without) == 0) continue;
 
         r.culpritIndex = (int)i;
         r.message = "No " + subject.value + " in " + chips[i].value;
 
         // Where the subject DOES live, so the listener has somewhere to go.
         int lo = 0, hi = 0;
-        for (const Album& a : library) {
-            if (!chipHit(a, subject)) continue;
-            int y = albumYear(a);
-            if (y == 0) continue;
-            if (lo == 0 || y < lo) lo = y;
-            if (y > hi) hi = y;
+        for (const Facts& f : facts) {
+            if (!chipHitFacts(f, subject)) continue;
+            if (f.year == 0) continue;
+            if (lo == 0 || f.year < lo) lo = f.year;
+            if (f.year > hi) hi = f.year;
         }
         if (lo != 0 && chips[i].to != 0 && lo > chips[i].to)
             r.message += " — your " + subject.value + " releases are from " +

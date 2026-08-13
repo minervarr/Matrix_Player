@@ -1288,9 +1288,20 @@ void PlayerWindow::drawFrame() {
             // is the whole point of the guided search: the listener learns
             // where the thing they asked for actually lives instead of facing
             // an empty page and guessing which of their choices was wrong.
-            facets::EmptyReason why = searchEmptyReason();
-            if (why.empty) {
-                msg = why.message;
+            //
+            // Computed on demand and CACHED. It used to run here every frame,
+            // and it is not one library scan but up to nine — explainEmpty()
+            // walks the library once per chip, and searchEmptyReason() calls it
+            // again for every blocked suggestion row. Sixty times a second, to
+            // redraw a sentence that only changes when the query does. Same
+            // pattern as eqAssignLine_/markEqAssignmentDirty().
+            if (searchEmptyDirty_) {
+                facets::EmptyReason why = searchEmptyReason();
+                searchEmptyMsg_   = why.empty ? why.message : std::string();
+                searchEmptyDirty_ = false;
+            }
+            if (!searchEmptyMsg_.empty()) {
+                msg = searchEmptyMsg_;
             } else if (!searchQuery_.empty()) {
                 msg = "No matches for \"" + searchQuery_ + "\"";
             } else {
@@ -2786,21 +2797,17 @@ void PlayerWindow::loadTransportArtTexture(const std::string& artPath) {
 
 // ── Hit testing ──────────────────────────────────────────────────────────────
 
-// ASCII-case-insensitive substring match; non-ASCII bytes compare exact.
-// Good enough for live search — matching "Björk" needs the same bytes typed,
-// which the user typing from the same tags will produce.
-static bool containsNoCase(const std::string& hay, const std::string& needle) {
-    if (needle.empty()) return true;
-    auto lower = [](char ch) -> char {
-        return (ch >= 'A' && ch <= 'Z') ? (char)(ch + 32) : ch;
-    };
-    if (needle.size() > hay.size()) return false;
-    for (size_t i = 0; i + needle.size() <= hay.size(); i++) {
-        size_t j = 0;
-        while (j < needle.size() && lower(hay[i + j]) == lower(needle[j])) j++;
-        if (j == needle.size()) return true;
-    }
-    return false;
+// Does this text contain what was typed? ONE definition, shared with the
+// suggestions, and it is facets::normalize() on both sides.
+//
+// This used to be a byte-comparing containsNoCase() local to this file, which
+// left the box behaving as two different searches: typing "bjork" OFFERED
+// Björk as a chip and simultaneously filtered the grid to nothing, because the
+// suggestion path folds accents and the grid path did not. The normalized
+// needle is computed once per rebuild by the caller — never per album.
+static bool nameContains(const std::string& hay, const std::string& needleNorm) {
+    if (needleNorm.empty()) return true;
+    return facets::normalize(hay).find(needleNorm) != std::string::npos;
 }
 
 void PlayerWindow::rebuildAlbumGroups() {
@@ -2907,6 +2914,8 @@ std::vector<int> PlayerWindow::otherVariantsOf(int albumIdx) const {
 void PlayerWindow::rebuildGridIndices() {
     gridIndices_.clear();
     gridIndices_.reserve(albumGroups_.size());
+    // Normalized ONCE for the whole rebuild — see nameContains().
+    const std::string queryNorm = facets::normalize(searchQuery_);
     // One tile per GROUP, not per album — the group's best member represents
     // it (see rebuildAlbumGroups). The filter reads that member, since it is
     // what gets drawn.
@@ -2924,14 +2933,14 @@ void PlayerWindow::rebuildGridIndices() {
                 hit = facets::matches(albums_[grp.members[mi]], searchChips_);
             if (!hit) continue;
         }
-        if (!searchQuery_.empty()) {
+        if (!queryNorm.empty()) {
             bool hit = false;
             for (size_t mi = 0; !hit && mi < grp.members.size(); mi++) {
                 const Album& m = albums_[grp.members[mi]];
-                hit = containsNoCase(m.displayName, searchQuery_) ||
-                      containsNoCase(m.artist, searchQuery_);
+                hit = nameContains(m.displayName, queryNorm) ||
+                      nameContains(m.artist, queryNorm);
                 for (size_t t = 0; !hit && t < m.tracks.size(); t++)
-                    hit = containsNoCase(m.tracks[t].title, searchQuery_);
+                    hit = nameContains(m.tracks[t].title, queryNorm);
             }
             if (!hit) continue;
         }
@@ -2947,6 +2956,12 @@ void PlayerWindow::rebuildGridIndices() {
 static constexpr size_t kMaxSuggestRows = 8;
 
 void PlayerWindow::refreshSuggestions() {
+    // The one funnel every change to the query, the chips or the box's focus
+    // goes through, which is why the empty-state cache is invalidated HERE
+    // rather than at each of those call sites. The library changing is the
+    // exception — nothing typed, so nothing refreshes — and onScanDone() marks
+    // it itself.
+    markSearchEmptyDirty();
     searchSuggest_.clear();
     searchSuggestSel_ = -1;
     if (!searchFocused_) return;
@@ -6569,6 +6584,10 @@ void PlayerWindow::onScanDone() {
 
     rebuildAlbumGroups();  // albums_ changed — regroup before the tile mapping
     rebuildGridIndices();  // albums_ changed — refresh the (possibly filtered) tile mapping
+    // The empty-state reason was computed against the library that just went
+    // away; the same chips can easily have an answer now that they did not have
+    // a moment ago.
+    markSearchEmptyDirty();
     {
         // Every index into albums_ is dead now, the queue's included. Re-point
         // it by trackKey rather than dropping it: a background rescan finishing
@@ -6701,6 +6720,7 @@ bool PlayerWindow::goBack() {
         // different grid while a query is live, so this IS a step back.
         searchFocused_ = false;
         searchQuery_.clear();
+        markSearchEmptyDirty();
         rebuildGridIndices();
         gridScrollY_ = 0;
         recalcLayout();
@@ -6806,8 +6826,64 @@ void PlayerWindow::onNavForward() {
     applyViewState(s);
 }
 
+// Move the guided search's keyboard highlight by `step`, skipping rows that
+// cannot be accepted and wrapping at both ends. Returns false when there is
+// nothing to move through, so the caller can let the key mean what it usually
+// means.
+//
+// Two things decide the bounds. The suggestions are drawn as ONE ROW that does
+// not wrap, so the draw pass stops pushing rects when the next one would
+// overflow the strip (see drawFrame) — selecting past that point would put the
+// highlight somewhere nobody can see, which is why this walks
+// suggestRects_.size() and not searchSuggest_.size(). And a DISABLED row is
+// skipped outright: acceptSuggestion() refuses it and the styling gives it no
+// highlight either, so landing there would read as the key having done nothing.
+bool PlayerWindow::moveSuggestSel(int step) {
+    const int visible = suggestRects_.empty()
+        ? (int)searchSuggest_.size()          // first key press after a redraw
+        : std::min((int)suggestRects_.size(), (int)searchSuggest_.size());
+    if (visible <= 0) return false;
+
+    int selectable = 0;
+    for (int i = 0; i < visible; i++)
+        if (searchSuggest_[i].enabled) selectable++;
+    if (selectable == 0) return false;
+
+    int cur = searchSuggestSel_;
+    for (int tries = 0; tries < visible; tries++) {
+        cur = (cur < 0 && step < 0) ? visible - 1                 // ← from nothing: the last
+            : (cur < 0)             ? 0                          // → from nothing: the first
+            : ((cur + step) % visible + visible) % visible;       // and then wrap
+        if (searchSuggest_[cur].enabled) {
+            searchSuggestSel_ = cur;
+            invalidate();
+            return true;
+        }
+    }
+    return false;
+}
+
 void PlayerWindow::onKeyDownPortable(int keyCode) {
     if (onPanelKeyDown(keyCode)) return;
+
+    // The suggestion strip is horizontal, so Left/Right are its real axis —
+    // but Up/Down are aliased to it, because a completion box is a completion
+    // box and nobody should have to notice which way this one happens to be
+    // laid out. Nothing else in the app binds an arrow key, and the query box
+    // has no caret to move, so all four are free.
+    if (searchFocused_) {
+        switch (keyCode) {
+        case key::Right:
+        case key::Down:
+            if (moveSuggestSel(+1)) return;
+            break;
+        case key::Left:
+        case key::Up:
+            if (moveSuggestSel(-1)) return;
+            break;
+        }
+    }
+
     switch (keyCode) {
     case key::Space:
         if (searchFocused_) return;  // typing a space, not play/stop

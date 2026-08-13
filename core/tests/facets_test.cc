@@ -1,6 +1,7 @@
 // Asserts must stay live even though the app builds Release (NDEBUG).
 #undef NDEBUG
 #include <cassert>
+#include <chrono>   // the scale case's tripwire, see the bottom of main()
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -208,6 +209,108 @@ int main() {
         assert(!none.empty);
         assert(none.culpritIndex == -1);
         assert(none.message.empty());
+    }
+
+    // ── A digit run longer than a year must not abort the process ──────────
+    // typedMatches() used to convert the typed text to an int BEFORE checking
+    // that it was four digits long, and std::stoi answers anything past
+    // INT_MAX by throwing — so holding a number key down killed the app. A
+    // search box accepts whatever the listener types; reaching the assertions
+    // below at all is the regression check.
+    {
+        std::vector<Suggestion> ss = suggest(lib(), "1234567890123", {});
+        for (const Suggestion& s : ss)
+            assert(s.chip.kind != Kind::Year && s.chip.kind != Kind::Decade);
+
+        // Five digits name no year either — but four still do, and a partial
+        // year still offers BOTH readings of what was typed.
+        assert(find(suggest(lib(), "19931", {}), "1990s") == nullptr);
+        assert(find(suggest(lib(), "199",   {}), "1990s") != nullptr);
+        assert(find(suggest(lib(), "199",   {}), "1993")  != nullptr);
+    }
+
+    // ── An untagged name is never offered as a chip ────────────────────────
+    // nameHit() treats an empty needle as "no name constraint" and so matches
+    // EVERY album. A Name candidate built from an untagged artist therefore
+    // used to offer a chip with no text on it whose count was the whole
+    // library — and since the ranking is by count descending, it sorted FIRST,
+    // which is the row Tab and Enter accept.
+    {
+        std::vector<Album> l = lib();
+        l.push_back(mk("", "", 1995, 16, Album::ReleaseType::Album, ""));
+
+        std::vector<Suggestion> ss = suggest(l, "a", {});
+        assert(find(ss, "") == nullptr);
+        for (const Suggestion& s : ss) {
+            assert(!s.label.empty());
+            assert(!(s.chip.kind == Kind::Name && s.chip.value.empty()));
+            assert(s.count <= (int)l.size());
+        }
+
+        // The real rows are untouched by the guard.
+        const Suggestion* bj = find(suggest(l, "bjork", {}), "Björk");
+        assert(bj != nullptr && bj->count == 2 && bj->enabled);
+    }
+
+    // ── Diacritics fold through the PUBLIC path, not just in normalize() ───
+    // normalize() is asserted in isolation above, but what matters is that
+    // suggest() actually goes through it: an accented query must find an
+    // unaccented record, which edit distance alone would only manage by luck
+    // on short words.
+    {
+        std::vector<Album> l = { mk("Bjork", "Vespertine", 2001, 24,
+                                    Album::ReleaseType::Album, "Electronic") };
+        const Suggestion* s = find(suggest(l, "björk", {}), "Bjork");
+        assert(s != nullptr && s->count == 1 && s->enabled);
+    }
+
+    // ── Counts stay right at scale ─────────────────────────────────────────
+    // 4000 albums over 50 distinct years: every decade holds exactly 800 and
+    // every year exactly 80. suggest() counts by bucketing one pass per chip
+    // GROUP rather than by walking the library once per candidate, and this is
+    // what stops a rewrite of that from being fast and quietly WRONG.
+    //
+    // There is deliberately NO wall-clock assertion here, though the cost is
+    // the reason the counting was rewritten (one keystroke over 4000 albums
+    // measured 1443 ms before, 47 ms after). Two things make a time limit
+    // untrustworthy in exactly this file: these tests are Debug-only targets,
+    // so they run unoptimized, and this machine measured a 4.5x spread across
+    // runs of one unchanged binary. A test that fails for the wrong reason is
+    // worse than no test. The timing is printed instead, so a regression is
+    // visible to anyone reading the output.
+    {
+        std::vector<Album> big;
+        for (int i = 0; i < 4000; i++)
+            big.push_back(mk("Artist " + std::to_string(i),
+                             "Record " + std::to_string(i),
+                             1970 + (i % 50), (i % 2) ? 16 : 24,
+                             Album::ReleaseType::Album,
+                             (i % 3) ? "Rock" : "Electronic",
+                             1));
+
+        std::vector<Suggestion> ss = suggest(big, "", {});
+        const Suggestion* d = find(ss, "1990s");
+        assert(d != nullptr && d->count == 800);
+        const Suggestion* y = find(suggest(big, "1993", {}), "1993");
+        assert(y != nullptr && y->count == 80);
+
+        auto t0 = std::chrono::steady_clock::now();
+        std::vector<Suggestion> typed = suggest(big, "a", {});
+        double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
+        assert(!typed.empty());   // a measurement of nothing is worthless
+
+        // One common letter typed into a library this size matches most
+        // artists AND most record titles, so the name field is capped — see
+        // kMaxNameCands in facets.cpp. That cap is the reason this number is
+        // bounded at all, so assert it holds rather than only printing it.
+        int names = 0;
+        for (const Suggestion& s : typed)
+            if (s.chip.kind == Kind::Name) names++;
+        assert(names <= 64);
+        printf("facets_test: suggest() over %zu albums, one letter typed: "
+               "%.0f ms, %zu rows (%d names)\n",
+               big.size(), ms, typed.size(), names);
     }
 
     printf("facets_test: all assertions passed\n");
