@@ -2090,15 +2090,25 @@ void PlayerWindow::recalcLayout() {
                                           gridTileSize_ + gridRowGap_,
                                           gridCols_);
 
+    // The usable rectangle, which is the window minus whatever the hardware
+    // has already taken (see Host::safeInsets — zero on both desktops). Read
+    // BEFORE orientation and metrics on purpose: both are questions about the
+    // space the app actually has, and a phone in a landscape fold can lose
+    // enough width to a cutout to change the answer.
+    const SafeInsets ins = host_->safeInsets();
+    const int L = ins.left,      T = ins.top;
+    const int R = W - ins.right, B = H - ins.bottom;
+    const int safeW = R - L, safeH = B - T;
+
     // Resolved ONCE per layout pass, so every drawing and hit-testing site in
     // the frame reads the same answer even while a resize is in flight.
-    curOrientation_ = orientation_.resolve(W, H);
+    curOrientation_ = orientation_.resolve(safeW, safeH);
 
     // Type roles + geometry factor, both from the window's SHORT SIDE — see
     // computeUiMetrics()'s comment. Identical to the old `(float)H` for every
     // window wider than tall, which is every window that existed before the
     // vertical layout.
-    metrics_ = computeUiMetrics((float)std::min(W, H));
+    metrics_ = computeUiMetrics((float)std::min(safeW, safeH));
 
     // Every fixed-pixel value below is authored at the 1080 reference height
     // and passed through metrics_.space() — see ui_metrics.hh. Values that used
@@ -2119,14 +2129,20 @@ void PlayerWindow::recalcLayout() {
     // survives at 130 with text, which is why bar A is a rail of letters.
     const int barThickness = (int)metrics_.space(130.0f);
 
+    // The frame is laid out inside the SAFE rectangle (L/T/R/B above), not the
+    // window. On both desktops those are the same thing — safeInsets() is zero
+    // and this reads exactly as it did. On a phone the difference is the camera
+    // cutout, which is a hole in the glass and cannot be drawn under at any
+    // brightness. Everything else in the app derives from these three rects, so
+    // this is the only place that has to know.
     if (curOrientation_ == UiOrientation::Vertical) {
-        rcBarA_ = { 0, 0, W, barThickness };
-        rcBarB_ = { 0, H - barThickness, W, H };
-        rcGrid_ = { 0, barThickness, W, H - barThickness };
+        rcBarA_ = { L, T, R, T + barThickness };
+        rcBarB_ = { L, B - barThickness, R, B };
+        rcGrid_ = { L, T + barThickness, R, B - barThickness };
     } else {
-        rcBarA_ = { 0, 0, barThickness, H };
-        rcBarB_ = { W - barThickness, 0, W, H };
-        rcGrid_ = { barThickness, 0, W - barThickness, H };
+        rcBarA_ = { L, T, L + barThickness, B };
+        rcBarB_ = { R - barThickness, T, R, B };
+        rcGrid_ = { L + barThickness, T, R - barThickness, B };
     }
     // Kept as the names the rest of the file already reads. rcSidebar_ IS
     // bar A and rcTransport_ IS bar B — one rectangle each, not a second copy.

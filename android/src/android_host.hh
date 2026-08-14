@@ -53,6 +53,9 @@ public:
 
     void showWindow() override {}
     MonitorInfo primaryMonitor() const override;
+    // The display cutout, and ONLY the cutout — see the definition. The system
+    // bars are hidden rather than avoided, so they contribute nothing here.
+    SafeInsets safeInsets() const override;
     void adaptToCurrentMonitor() override {}   // one screen, and we do not place ourselves
     void snapToEdge(int) override {}           // no window position to set
     void invalidate() override {}              // run()'s dirty flag already covers it
@@ -109,10 +112,18 @@ private:
     std::unique_ptr<AndroidSurfaceProvider> surface_;
     std::unique_ptr<AndroidAssetReader>     assets_;
 
-    // False until the first pump(), i.e. until PlayerWindow::create() has
-    // finished and run() has taken over. Before that the app is BUILDING its
-    // renderer and must not be told to rebuild one.
-    bool running_ = false;
+    // False until the first pump(), which is the first moment
+    // PlayerWindow::create() is known to have RETURNED. Before that the app is
+    // half-built: it has no Renderer yet and, more dangerously, no open
+    // database — `db_` is opened a few lines after host_->init() returns.
+    //
+    // This is not a precaution. Android delivers APP_CMD_RESUME while init()
+    // is still pumping for its first window, and onResume() reaching into
+    // PlayerWindow at that moment dereferenced a null sqlite3* and killed the
+    // process before anything was ever drawn: SIGSEGV in Db::loadMusicRoots(),
+    // three frames under AndroidHost::init(). Every path from a system
+    // callback INTO the app must be gated on this.
+    bool appReady_ = false;
 
     // Cross-thread events, exactly LinuxHost's shape: a queue plus an eventfd
     // registered on the looper, so a background thread finishing a scan or an
@@ -133,4 +144,11 @@ private:
 
     bool storageAsked_ = false;
     bool rootSeeded_   = false;
+
+    // The cutout, cached because safeInsets() is called from every layout pass
+    // and answering it costs a chain of five JNI calls. Refreshed where the
+    // answer can actually change: window init, and every resize (which is what
+    // a rotation and a fold both arrive as).
+    SafeInsets cachedInsets_{};
+    void refreshSafeInsets();
 };

@@ -27,6 +27,24 @@ struct MonitorInfo {
     LayoutRect workArea;  // bounds minus taskbar/panels (Windows only; equals bounds elsewhere)
 };
 
+// Pixels along each edge of OUR OWN window that the app must not draw in,
+// because the hardware or the system already owns them.
+//
+// Zero on both desktops, and that is not a stub — a desktop window is given a
+// rectangle it owns completely. A phone is not: the camera is a hole punched
+// through the glass in the middle of the display, and it is still there when
+// every system bar is hidden. Nothing can be drawn under it and read.
+//
+// The distinction that makes this necessary rather than merely tidy: system
+// bars are SOFTWARE and can be hidden, so they never belong here — hiding them
+// is the right answer and an inset would be a worse one. The cutout is GLASS.
+// Measured on a moto g06: hiding the bars extends the window to the full
+// 720x1640 panel and puts the app's navigation rail under a 70 px camera
+// notch, which is exactly the case this exists for.
+struct SafeInsets {
+    int top = 0, bottom = 0, left = 0, right = 0;
+};
+
 // Cross-thread notifications PlayerWindow's background threads (art-decode
 // worker, background scan thread, gapless coordinator) need serviced on the
 // UI thread — the portable equivalent of PostMessageW(hwnd_, WM_APP_*, ...).
@@ -106,6 +124,13 @@ public:
     virtual void showWindow() = 0;
 
     virtual MonitorInfo primaryMonitor() const = 0;
+
+    // See SafeInsets. Defaulted rather than pure so the two desktop hosts and
+    // the headless one need no implementation at all: a window they are given
+    // is a window they own, and the honest answer is zero on every edge.
+    // Re-read on every layout pass, never cached by the caller — a rotation or
+    // a fold changes it without the app restarting.
+    virtual SafeInsets safeInsets() const { return {}; }
 
     // Re-fits the window if it moved to a different monitor since the last
     // call. No-op on Linux (see class comment) — Wayland has no client-side

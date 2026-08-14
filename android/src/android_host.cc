@@ -8,6 +8,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <thread>
 
 #include "app_paths.hh"          // gui/src: the exeDir()/stateDir() seam itself
 #include "app_paths_android.hh"  // and this platform's one-time setter for it
@@ -42,6 +44,55 @@ constexpr float kTouchSlopPx = 24.0f;
 // screen.
 constexpr float kWheelPerPixel = 1.0f;
 
+// ── Make the app's own diagnostics visible ───────────────────────────────────
+//
+// player_view.cc, the scanner and both audio backends report through printf on
+// every platform: "[Audio] signal path: …", "[Scan] Done: N scanned", the USB
+// driver's errors. On a desktop those land on a terminal or in
+// matrix_player.log. On Android stdout goes to /dev/null, so the entire
+// diagnostic channel of a 7000-line app was being silently discarded — which
+// is exactly the channel you want the first time something misbehaves on a
+// phone.
+//
+// A pipe with a reader thread is the standard fix: dup2 both descriptors onto
+// its write end and forward whole lines to logcat under the tag
+// "matrix_player". Costs one idle thread, and is what makes `adb logcat` tell
+// the same story a terminal tells on Linux.
+void redirect_stdio_to_logcat() {
+    static bool installed = false;
+    if (installed) return;
+    installed = true;
+
+    // Unbuffered, or a crash takes the last (most interesting) lines with it.
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+
+    int fds[2];
+    if (pipe(fds) != 0) return;
+    dup2(fds[1], STDOUT_FILENO);
+    dup2(fds[1], STDERR_FILENO);
+    close(fds[1]);
+
+    std::thread([readFd = fds[0]] {
+        std::string line;
+        char buf[512];
+        for (;;) {
+            ssize_t n = read(readFd, buf, sizeof(buf));
+            if (n <= 0) return;   // pipe closed: the process is going away
+            for (ssize_t i = 0; i < n; ++i) {
+                if (buf[i] == '\n') {
+                    __android_log_write(ANDROID_LOG_INFO, "matrix_player", line.c_str());
+                    line.clear();
+                } else if (buf[i] != '\r') {
+                    line.push_back(buf[i]);
+                }
+            }
+            // A partial line is HELD, not flushed: splitting on the read
+            // boundary would tear messages in half at arbitrary points.
+        }
+    }).detach();
+}
+
 }  // namespace
 
 // Host's platform factory, which on Android cannot do its job: an AndroidHost
@@ -56,6 +107,9 @@ std::unique_ptr<Host> make_host() {
 }
 
 AndroidHost::AndroidHost(android_app* state) : state_(state) {
+    // First thing, before any of the app's own code can print: everything
+    // player_view.cc and the engine report is otherwise thrown away here.
+    redirect_stdio_to_logcat();
     state_->userData     = this;
     state_->onAppCmd     = handleAppCmd;
     state_->onInputEvent = handleInputEvent;
@@ -118,6 +172,28 @@ MonitorInfo AndroidHost::primaryMonitor() const {
     return mi;
 }
 
+// The display cutout, and DELIBERATELY NOT the navigation bar, even though
+// query_nav_bar_height() reports one (84 px on the test device).
+//
+// The two are different kinds of obstacle and take different answers. A system
+// bar is SOFTWARE: enable_immersive() hides it, and the screen is then really
+// ours — insetting for a bar that is not on screen would leave a permanent
+// empty strip for nothing. A cutout is GLASS. It is still there with every bar
+// hidden, and no API removes it; the only thing an app can do is not put
+// anything under it.
+//
+// Which is also why hiding the bars CREATED this: while the status bar is
+// shown, Android keeps the window clear of the cutout by itself, because the
+// bar is what covers it. Hide the bar and the window goes edge to edge — 720 x
+// 1640 on the test device, the whole panel — and the navigation rail lands
+// under a 70 px camera notch.
+SafeInsets AndroidHost::safeInsets() const { return cachedInsets_; }
+
+void AndroidHost::refreshSafeInsets() {
+    const SafeAreaInsets cut = query_safe_area_insets(state_);
+    cachedInsets_ = { cut.top, cut.bottom, cut.left, cut.right };
+}
+
 void AndroidHost::setKeepAwake(bool on) {
     // Deliberately a no-op for now. It has a real Android equivalent
     // (FLAG_KEEP_SCREEN_ON), but its only caller is the fullscreen artwork
@@ -141,7 +217,11 @@ void AndroidHost::handleAppCmd(android_app* app, int32_t cmd) {
             // what ui_orientation.hh assumes: the layout is derived from the
             // window's own shape and nothing ever asks Android which way up
             // the device is.
-            if (self->owner_ && self->running_) self->owner_->onHostResized();
+            // The cutout moves with the screen: what was a 70 px top inset in
+            // portrait is a side inset in landscape. Re-queried here rather
+            // than cached from startup, exactly as safe_area.hh asks.
+            self->refreshSafeInsets();
+            if (self->owner_ && self->appReady_) self->owner_->onHostResized();
             break;
         default: break;
     }
@@ -157,10 +237,23 @@ void AndroidHost::onWindowInit() {
 
     vce::platform::enable_immersive(state_, vce::platform::ImmersiveMode::kFullImmersive);
 
+    // What the OS actually handed us, versus what it says is in the way. The
+    // goal is for these three numbers to make the inset arithmetic
+    // unnecessary: if the window we get already excludes the bars and the
+    // cutout, PlayerWindow needs no notion of a safe area at all — the
+    // rectangle IS the safe area. Logged rather than assumed because every
+    // handset places its cutout and its navigation differently, and a height
+    // we compute ourselves is a height that is wrong on the next phone.
+    refreshSafeInsets();
+    LOGI("geometry: window %dx%d | cutout t=%d b=%d l=%d r=%d | navbar=%d (hidden, not inset)",
+         ANativeWindow_getWidth(state_->window), ANativeWindow_getHeight(state_->window),
+         cachedInsets_.top, cachedInsets_.bottom, cachedInsets_.left, cachedInsets_.right,
+         vce::platform::query_nav_bar_height(state_));
+
     // Before run() takes over, PlayerWindow::create() is still building its
     // own Renderer over this surface — telling it to rebuild one here would
     // be a second Renderer for the same window.
-    if (running_ && owner_) {
+    if (appReady_ && owner_) {
         if (!owner_->onSurfaceRecreated())
             LOGE("could not rebuild the renderer on returning to the app");
     }
@@ -223,7 +316,14 @@ void AndroidHost::ensureStoragePermission() {
 // the way: the incremental scan, the folder watch and the .streamer sidecar
 // are all commitAddFolder()'s ordinary work, identical to the desktop's.
 void AndroidHost::maybeSeedMusicRoot() {
-    if (rootSeeded_ || !owner_) return;
+    // appReady_, not just owner_. owner_ is set at the TOP of init(), while
+    // the database it is about to be asked about is opened after init()
+    // RETURNS — and Android fires APP_CMD_RESUME inside that window. Asking
+    // then is a null sqlite3* dereference and an instant, silent process
+    // death. The guard lives here rather than in each caller because the
+    // requirement belongs to this function, not to the callers who happen to
+    // exist today.
+    if (rootSeeded_ || !appReady_ || !owner_) return;
     ensureStoragePermission();
     if (!has_all_files_access(state_)) {
         LOGI("storage: no access yet -- deferring the music root");
@@ -377,8 +477,8 @@ void AndroidHost::drainTimer() {
 // ── The pump ─────────────────────────────────────────────────────────────────
 
 void AndroidHost::pump(bool haveWork) {
-    if (!running_) {
-        running_ = true;
+    if (!appReady_) {
+        appReady_ = true;
         // First tick after create(): the app exists now, so this is the
         // earliest honest moment to ask for storage and hand over the root.
         maybeSeedMusicRoot();
