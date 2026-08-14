@@ -114,6 +114,7 @@ static const char* backendDisplayName(AudioBackend b) {
     case AudioBackend::Wasapi: return "WASAPI";
     case AudioBackend::Alsa:   return "ALSA";
     case AudioBackend::Jack:   return "JACK";
+    case AudioBackend::AAudio: return "AAudio";
     }
     return "?";
 }
@@ -182,6 +183,10 @@ static void pruneStaleCaches(const std::string& dir, const std::string& keepPath
 
 bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
     host_ = injectedHost ? std::move(injectedHost) : make_host();
+    // A platform may have no ambient host to build — Android's needs the
+    // activity handle only its entry point holds, so it is always injected.
+    // Refusing here turns "nobody injected one" into a clean startup failure.
+    if (!host_) return false;
 
     // Fixed, non-resizable window: the app sets its size once (true
     // fullscreen) and never leaves it to interactive resize/maximize.
@@ -269,8 +274,16 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
         };
 
         std::string fontPath = toUtf8Path(ui_fonts::regular());
-        uiFont_.load(fontPath.c_str());
         fontsDir_ = toUtf8Path("fonts/");
+
+        // The vector fallback face, read through the host rather than opened
+        // as a file: on Android these bytes come out of the APK, where there
+        // is no path to open. Same bytes either way — see Host::dataReader().
+        {
+            std::vector<uint8_t> bytes;
+            if (host_->dataReader().read(fontPath.c_str(), bytes) && !bytes.empty())
+                uiFont_.loadFromMemory(bytes.data(), bytes.size());
+        }
 
         // Sweep the MTSDF atlas caches this build no longer writes. They are
         // ~45-67 MB each, and the raster path has no disk cache at all — a
@@ -282,7 +295,7 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
 
         // The faces. Order matters only for the fallbacks: a codepoint the
         // primary face lacks is served by the first fallback that has it.
-        FileByteReader loader;
+        AssetReader& loader = host_->dataReader();
         if (msdfFont_.open(loader, fontPath.c_str())) {
             // Bold (headers/titles), Italic (artist/secondary text), and Mono
             // (repurposing the unused Math slot — this app never renders math)
@@ -426,7 +439,9 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
         audioBackend_ = AudioBackend::Wasapi;
         if (backend == "usb") audioBackend_ = AudioBackend::Usb;
 #else
-#ifdef MATRIX_HAVE_ALSA
+#if defined(MATRIX_HAVE_AAUDIO)
+        audioBackend_ = AudioBackend::AAudio;
+#elif defined(MATRIX_HAVE_ALSA)
         audioBackend_ = AudioBackend::Alsa;
 #else
         audioBackend_ = AudioBackend::Usb;
@@ -437,6 +452,9 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
 #endif
 #ifdef MATRIX_HAVE_JACK
         if (backend == "jack") audioBackend_ = AudioBackend::Jack;
+#endif
+#ifdef MATRIX_HAVE_AAUDIO
+        if (backend == "aaudio") audioBackend_ = AudioBackend::AAudio;
 #endif
 #endif
     }
@@ -512,6 +530,12 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
         output_ = std::make_unique<JackOutput>(jackStartPort_);
         printf("[Audio] JACK backend selected (start port=%s)\n",
                jackStartPort_.empty() ? "auto" : jackStartPort_.c_str());
+    }
+#endif
+#ifdef MATRIX_HAVE_AAUDIO
+    else if (audioBackend_ == AudioBackend::AAudio) {
+        output_ = std::make_unique<AAudioOutput>();
+        printf("[Audio] AAudio backend selected\n");
     }
 #endif
 #endif
@@ -748,11 +772,17 @@ void PlayerWindow::run() {
     // on screen actually needs to change. Timers and async completions wake
     // the wait normally and mark dirty from their own handlers.
     while (running_) {
-        bool haveWork = pendingFrames_ > 0 || artWin_.hasPendingFrames();
+        // renderer_ can be null on a platform whose surface comes and goes
+        // (see onSurfaceLost) — while it is, there is nothing to draw and
+        // nothing to stay awake for, so pump() blocks instead of spinning on
+        // a dirty flag nobody can service. On both desktops it is never null
+        // and this reads exactly as it did.
+        const bool canDraw = renderer_ != nullptr;
+        bool haveWork = canDraw && (pendingFrames_ > 0 || artWin_.hasPendingFrames());
         host_->pump(haveWork);
         if (host_->quitRequested()) { running_ = false; break; }
 
-        if (pendingFrames_ > 0) { drawFrame(); pendingFrames_--; }
+        if (canDraw && pendingFrames_ > 0) { drawFrame(); pendingFrames_--; }
         // ArtWindow is a second window on this same thread with its own
         // Renderer — no second message pump, so drive its frame here too.
         if (artWin_.isVisible()) artWin_.renderIfDirty();
@@ -4003,6 +4033,12 @@ void PlayerWindow::onAudioSettings() {
             if (asAlsaDevices_[i].deviceId == savedId) { asAlsaSel_ = i + 1; break; }
     }
 #endif
+#ifdef MATRIX_HAVE_AAUDIO
+    // No enumeration and no saved selection: AAudio has no device list to
+    // offer. The row exists so the listener can switch BACK to it after
+    // trying USB, which is the only choice this backend actually presents.
+    asBackendOptions_.push_back(AudioBackend::AAudio);
+#endif
 #ifdef MATRIX_HAVE_JACK
     asBackendOptions_.push_back(AudioBackend::Jack);
     {
@@ -4036,7 +4072,8 @@ void PlayerWindow::onAudioSettings() {
         AudioBackend b = asBackendOptions_[i];
         if ((b == AudioBackend::Wasapi && backend == "wasapi") ||
             (b == AudioBackend::Alsa   && backend == "alsa")   ||
-            (b == AudioBackend::Jack   && backend == "jack")) {
+            (b == AudioBackend::Jack   && backend == "jack")   ||
+            (b == AudioBackend::AAudio && backend == "aaudio")) {
             asBackendSelIdx_ = i;
             break;
         }
@@ -4188,6 +4225,25 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         y += listH + metrics_.space(SP_MD);
     }
 #endif
+#ifdef MATRIX_HAVE_AAUDIO
+    else if (sel == AudioBackend::AAudio) {
+        // No device list at all, and the empty rect matters: it is what the
+        // hit-test reads, so leaving the previous backend's list rect behind
+        // would keep those rows clickable under a panel that no longer draws
+        // them.
+        asDeviceListArea_ = {};
+        asDeviceListRows_.clear();
+        canvas.textStyled("Android chooses the output route itself, and follows it when you",
+                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        y += metrics_.text.body * 1.4f;
+        canvas.textStyled("plug in headphones \xE2\x80\x94 there is no device to pick here.",
+                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        y += metrics_.text.body * 1.9f;
+        canvas.textStyled("16-bit output. Not a bit-perfect path for deeper sources.",
+                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        y += metrics_.space(SP_MD) + metrics_.text.body;
+    }
+#endif
 #endif
 
     int by = (int)(content.bottom - (btnH + pad));   // btnH declared above — the list is sized against it
@@ -4276,6 +4332,12 @@ void PlayerWindow::applyAudioSettingsPanel() {
         db_.saveSetting("jack_port", port);
         jackStartPort_ = port;
         output_ = std::make_unique<JackOutput>(jackStartPort_);
+    }
+#endif
+#ifdef MATRIX_HAVE_AAUDIO
+    else if (sel == AudioBackend::AAudio) {
+        db_.saveSetting("audio_backend", "aaudio");
+        output_ = std::make_unique<AAudioOutput>();
     }
 #endif
 #endif
@@ -5080,6 +5142,8 @@ void PlayerWindow::commitAddFolder(const std::string& root) {
     startBackgroundScan();
 }
 
+bool PlayerWindow::hasMusicRoots() { return !db_.loadMusicRoots().empty(); }
+
 void PlayerWindow::onAddFolder() {
     fpLoadDir(fpCurrentDir_.empty() ? userHomeDir() : fpCurrentDir_);
     fpHoverClose_ = fpHoverSelect_ = fpHoverCancel_ = false;
@@ -5156,6 +5220,12 @@ std::string PlayerWindow::getActiveDeviceKey() {
     }
     case AudioBackend::Alsa: return "alsa";
     case AudioBackend::Jack: return "jack";
+    // No device id in the key. AAudio picks the route itself and changes it
+    // under us when headphones are plugged in, so there is exactly one
+    // AutoEQ slot for "this phone's output" — which is also the honest
+    // model: the profile follows the DRIVERS, and the listener says which
+    // pair is on.
+    case AudioBackend::AAudio: return "aaudio";
     case AudioBackend::Usb:
     default: {
         auto vid = db_.loadSetting("usb_vid");
@@ -5172,6 +5242,7 @@ std::string PlayerWindow::audioBackendLabel() const {
     case AudioBackend::Wasapi: return "WASAPI";
     case AudioBackend::Alsa:   return "ALSA";
     case AudioBackend::Jack:   return "JACK";
+    case AudioBackend::AAudio: return "AAudio";
     case AudioBackend::Usb:
     default:                   return "USB";
     }
@@ -5591,6 +5662,16 @@ void PlayerWindow::onPlay(StartCause cause) {
         auto* wasapi = static_cast<WasapiOutput*>(output_.get());
         deviceMaxBits = wasapi->getMaxBitDepth(outSr, active_->channels());
         if (deviceMaxBits <= 0) deviceMaxBits = 32;
+    }
+#endif
+#ifdef MATRIX_HAVE_AAUDIO
+    else if (audioBackend_ == AudioBackend::AAudio) {
+        // Not a query: the stream is opened AAUDIO_FORMAT_PCM_I16 and there is
+        // no deeper option to ask for. Stating it here is what makes the
+        // signal-chain readout tell the truth about a 24-bit source on a
+        // phone — it reports "truncated to 16-bit device" instead of claiming
+        // bit-perfect, which is the whole job of that readout.
+        deviceMaxBits = 16;
     }
 #endif
     printf("[Audio] device max bit depth: %d\n", deviceMaxBits);
@@ -6807,6 +6888,73 @@ void PlayerWindow::shutdown() {
     // Before the device goes: the baker owns pipelines and ~150 MB of scratch.
     glyphBaker_.destroy();
     renderer_.reset();
+}
+
+// ── Surface loss / recreation ────────────────────────────────────────────────
+//
+// The GPU-only half of shutdown() and of create(), split out so a platform
+// whose surface is transient can run just that half. Neither desktop host
+// calls either one: on Windows and Linux the window outlives everything, so
+// these are dead code there by construction, not by accident.
+//
+// What must NOT happen here is any app-state work. The database stays open,
+// the library stays loaded, playback keeps running, the scan keeps scanning —
+// the listener left the app for ten seconds, they did not restart it. Only
+// the pixels are gone.
+
+void PlayerWindow::onSurfaceLost() {
+    if (!renderer_) return;
+
+    // Textures first, then the Renderer that owns their VkImages — the same
+    // order shutdown() states, and for the same reason.
+    clearGridArtTexCache();
+    if (trackPanelArtTex_ != kInvalidTexture) renderer_->destroy_texture(trackPanelArtTex_);
+    if (transportArtTex_  != kInvalidTexture) renderer_->destroy_texture(transportArtTex_);
+    if (artistImgTex_     != kInvalidTexture) renderer_->destroy_texture(artistImgTex_);
+    trackPanelArtTex_ = transportArtTex_ = artistImgTex_ = kInvalidTexture;
+    // The keys these three cache against, too. A handle set back to invalid
+    // without clearing what it was a texture OF leaves each loader convinced
+    // it is already showing the right thing, so nothing reloads and the art
+    // never comes back.
+    trackPanelArtTexAlbum_ = -1;
+    transportArtTexPath_.clear();
+
+    glyphBaker_.destroy();
+    // The baker's pipelines died with the device. GPU baking is opt-in
+    // (MATRIX_GPU_GLYPHS) and measured slower anyway, so it is dropped rather
+    // than re-armed: nothing is lost but an experiment, and leaving the flag
+    // set would point the font at a baker that no longer has a device.
+    msdfFont_.useGpuBake(false);
+
+    renderer_.reset();
+    // The atlas image is gone with it. refreshGlyphs() re-uploads on the next
+    // recreate because Renderer::msdfReady() is false on a fresh Renderer —
+    // the CPU-side cells in msdfFont_ are kept and re-uploaded, not re-baked.
+}
+
+bool PlayerWindow::onSurfaceRecreated() {
+    if (renderer_) return true;   // never lost it; nothing to do
+
+    try {
+        renderer_ = std::make_unique<Renderer>(host_->surfaceProvider(), host_->assetReader(),
+                                               /*desiredSwapchainImages=*/3);
+    } catch (const std::exception& e) {
+        host_->showErrorMessage("Vulkan re-initialization failed", e.what());
+        return false;
+    }
+
+    // Sizes may have changed while we were away (a rotation is a resize, and
+    // Android delivers one on return as a matter of course), and the type
+    // roles are what the atlas is baked at — so relayout BEFORE baking.
+    recalcLayout();
+    refreshGlyphs();
+
+    // Album art is reloaded lazily: getGridArtTexture() finds the cache empty
+    // and queues the decodes again. clearGridArtTexCache() already bumped
+    // artCacheGen_, so any decode still in flight from before is discarded
+    // rather than handed to a Renderer that never asked for it.
+    markDirty();
+    return true;
 }
 
 #ifdef MATRIX_UI_CAPTURE

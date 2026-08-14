@@ -2,254 +2,210 @@
 
 #include <android/input.h>
 #include <android/log.h>
-#include <chrono>
+#include <sys/eventfd.h>
+#include <sys/timerfd.h>
+#include <unistd.h>
 
-#include "android_player_view.hh"
-#include "app_paths_android.hh"
-#include "canvas.hh"
+#include <algorithm>
+#include <cmath>
+
+#include "app_paths.hh"          // gui/src: the exeDir()/stateDir() seam itself
+#include "app_paths_android.hh"  // and this platform's one-time setter for it
 #include "fullscreen.hh"  // vce::platform::enable_immersive/query_nav_bar_height
 #include "launch_intent.hh"
-#include "renderer.hh"
+#include "player_view.hh"  // gui/src: the app itself
 #include "safe_area.hh"
 #include "storage_permission.hh"
-#include "ui_fonts.hh"    // gui/src: the ONE place the face paths live
-#include "ui_metrics.hh"  // gui/src: the five type roles to bake at
 
 #define LOG_TAG "AndroidHost"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+namespace {
+
+// Looper identifiers for the two descriptors this host adds. LOOPER_ID_MAIN
+// and LOOPER_ID_INPUT (1 and 2) belong to native_app_glue; start above them.
+constexpr int kLooperIdEvents = 3;
+constexpr int kLooperIdTimer  = 4;
+
+// Past this many pixels a touch is a scroll, and stops being a tap. 24 px is
+// roughly a finger's own wobble on a modern phone — small enough that a
+// deliberate tap never scrolls, large enough that resting a thumb does not
+// count as a press.
+constexpr float kTouchSlopPx = 24.0f;
+
+// The wheel unit onMouseWheel()'s callers assume (Win32's WHEEL_DELTA), and
+// the same scaling LinuxHost applies to Wayland's continuous axis. A touch
+// drag is already in pixels, and every scroll consumer subtracts the delta
+// from its scroll offset — so passing the finger's own displacement gives
+// 1:1 content tracking, which is the only thing that feels right on a touch
+// screen.
+constexpr float kWheelPerPixel = 1.0f;
+
+}  // namespace
+
+// Host's platform factory, which on Android cannot do its job: an AndroidHost
+// needs the android_app* that only android_main() is ever handed, so the host
+// is INJECTED (src/main.cc) rather than manufactured. This exists because
+// PlayerWindow::create() names the symbol on the branch it does not take here;
+// create() checks for a null host and refuses, so a future caller that forgets
+// to inject one fails at startup with a log line instead of a null dereference.
+std::unique_ptr<Host> make_host() {
+    LOGE("make_host(): Android has no ambient host — inject one (see main.cc)");
+    return nullptr;
+}
 
 AndroidHost::AndroidHost(android_app* state) : state_(state) {
-    state_->userData    = this;
-    state_->onAppCmd    = handleAppCmd;
+    state_->userData     = this;
+    state_->onAppCmd     = handleAppCmd;
     state_->onInputEvent = handleInputEvent;
 }
 
 AndroidHost::~AndroidHost() {
-    onWindowTerm();
+    if (eventFd_ >= 0) close(eventFd_);
+    if (timerFd_ >= 0) close(timerFd_);
 }
 
-void AndroidHost::run() {
-    while (true) {
-        int events;
-        android_poll_source* source;
-        while (ALooper_pollOnce(renderer_ ? 0 : -1, nullptr, &events,
-                                reinterpret_cast<void**>(&source)) >= 0) {
-            if (source) source->process(state_, source);
-            if (state_->destroyRequested) return;
-        }
-        if (renderer_) drawFrame();
-    }
+std::string AndroidHost::exeDir() const {
+    // Empty, and that is the whole trick: PlayerWindow builds its font paths
+    // as exeDir() + "fonts/…", which on Android is exactly the asset name
+    // AAssetManager wants. See Host::dataReader().
+    return app_paths::exeDir();
 }
+
+bool AndroidHost::init(PlayerWindow* owner) {
+    owner_ = owner;
+
+    // internalDataPath is a plain field on ANativeActivity — no JNI needed.
+    // Set BEFORE anything opens the database, which create() does immediately
+    // after this returns.
+    app_paths::setAndroidPaths("", state_->activity->internalDataPath);
+
+    ALooper* looper = ALooper_forThread();
+    eventFd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    timerFd_ = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    if (looper && eventFd_ >= 0)
+        ALooper_addFd(looper, eventFd_, kLooperIdEvents, ALOOPER_EVENT_INPUT, nullptr, nullptr);
+    if (looper && timerFd_ >= 0)
+        ALooper_addFd(looper, timerFd_, kLooperIdTimer, ALOOPER_EVENT_INPUT, nullptr, nullptr);
+
+    // Android gives us a window when it is ready to, which is some time after
+    // android_main() starts. Pump until it arrives; everything the app does
+    // next needs a surface to exist.
+    while (!state_->window && !state_->destroyRequested) {
+        int events;
+        android_poll_source* source = nullptr;
+        if (ALooper_pollOnce(-1, nullptr, &events, reinterpret_cast<void**>(&source)) >= 0) {
+            if (source) source->process(state_, source);
+        }
+    }
+    if (!state_->window) return false;   // destroyed before it ever appeared
+
+    LOGI("window ready: %dx%d", ANativeWindow_getWidth(state_->window),
+         ANativeWindow_getHeight(state_->window));
+    return surface_ != nullptr && assets_ != nullptr;
+}
+
+MonitorInfo AndroidHost::primaryMonitor() const {
+    MonitorInfo mi{};
+    if (state_->window) {
+        mi.bounds = { 0, 0, ANativeWindow_getWidth(state_->window),
+                            ANativeWindow_getHeight(state_->window) };
+    }
+    // No taskbar/panel concept, so the two are the same rectangle — the same
+    // answer LinuxHost gives, for the same reason.
+    mi.workArea = mi.bounds;
+    return mi;
+}
+
+void AndroidHost::setKeepAwake(bool on) {
+    // Deliberately a no-op for now. It has a real Android equivalent
+    // (FLAG_KEEP_SCREEN_ON), but its only caller is the fullscreen artwork
+    // window, and ArtWindow declines to open on Android — so wiring it would
+    // be code with no path that reaches it. See art_view.hh.
+    (void)on;
+}
+
+// ── The app command stream ───────────────────────────────────────────────────
 
 void AndroidHost::handleAppCmd(android_app* app, int32_t cmd) {
     auto* self = reinterpret_cast<AndroidHost*>(app->userData);
     switch (cmd) {
-        case APP_CMD_INIT_WINDOW:
-            if (app->window) self->onWindowInit();
+        case APP_CMD_INIT_WINDOW:   if (app->window) self->onWindowInit(); break;
+        case APP_CMD_TERM_WINDOW:   self->onWindowTerm();  break;
+        case APP_CMD_GAINED_FOCUS:  self->onGainedFocus(); break;
+        case APP_CMD_RESUME:        self->onResume();      break;
+        case APP_CMD_WINDOW_RESIZED:
+        case APP_CMD_CONFIG_CHANGED:
+            // A rotation arrives here as an ordinary resize, which is exactly
+            // what ui_orientation.hh assumes: the layout is derived from the
+            // window's own shape and nothing ever asks Android which way up
+            // the device is.
+            if (self->owner_ && self->running_) self->owner_->onHostResized();
             break;
-        case APP_CMD_TERM_WINDOW:
-            self->onWindowTerm();
-            break;
-        case APP_CMD_GAINED_FOCUS:
-            self->onGainedFocus();
-            break;
-        case APP_CMD_RESUME:
-            self->onResume();
-            break;
-        case APP_CMD_PAUSE:
-            self->onPause();
-            break;
-        default:
-            break;
+        default: break;
     }
 }
 
-int32_t AndroidHost::handleInputEvent(android_app* app, AInputEvent* event) {
-    auto* self = reinterpret_cast<AndroidHost*>(app->userData);
-    if (!self->view_) return 0;
-    if (AInputEvent_getType(event) != AINPUT_EVENT_TYPE_MOTION) return 0;
-
-    const float x = AMotionEvent_getX(event, 0);
-    const float y = AMotionEvent_getY(event, 0);
-    switch (AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK) {
-        case AMOTION_EVENT_ACTION_DOWN:
-            self->view_->onTouchDown(x, y);
-            return 1;
-        case AMOTION_EVENT_ACTION_MOVE:
-            self->view_->onTouchMove(x, y);
-            return 1;
-        case AMOTION_EVENT_ACTION_UP:
-        case AMOTION_EVENT_ACTION_CANCEL:
-            self->view_->onTouchUp(x, y);
-            return 1;
-        default:
-            return 0;
-    }
-}
-
+// APP_CMD_INIT_WINDOW is NOT "the app started". It fires again every time
+// another activity covers this one and the listener comes back — treating it
+// as startup is what produced the permission loop this file used to have.
 void AndroidHost::onWindowInit() {
-    surface_  = std::make_unique<AndroidSurfaceProvider>(state_->window);
-    assets_   = std::make_unique<AndroidAssetReader>(state_->activity->assetManager);
-    renderer_ = std::make_unique<Renderer>(*surface_, *assets_);
-    LOGI("Vulkan initialised (%ux%u)", renderer_->width(), renderer_->height());
-    initFonts();
-
-    // internalDataPath is a plain field on ANativeActivity — no JNI call
-    // needed (see the design doc's "app_paths for Android" section).
-    app_paths::setAndroidPaths("", state_->activity->internalDataPath);
-
-    // NOT the permission request, and NOT the folder picker. Both used to fire
-    // here, and this callback runs every time the window comes back -- see
-    // ensureStoragePermission().
-    ensureStoragePermission();
-    maybeStartScan();
+    surface_ = std::make_unique<AndroidSurfaceProvider>(state_->window);
+    if (!assets_)
+        assets_ = std::make_unique<AndroidAssetReader>(state_->activity->assetManager);
 
     vce::platform::enable_immersive(state_, vce::platform::ImmersiveMode::kFullImmersive);
 
-    orientation_.start();
-    orientation_.enable();
-
-    lastFrameNs_ = std::chrono::steady_clock::now().time_since_epoch().count();
+    // Before run() takes over, PlayerWindow::create() is still building its
+    // own Renderer over this surface — telling it to rebuild one here would
+    // be a second Renderer for the same window.
+    if (running_ && owner_) {
+        if (!owner_->onSurfaceRecreated())
+            LOGE("could not rebuild the renderer on returning to the app");
+    }
 }
 
 void AndroidHost::onWindowTerm() {
-    orientation_.disable();
-    orientation_.stop();
-    // The glyph atlas lives on the GPU, so it dies with the renderer -- but
-    // the FACES are CPU-side and survive. Keeping one flag for both meant
-    // initFonts() returned early on the next window and left the new renderer
-    // with no atlas at all: every string would have vanished after the first
-    // time the app was backgrounded.
-    atlasUploaded_ = false;
-    renderer_.reset();
+    // The Renderer, the swapchain and every texture belong to the surface
+    // that is going away. PlayerWindow keeps its database, its library and
+    // its playback: the listener left the app, they did not restart it.
+    if (owner_) owner_->onSurfaceLost();
     surface_.reset();
-    assets_.reset();
 }
 
 void AndroidHost::onGainedFocus() {
     // The system clears immersive flags on focus loss (e.g. a permission
     // dialog) — fullscreen.hh's documented contract requires re-applying on
     // every APP_CMD_GAINED_FOCUS, not just at startup.
-    if (state_->window) {
+    if (state_->window)
         vce::platform::enable_immersive(state_, vce::platform::ImmersiveMode::kFullImmersive);
-    }
 }
 
 void AndroidHost::onResume() {
-    orientation_.enable();
-    // Coming back from the system Settings screen is the ONE moment the answer
-    // can have changed, and it is the moment storage_permission.hh's own
-    // comment says to re-check on. If it was granted, the scan that found
-    // nothing at startup can now find something.
-    maybeStartScan();
-}
-
-void AndroidHost::onPause() {
-    orientation_.disable();  // battery: only listen while foregrounded
-}
-
-// ── The UI typeface, out of the APK ──────────────────────────────────────────
-//
-// This did not exist, and its absence was invisible: Canvas took font=nullptr,
-// Canvas::emitText_ fell through to the engine's built-in stroke font, and text
-// appeared -- just not the app's. Sharing the LAYOUT with the desktop would
-// never have made the two look alike on its own.
-//
-// Everything here is the desktop path (PlayerWindow::create) with one
-// substitution: an AndroidAssetReader instead of a filesystem reader, because
-// the faces live inside the APK rather than beside an executable. The face
-// paths themselves come from gui/src/ui_fonts.hh, so the two platforms cannot
-// drift onto different typefaces.
-//
-// The atlas is a RasterFont -- per-size rasterized coverage, NOT MTSDF
-// (raster_font.hh:18 spells out the difference). Canvas::useMsdf() and
-// Renderer::initMsdf() keep the old name from when it was MsdfFont. Baking is
-// on the CPU, which is also what the desktop does by default: its GPU baker is
-// opt-in behind MATRIX_GPU_GLYPHS and measured SLOWER, not faster
-// (player_view.cc:362). So the two platforms take the same path, not merely a
-// similar one.
-void AndroidHost::initFonts() {
-    if (!assets_ || !renderer_) return;
-    if (fontsReady_) {
-        // Faces already loaded; only the GPU side is missing. This is the
-        // ordinary path on every window after the first.
-        if (!atlasUploaded_) {
-            renderer_->initMsdf(msdfFont_);
-            atlasUploaded_ = true;
-        }
-        return;
-    }
-
-    // The vector fallback. Assets are not files, so this is loadFromMemory()
-    // rather than load() -- the one real difference from the desktop path.
-    std::vector<uint8_t> regular;
-    if (assets_->read(ui_fonts::regular(), regular) && !regular.empty())
-        uiFont_.loadFromMemory(regular.data(), regular.size());
-
-    if (!msdfFont_.open(*assets_, ui_fonts::regular())) {
-        LOGI("glyph atlas failed to open (%s) -- falling back to vector text",
-             ui_fonts::regular());
-        return;
-    }
-    // Bold for headers and titles, Italic for secondary text, and the Math
-    // slot repurposed as monospace for numeric readouts that must not jitter
-    // as digits change -- the same three the desktop registers.
-    msdfFont_.addStyle(*assets_, ui_fonts::bold(),   FontStyle::Bold);
-    msdfFont_.addStyle(*assets_, ui_fonts::italic(), FontStyle::Italic);
-    msdfFont_.addStyle(*assets_, ui_fonts::mono(),   FontStyle::Math);
-    // The icon glyphs share the atlas, as an OVERRIDE: their codepoints sit in
-    // a private range the text faces do not cover.
-    msdfFont_.addOverride(*assets_, ui_fonts::icons());
-
-    // Bake Latin-1 at the five type roles. The rest of the library's scripts
-    // arrive through the miss path the first time something asks for them,
-    // exactly as on the desktop -- there is no library scanned yet at this
-    // point anyway.
-    const UiMetrics m = computeUiMetrics(
-        (float)std::min(renderer_->width(), renderer_->height()));
-    glyphSizes_ = { (int)(m.text.caption + 0.5f), (int)(m.text.secondary + 0.5f),
-                    (int)(m.text.body    + 0.5f), (int)(m.text.title     + 0.5f),
-                    (int)(m.text.header  + 0.5f) };
-    std::vector<uint32_t> cps;
-    for (uint32_t cp = 0x0020; cp <= 0x00FF; cp++) cps.push_back(cp);
-
-    // ensureGlyphs() returns how many cells it placed, and it is [[nodiscard]]
-    // for a reason: only a non-zero result (or an atlas the renderer has not
-    // seen yet) means the GPU image has to be rebuilt. Same test the desktop
-    // makes in refreshGlyphs().
-    if (msdfFont_.ensureGlyphs(cps, glyphSizes_) > 0 || !renderer_->msdfReady()) {
-        renderer_->initMsdf(msdfFont_);
-        atlasUploaded_ = true;
-    }
-    fontsReady_ = msdfFont_.valid();
-    LOGI("UI fonts ready: msdf=%d, roles=%zu", (int)fontsReady_, glyphSizes_.size());
+    // Coming back from the system Settings screen is the ONE moment the
+    // storage answer can have changed, and it is the moment
+    // storage_permission.hh's own comment says to re-check on.
+    maybeSeedMusicRoot();
 }
 
 // ── Storage permission, asked at most once ───────────────────────────────────
 //
 // This used to be two unconditional startActivity() calls in onWindowInit(),
-// and that is a LOOP rather than a prompt. Launching the Settings screen covers
-// this activity, which destroys its window; coming back recreates the window
-// and fires APP_CMD_INIT_WINDOW again, which asked again. Granting the
-// permission did not break the cycle, because nothing ever checked -- the
+// and that is a LOOP rather than a prompt: launching the Settings screen
+// covers this activity, which destroys its window; coming back recreates the
+// window and fires APP_CMD_INIT_WINDOW again, which asked again. Granting the
+// permission did not break the cycle, because nothing ever checked — the
 // request did not depend on the answer.
-//
-// storage_permission.hh already spelled out the right shape ("re-check
-// has_all_files_access() on the next APP_CMD_RESUME"); has_all_files_access()
-// simply had no caller. Now it has one, and it gates the request.
 //
 // The once-per-process flag is the second half, and it is not redundant: a
 // listener who DECLINES leaves has_all_files_access() false forever, so the
-// check alone would re-ask on every resume -- a slower loop, but the same one.
-// They can grant it from system Settings whenever they like; the app's job is
-// to ask once and then stay out of the way.
+// check alone would re-ask on every resume — a slower loop, but the same one.
 //
-// show_folder_picker_hint() is deliberately NOT called any more. Its result is
-// never read and cannot be without a Java onActivityResult override (see its
-// own comment), so it contributed nothing but a second modal -- and it is the
-// one that literally asks the listener to select a folder. The scan root comes
-// from the launch intent's "scan_root" extra instead, which is what
-// launch_intent.hh has always said.
+// show_folder_picker_hint() is deliberately NOT called. Its result cannot be
+// read without a Java onActivityResult override (see its own comment), so it
+// contributed nothing but a second modal — and it is the one that literally
+// asks the listener to select a folder.
 void AndroidHost::ensureStoragePermission() {
     if (storageAsked_) return;
     storageAsked_ = true;
@@ -261,57 +217,200 @@ void AndroidHost::ensureStoragePermission() {
     request_all_files_access(state_);
 }
 
-// A window is created more than once; a scan must not be. Retried on resume
-// because the permission may have been granted in between, which is exactly
-// when the first attempt would have come back empty.
-void AndroidHost::maybeStartScan() {
-    if (scanStarted_ || !view_) return;
+// The desktop learns its music folders from the folder picker. A phone has no
+// picker on this path — the root comes from the launch intent's "scan_root"
+// extra — so this hands that answer to PlayerWindow once and then gets out of
+// the way: the incremental scan, the folder watch and the .streamer sidecar
+// are all commitAddFolder()'s ordinary work, identical to the desktop's.
+void AndroidHost::maybeSeedMusicRoot() {
+    if (rootSeeded_ || !owner_) return;
+    ensureStoragePermission();
     if (!has_all_files_access(state_)) {
-        LOGI("storage: no access yet -- deferring the scan");
-        view_->setEmptyMessage("Storage access not granted.\n"
-                               "Settings > Apps > Matrix Player > All files access");
+        LOGI("storage: no access yet -- deferring the music root");
         return;
     }
-    scanStarted_ = true;
-    view_->setEmptyMessage("No tracks found.");
-    view_->startScan(read_scan_root_extra(state_));
+    rootSeeded_ = true;
+    if (owner_->hasMusicRoots()) {
+        LOGI("music roots already in the database; nothing to seed");
+        return;
+    }
+    const std::string root = read_scan_root_extra(state_);
+    LOGI("seeding music root: %s", root.c_str());
+    owner_->commitAddFolder(root);
 }
 
-void AndroidHost::drawFrame() {
-    const int64_t nowNs = std::chrono::steady_clock::now().time_since_epoch().count();
-    const float   dt    = lastFrameNs_ > 0
-                             ? static_cast<float>(nowNs - lastFrameNs_) * 1e-9f
-                             : 0.0f;
-    lastFrameNs_ = nowNs;
+// ── Touch ────────────────────────────────────────────────────────────────────
 
-    std::vector<float> curves;
-    // Insets are handled by AndroidPlayerView itself (see below), not by
-    // Canvas's own inset params — passing zero here lets Canvas cover the
-    // full screen and keeps the inset math in one place.
-    msdfQuads_.clear();
-    Canvas canvas(curves, renderer_->width(), renderer_->height(), &uiFont_,
-                 0.0f, 0.0f, 0.0f, 0.0f);
-    // Atlas text when it is up; the vector face above is the fallback for the
-    // frames before it is, and for any glyph the atlas lacks.
-    if (fontsReady_) canvas.useMsdf(&msdfFont_, &msdfQuads_);
+int32_t AndroidHost::handleInputEvent(android_app* app, AInputEvent* event) {
+    auto* self = reinterpret_cast<AndroidHost*>(app->userData);
+    if (!self->owner_ || AInputEvent_getType(event) != AINPUT_EVENT_TYPE_MOTION) return 0;
 
-    if (view_) {
-        const SafeAreaInsets cutout = query_safe_area_insets(state_);
-        const int navBarH = vce::platform::query_nav_bar_height(state_);
+    const float x = AMotionEvent_getX(event, 0);
+    const float y = AMotionEvent_getY(event, 0);
+    switch (AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK) {
+        case AMOTION_EVENT_ACTION_DOWN:   self->onTouchDown(x, y);        return 1;
+        case AMOTION_EVENT_ACTION_MOVE:   self->onTouchMove(x, y);        return 1;
+        case AMOTION_EVENT_ACTION_UP:     self->onTouchUp(x, y, false);   return 1;
+        case AMOTION_EVENT_ACTION_CANCEL: self->onTouchUp(x, y, true);    return 1;
+        default: return 0;
+    }
+}
 
-        view_->onFrame(dt);
-        view_->draw(canvas, static_cast<float>(renderer_->width()),
-                   static_cast<float>(renderer_->height()),
-                   static_cast<float>(cutout.top),
-                   static_cast<float>(cutout.bottom + navBarH),
-                   static_cast<float>(cutout.left),
-                   static_cast<float>(cutout.right));
+void AndroidHost::onTouchDown(float x, float y) {
+    touchStartX_ = x;
+    touchStartY_ = y;
+    touchLastY_  = y;
+    touchDragging_ = false;
+    touchDown_     = true;
+    // Hover follows the finger so the app can light what is under it. It is
+    // the only hover a touch screen has, and it is honest: the desktop's
+    // hover means "the pointer is here", and here it is.
+    owner_->onMouseMove((int)x, (int)y);
+}
+
+void AndroidHost::onTouchMove(float x, float y) {
+    if (!touchDown_) return;
+    if (!touchDragging_) {
+        const float dx = x - touchStartX_, dy = y - touchStartY_;
+        if (std::sqrt(dx * dx + dy * dy) <= kTouchSlopPx) return;   // still a tap
+        touchDragging_ = true;
+    }
+    // Past the slop the gesture belongs to scrolling, for good. The wheel is
+    // fed the finger's own displacement since the last event, so content
+    // tracks the finger rather than stepping.
+    const int delta = (int)std::lround((y - touchLastY_) * kWheelPerPixel);
+    touchLastY_ = y;
+    if (delta != 0) owner_->onMouseWheel((int)x, (int)y, delta);
+}
+
+void AndroidHost::onTouchUp(float x, float y, bool cancelled) {
+    const bool wasTap = touchDown_ && !touchDragging_ && !cancelled;
+    touchDown_     = false;
+    touchDragging_ = false;
+    if (!wasTap) return;
+
+    // A press is delivered at RELEASE, not at contact. That is what makes a
+    // drag able to change its mind: the finger has to come off in the same
+    // place for anything to be pressed at all.
+    using Clock = std::chrono::steady_clock;
+    const auto now = Clock::now();
+    const bool isDouble =
+        lastTapValid_ &&
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - lastTapTime_).count() < 400 &&
+        std::fabs(x - lastTapX_) < kTouchSlopPx && std::fabs(y - lastTapY_) < kTouchSlopPx;
+
+    lastTapTime_ = now;
+    lastTapX_ = x; lastTapY_ = y;
+    lastTapValid_ = true;
+
+    owner_->onMouseMove((int)x, (int)y);
+    if (isDouble) {
+        owner_->onLButtonDblClk((int)x, (int)y);
+        lastTapValid_ = false;   // don't chain a third tap into another double
+    } else {
+        owner_->onLButtonDown((int)x, (int)y);
+    }
+}
+
+// ── Cross-thread events and the seek timer ───────────────────────────────────
+
+void AndroidHost::postAppEvent(AppEvent id, intptr_t p1, intptr_t p2) {
+    {
+        std::lock_guard<std::mutex> lk(eventsMu_);
+        events_.push_back({id, p1, p2});
+    }
+    // Wakes a pump() blocked in ALooper_pollOnce. The counter's VALUE is never
+    // read — the queue above is the payload; this is only the doorbell.
+    if (eventFd_ >= 0) {
+        uint64_t one = 1;
+        ssize_t ignored = write(eventFd_, &one, sizeof(one));
+        (void)ignored;
+    }
+}
+
+void AndroidHost::drainEvents() {
+    if (eventFd_ >= 0) {
+        uint64_t sink = 0;
+        while (read(eventFd_, &sink, sizeof(sink)) > 0) {}
+    }
+    std::vector<Event> pending;
+    {
+        std::lock_guard<std::mutex> lk(eventsMu_);
+        pending.swap(events_);
+    }
+    for (auto& e : pending) dispatchAppEvent(e);
+}
+
+void AndroidHost::dispatchAppEvent(const Event& e) {
+    if (!owner_) return;
+    switch (e.id) {
+    case AppEvent::TrackChange: owner_->applyTrackMetadata((int)e.p1, (int)e.p2); break;
+    case AppEvent::ScanDone:
+        if (e.p1 == 1) owner_->startBackgroundScan(); else owner_->onScanDone();
+        break;
+    case AppEvent::ArtDecoded:  owner_->onArtDecoded(); break;
+    case AppEvent::RequestPlay: owner_->onPlay(); break;
+    }
+}
+
+void AndroidHost::startTimer(TimerId, int intervalMs) {
+    if (timerFd_ < 0) return;
+    itimerspec spec{};
+    spec.it_value.tv_sec  = intervalMs / 1000;
+    spec.it_value.tv_nsec = (intervalMs % 1000) * 1000000L;
+    spec.it_interval = spec.it_value;
+    timerfd_settime(timerFd_, 0, &spec, nullptr);
+}
+
+void AndroidHost::stopTimer(TimerId) {
+    if (timerFd_ < 0) return;
+    itimerspec spec{};
+    timerfd_settime(timerFd_, 0, &spec, nullptr);
+}
+
+void AndroidHost::drainTimer() {
+    if (timerFd_ < 0 || !owner_) return;
+    uint64_t expirations = 0;
+    if (read(timerFd_, &expirations, sizeof(expirations)) > 0) owner_->onTimer();
+}
+
+// ── The pump ─────────────────────────────────────────────────────────────────
+
+void AndroidHost::pump(bool haveWork) {
+    if (!running_) {
+        running_ = true;
+        // First tick after create(): the app exists now, so this is the
+        // earliest honest moment to ask for storage and hand over the root.
+        maybeSeedMusicRoot();
     }
 
-    // Bake whatever this frame asked for and the atlas did not have yet, then
-    // submit. Same order the desktop uses: a miss baked after the draw would
-    // show as a blank glyph for one frame.
-    if (fontsReady_ && msdfFont_.hasMisses() && msdfFont_.bakeMisses() > 0)
-        renderer_->initMsdf(msdfFont_);
-    renderer_->draw(curves, /*overlay_rotation_deg=*/0, {}, {}, msdfQuads_, {});
+    // Blocking when there is nothing to draw is what keeps a phone's battery
+    // out of this: with no pending frame the process sleeps in the kernel
+    // until a touch, a timer, or a background thread's eventfd wakes it.
+    int events;
+    android_poll_source* source = nullptr;
+    const int ident = ALooper_pollOnce(haveWork ? 0 : -1, nullptr, &events,
+                                       reinterpret_cast<void**>(&source));
+    if (ident >= 0) {
+        if (source) source->process(state_, source);
+        else if (ident == kLooperIdEvents) drainEvents();
+        else if (ident == kLooperIdTimer)  drainTimer();
+    }
+
+    // Both are drained unconditionally as well: several descriptors can be
+    // ready in one wake-up and pollOnce reports only one of them, so relying
+    // on the ident alone loses whichever it did not name.
+    drainEvents();
+    drainTimer();
+}
+
+bool AndroidHost::quitRequested() const {
+    return state_->destroyRequested != 0;
+}
+
+void AndroidHost::showErrorMessage(const std::string& title, const std::string& msg) {
+    // A log line, exactly as on Linux. The app's own on-screen notice
+    // (audioNotice_) is the report a listener actually sees; this is its
+    // companion for whoever is holding a logcat.
+    LOGE("[%s] %s", title.c_str(), msg.c_str());
 }

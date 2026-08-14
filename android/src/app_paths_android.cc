@@ -17,13 +17,20 @@ void setAndroidPaths(std::string assetsDirSentinel, std::string writableDir) {
     }
 }
 
-// Deliberately unused by AndroidPlayerView: the only exeDir()-relative read
-// on desktop is a plain file open (eq_profiles.json — see player_view.cc's
-// only call site), but this slice's font/shader loading goes through vk_canvas's
-// AndroidAssetReader (AAssetManager_open on a path string, not a filesystem
-// directory — see android_platform.cc). Kept wired to whatever
-// setAndroidPaths() was given (currently always "") only so the header's
-// two-function contract needs no #ifdefs at call sites.
+// EMPTY, and that emptiness is load-bearing rather than a gap.
+//
+// PlayerWindow::create() builds its font paths as exeDir() + "fonts/…" and
+// reads them through Host::dataReader(), which on Android is the APK's
+// AAssetManager. An empty exeDir() therefore makes that expression produce
+// exactly the asset name AAssetManager wants — the same string the desktop
+// turns into an absolute filesystem path, resolved by a different reader.
+// That is the whole reason player_view.cc needs no #ifdef to find its
+// typeface. Setting this to anything non-empty would break the font load.
+//
+// eq_profiles.json is the one other exeDir()-relative read, and it is a plain
+// file open (std::ifstream) rather than a reader call, so it simply finds
+// nothing here: the phone has no AutoEQ profile catalogue yet. It fails the
+// way an absent file fails, not the way a bug does.
 const std::string& exeDir() {
     return g_exeDir;
 }

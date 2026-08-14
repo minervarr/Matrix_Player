@@ -4,6 +4,38 @@
 #include <vector>
 #include <memory>
 
+// ── Android: there is no second window ───────────────────────────────────────
+//
+// This is a second TOP-LEVEL window, for putting the artwork on a second
+// monitor while the controls stay on the first. A phone has neither, so the
+// Android build gets a class with the same surface that simply declines.
+//
+// It declines rather than being #ifdef'd out of PlayerWindow because
+// ensureArtWindow() (player_view.cc) already treats a refused create() as
+// permanent — artWinFailed_ — which is exactly the behaviour wanted here. The
+// alternative was scattering #if defined(__ANDROID__) through nine call sites
+// in player_view.cc, which is the thing this whole port exists to avoid: the
+// desktop app's own source must not learn that Android exists.
+#if defined(__ANDROID__)
+
+class Host;
+class RasterFont;
+
+class ArtWindow {
+public:
+    bool create(Host*, const RasterFont* = nullptr) { return false; }
+    void show(const std::string&) {}
+    void updateImage(const std::string&) {}
+    void hide() {}
+    bool isVisible() const { return false; }
+    void drawFrame() {}
+    void markDirty() {}
+    void renderIfDirty() {}
+    bool hasPendingFrames() const { return false; }
+};
+
+#else
+
 #ifdef _WIN32
 #include "win32_platform.hh"
 #else
@@ -118,3 +150,5 @@ private:
     RasterFont msdfFont_;
     std::vector<float> msdfQuads_;
 };
+
+#endif  // !__ANDROID__

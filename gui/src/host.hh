@@ -76,6 +76,23 @@ public:
     virtual SurfaceProvider& surfaceProvider() = 0;
     virtual AssetReader&     assetReader()     = 0;
 
+    // Reads the app's READ-ONLY shipped data — today that is fonts/ and
+    // nothing else — at paths relative to exeDir().
+    //
+    // Separate from assetReader(), which vk_canvas roots at <exe>/assets/ for
+    // its shaders. On both desktops this is a plain filesystem read and the
+    // two could have been one; on Android they genuinely differ in kind,
+    // because the faces are not files at all — they live inside the APK and
+    // come out through AAssetManager. Routing the font opens through here is
+    // what lets PlayerWindow::create() load its typeface with no #ifdef and
+    // no knowledge that an APK exists: exeDir() is "" on Android, so
+    // exeDir() + "fonts/…" is exactly the asset name.
+    //
+    // NOT for the music library. Album art and audio files are ordinary
+    // absolute paths on every platform, and go on reading through
+    // FileByteReader directly.
+    virtual AssetReader&     dataReader()      = 0;
+
     // Opaque per-platform handle so a second top-level window (ArtWindow)
     // can share the platform's connection instead of opening an
     // independent one of its own. Windows: unused (nullptr) — ArtWindow

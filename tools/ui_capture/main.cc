@@ -91,6 +91,10 @@ public:
 
     SurfaceProvider& surfaceProvider() override { return surface_; }
     AssetReader&     assetReader()     override { return assets_; }
+    // fonts/ is a plain directory next to the executable here, so the trivial
+    // filesystem reader is the whole implementation. Android is where this
+    // and assetReader() stop being interchangeable — see host.hh.
+    AssetReader&     dataReader()      override { return dataReader_; }
 
     void showWindow() override {}
 
@@ -119,6 +123,7 @@ private:
     int w_, h_;
     HeadlessSurfaceProvider surface_;
     FileAssetReader         assets_;
+    FileByteReader  dataReader_;
     std::mutex              mu_;
     std::vector<Ev>         queued_;
 };

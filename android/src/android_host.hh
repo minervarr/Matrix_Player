@@ -1,101 +1,136 @@
 #pragma once
 #include <android_native_app_glue.h>
-#include <memory>
 
+#include <chrono>
+#include <memory>
+#include <mutex>
+#include <string>
 #include <vector>
 
 #include "android_platform.hh"  // AndroidSurfaceProvider, AndroidAssetReader
-#include "orientation.hh"       // vce::platform::Orientation
-#include "font.hh"              // vk_canvas: Font (vector fallback)
-#include "raster_font.hh"       // vk_canvas: RasterFont (the glyph atlas)
+#include "host.hh"              // gui/src: the seam PlayerWindow talks to the OS through
 
-class Renderer;
-class AndroidPlayerView;
-
-// NativeActivity event loop + Vulkan lifecycle — structurally the Android
-// sibling of gui/src/os/windows_host.cc / linux_host.cc, built on the same
-// android_main()/ALooper_pollOnce shape framework/vk_canvas/platform/android/
-// app.cc already proves out.
+// The THIRD implementation of gui/src/host.hh's Host, beside WindowsHost and
+// LinuxHost (and the headless one tools/ui_capture builds). Android therefore
+// runs the REAL PlayerWindow — the same bars, grid, album view, guided search
+// and settings panels the desktop draws, out of the same player_view.cc.
 //
-// Deliberately NOT an implementation of gui/src/host.hh's Host: that
-// interface's init() is hard-typed to the concrete desktop PlayerWindow
-// class (a 1000+ line sidebar/grid/EQ/settings-panel god-object with no
-// touch UI use for this app) with no interface seam another owner type could
-// implement — see docs/superpowers/specs/2026-08-08-android-native-port-design.md.
-// AndroidHost dispatches into AndroidPlayerView instead, translating
-// android_native_app_glue's ALooper/AInputEvent model the way
-// LinuxHost::pump()/InputSink translate Wayland's.
-class AndroidHost {
+// This file used to say the opposite, and so did CLAUDE.md: Android had its
+// own small AndroidPlayerView because "a touch phone UI is genuinely different
+// from a sidebar-and-grid desktop one". What that produced was a lookalike
+// that had to be rebuilt feature by feature, and it was dropped once the
+// premise was actually checked — player_view.cc includes no OS header at all,
+// and PlayerWindow::run() is a loop over host_->pump(). The app was already
+// portable; only this class was missing.
+//
+// What Android genuinely cannot do is answered honestly rather than faked:
+// there is no second monitor to snap a window to, no cursor to shape, and no
+// window position a client may set. Those are no-ops here exactly as several
+// of them already are on Wayland.
+//
+// Still missing, and NOT hidden: there is no keyboard, so onCharPortable() is
+// never fed and the guided-search box can be seen but not typed into. Wiring
+// the IME is separate work.
+class AndroidHost : public Host {
 public:
     explicit AndroidHost(android_app* state);
-    ~AndroidHost();
+    ~AndroidHost() override;
 
-    void attach(AndroidPlayerView* view) { view_ = view; }
+    // ── Host ────────────────────────────────────────────────────────────────
+    std::string exeDir() const override;
 
-    // Runs until the activity is destroyed.
-    void run();
+    // Pumps the looper until Android hands us a window, then builds the
+    // surface/asset seams over it. Everything after that — Vulkan, the DB, the
+    // fonts, the layout — is PlayerWindow::create()'s ordinary work, unchanged.
+    bool init(PlayerWindow* owner) override;
+
+    SurfaceProvider& surfaceProvider() override { return *surface_; }
+    AssetReader&     assetReader()     override { return *assets_; }
+    // On Android these two are NOT interchangeable in principle but ARE the
+    // same object: both the shaders and the faces live inside the APK, behind
+    // one AAssetManager. See host.hh for why the distinction exists at all.
+    AssetReader&     dataReader()      override { return *assets_; }
+
+    void showWindow() override {}
+    MonitorInfo primaryMonitor() const override;
+    void adaptToCurrentMonitor() override {}   // one screen, and we do not place ourselves
+    void snapToEdge(int) override {}           // no window position to set
+    void invalidate() override {}              // run()'s dirty flag already covers it
+    void setCursor(CursorShape) override {}    // a finger has no shape to change
+    void setKeepAwake(bool on) override;
+
+    void postAppEvent(AppEvent id, intptr_t p1 = 0, intptr_t p2 = 0) override;
+    void startTimer(TimerId id, int intervalMs) override;
+    void stopTimer(TimerId id) override;
+
+    void pump(bool haveWork) override;
+    bool quitRequested() const override;
+
+    void showErrorMessage(const std::string& title, const std::string& msg) override;
 
 private:
-    static void handleAppCmd(android_app* app, int32_t cmd);
+    struct Event { AppEvent id; intptr_t p1, p2; };
+
+    static void    handleAppCmd(android_app* app, int32_t cmd);
     static int32_t handleInputEvent(android_app* app, AInputEvent* event);
 
     void onWindowInit();
     void onWindowTerm();
     void onGainedFocus();
     void onResume();
-    void onPause();
 
-    void drawFrame();
-    // Loads the UI faces out of the APK's assets and bakes the glyph set the
-    // UI actually draws. Called once the renderer exists, because initMsdf()
-    // needs it. See the definition for why text looked nothing like the
-    // desktop's before this existed.
-    void initFonts();
+    void dispatchAppEvent(const Event& e);
+    void drainEvents();
+    void drainTimer();
+
+    // ── Touch, translated into the pointer events PlayerWindow expects ──────
+    //
+    // A finger is not a mouse, and the difference is not cosmetic: a drag must
+    // scroll and must NOT press whatever was under it when it started. Below
+    // the slop the gesture is a tap and arrives as onMouseMove + a click at
+    // release; past the slop it becomes wheel deltas and the click is
+    // cancelled for good, even if the finger comes back.
+    void onTouchDown(float x, float y);
+    void onTouchMove(float x, float y);
+    void onTouchUp(float x, float y, bool cancelled);
 
     // Asks for "All files access" IF it is not already granted, and at most
-    // once per process. Both halves matter -- see the definition: the call it
+    // once per process. Both halves matter — see the definition: the call it
     // replaces was unconditional and ran on every window init, which is a
     // loop, not a prompt.
     void ensureStoragePermission();
-    // Starts the library scan the first time it can. Kept apart from the
-    // window lifecycle because a window is created more than once and a scan
-    // must not be.
-    void maybeStartScan();
+    // Makes the launch intent's scan root a music root in the DB the first
+    // time it can, then lets PlayerWindow's own background scan do the work.
+    void maybeSeedMusicRoot();
 
-    android_app*       state_ = nullptr;
-    AndroidPlayerView*  view_  = nullptr;
+    android_app*  state_ = nullptr;
+    PlayerWindow* owner_ = nullptr;
 
     std::unique_ptr<AndroidSurfaceProvider> surface_;
     std::unique_ptr<AndroidAssetReader>     assets_;
-    std::unique_ptr<Renderer>               renderer_;
 
-    vce::platform::Orientation orientation_;
+    // False until the first pump(), i.e. until PlayerWindow::create() has
+    // finished and run() has taken over. Before that the app is BUILDING its
+    // renderer and must not be told to rebuild one.
+    bool running_ = false;
 
-    // The SAME type family and the SAME text engine the desktop uses. Android
-    // used to pass font=nullptr to Canvas, so every string fell through to the
-    // engine's built-in stroke font -- legible, but not the app's typeface, and
-    // no amount of sharing the LAYOUT would have made the two look alike.
-    //
-    // RasterFont, NOT MsdfFont: it bakes actual coverage at each size the UI
-    // draws at, rather than one distance field the shader rescales
-    // (raster_font.hh:18). The useMsdf()/initMsdf() names on Canvas and
-    // Renderer are left over from when this WAS MsdfFont and mean "the glyph
-    // atlas" now -- they are the reason it is easy to say MTSDF here and be
-    // wrong. Desktop bakes on the CPU too: its GPU path is opt-in behind
-    // MATRIX_GPU_GLYPHS and was measured slower (player_view.cc:362).
-    Font           uiFont_;
-    RasterFont     msdfFont_;
-    std::vector<float>    msdfQuads_;
-    std::vector<int>      glyphSizes_;
-    bool           fontsReady_ = false;   // faces LOADED (survives a window)
-    bool           atlasUploaded_ = false; // atlas uploaded to THIS renderer
+    // Cross-thread events, exactly LinuxHost's shape: a queue plus an eventfd
+    // registered on the looper, so a background thread finishing a scan or an
+    // art decode wakes a blocked pump().
+    std::mutex         eventsMu_;
+    std::vector<Event> events_;
+    int                eventFd_ = -1;
+    int                timerFd_ = -1;
 
-    // Both guard against APP_CMD_INIT_WINDOW firing more than once, which it
-    // does every time another activity covers this one and the user comes
-    // back. Treating that callback as "the app started" is what produced the
-    // permission loop.
-    bool           storageAsked_ = false;
-    bool           scanStarted_  = false;
+    // Touch state (one finger; this app has no pinch or two-finger gesture).
+    float touchStartX_ = 0.0f, touchStartY_ = 0.0f;
+    float touchLastY_  = 0.0f;
+    bool  touchDragging_ = false;
+    bool  touchDown_     = false;
+    std::chrono::steady_clock::time_point lastTapTime_;
+    float lastTapX_ = 0.0f, lastTapY_ = 0.0f;
+    bool  lastTapValid_ = false;
 
-    int64_t lastFrameNs_ = 0;
+    bool storageAsked_ = false;
+    bool rootSeeded_   = false;
 };

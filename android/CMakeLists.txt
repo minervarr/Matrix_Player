@@ -118,50 +118,67 @@ configure_file(${UI_MIN_TEXT_SIZE_SRC} ${UI_MIN_TEXT_SIZE_DIR}/ui_min_text_size.
 # using the same AMotionEvent_* primitives instead.
 set(VK_CANVAS_ANDROID_PLATFORM ${REPO_ROOT}/framework/vk_canvas/platform/android)
 
-# gui/src: reused verbatim, unmodified — theme.hh/color.hh/layout_rect.hh/
-# ui_metrics.hh+.cc/ui_icons.hh+.cc+ui_icons_draw.cc. Confirmed portable
-# (no Host/PlayerWindow/Win32/Wayland coupling) in the design review; only
-# ui_metrics.hh/ui_icons.hh are actually drawn from by android_player_view.cc
-# today, but all three .cc files are compiled here so the whole set stays a
-# verified-working dependency for the touch-UI screens this slice defers.
+# soxr: the resampler player_view.cc uses for the Reference EQ path. Portable
+# C, add_subdirectory'd exactly as the desktop root CMakeLists.txt does — it is
+# not optional here, because the app being compiled IS the desktop app.
+list(APPEND CMAKE_MODULE_PATH "${REPO_ROOT}/third_party/soxr/cmake/Modules")
+set(BUILD_TESTS       OFF CACHE BOOL "" FORCE)
+set(BUILD_EXAMPLES    OFF CACHE BOOL "" FORCE)
+set(WITH_OPENMP       OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+add_subdirectory(${REPO_ROOT}/third_party/soxr ${CMAKE_BINARY_DIR}/soxr)
+
+# gui/src: the WHOLE app, not a selection of portable pieces. player_view.cc
+# includes no OS header — its only platform coupling is the Host interface
+# (implemented here by src/android_host.cc), AudioOutput, and art_view.hh,
+# which has an Android branch that declines to open a second window.
+#
+# What is deliberately NOT listed:
+#   gui_main.cc            — the desktop entry point; src/main.cc is ours
+#   os/linux_host.cc,
+#   os/windows_host.cc     — the other two Host implementations
+#   os/alsa_output.cc,
+#   os/jack_output.cc,
+#   wasapi_output.cc       — the other platforms' audio backends
+#   art_view.cc            — the second-window implementation; the Android
+#                            branch of its header is inline and has no .cc
+#   app_paths.cc           — src/app_paths_android.cc answers the same two
+#                            functions, with the APK/internalDataPath split
+#   *_test.cc              — desktop, Debug-only, run directly
+#
+# libjpeg-turbo is absent on purpose: its own CMakeLists.txt refuses
+# add_subdirectory (it FATAL_ERRORs unless top-level), and img_decode_kit
+# already falls back to stb_image when turbojpeg-static is undefined. Its one
+# known cost is aspect distortion when the decode box is not square, and grid
+# artwork is square. Revisit if the album view's art shows it.
 set(MATRIX_GUI_SRC ${REPO_ROOT}/gui/src)
 
 add_library(matrix_player_android SHARED
     src/main.cc
     src/android_host.cc
-    src/android_player_view.cc
     src/launch_intent.cc
     src/safe_area.cc
     src/storage_permission.cc
     src/app_paths_android.cc
-    ${VK_CANVAS_ANDROID_PLATFORM}/orientation.cc
     ${VK_CANVAS_ANDROID_PLATFORM}/android_platform.cc
+    ${MATRIX_GUI_SRC}/player_view.cc
+    ${MATRIX_GUI_SRC}/panels/settings_panels.cc
+    ${MATRIX_GUI_SRC}/bar_a.cc
+    ${MATRIX_GUI_SRC}/rail_layout.cc
+    ${MATRIX_GUI_SRC}/ui_orientation.cc
     ${MATRIX_GUI_SRC}/ui_metrics.cc
     ${MATRIX_GUI_SRC}/ui_icons.cc
     ${MATRIX_GUI_SRC}/ui_icons_draw.cc
-    # The frame's two pure modules. ui_orientation.cc decides Horizontal vs
-    # Vertical from the window's own shape -- on a phone that is rotation, and
-    # it arrives as an ordinary resize because the manifest declares
-    # configChanges=orientation and locks no screenOrientation. rail_layout.cc
-    # places everything in bar A along the bar's long axis.
-    #
-    # Neither includes anything at all beyond layout_rect.hh, which is why they
-    # cross without a shim. Compiling them here also puts them through libc++
-    # and the NDK, which is where non-portable code that GCC accepts shows up.
-    ${MATRIX_GUI_SRC}/ui_orientation.cc
-    ${MATRIX_GUI_SRC}/rail_layout.cc
-    # And the bar itself. This is the whole point of the two files above: bar A
-    # is DRAWN and HIT-TESTED here by the same code the desktop runs, from a
-    # struct of plain values, so the phone shows the app's real navigation rail
-    # instead of a lookalike. It compiles under the NDK because it takes a
-    # Canvas and a BarAModel and nothing else -- no Host, no PlayerWindow, no Db.
-    ${MATRIX_GUI_SRC}/bar_a.cc
+    ${MATRIX_GUI_SRC}/os/aaudio_output.cc
     ${NATIVE_APP_GLUE}/android_native_app_glue.c)
+
+target_compile_definitions(matrix_player_android PRIVATE MATRIX_HAVE_AAUDIO)
 
 target_include_directories(matrix_player_android PRIVATE
     ${NATIVE_APP_GLUE}
     ${VK_CANVAS_ANDROID_PLATFORM}
     ${MATRIX_GUI_SRC}
+    ${REPO_ROOT}/third_party
     ${UI_MIN_TEXT_SIZE_DIR})
 
 target_link_libraries(matrix_player_android
@@ -173,6 +190,8 @@ target_link_libraries(matrix_player_android
     # divergent decode path for formats already covered.
     ae_core ae_usb usb1 ae_flac ae_aaudio
     matrix_core
+    sqlite3
+    soxr
     vk_canvas_core)
 
 add_dependencies(matrix_player_android compile_shared_shaders compile_vk_canvas_shaders)

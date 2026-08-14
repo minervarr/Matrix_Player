@@ -108,6 +108,10 @@ public:
 
     SurfaceProvider& surfaceProvider() override { return *vkSurface_; }
     AssetReader&     assetReader()     override { return assets_; }
+    // fonts/ is a plain directory next to the executable here, so the trivial
+    // filesystem reader is the whole implementation. Android is where this
+    // and assetReader() stop being interchangeable — see host.hh.
+    AssetReader&     dataReader()      override { return dataReader_; }
 
     void showWindow() override {
         ShowWindow(hwnd_, SW_SHOW);
@@ -424,6 +428,7 @@ private:
 
     std::unique_ptr<Win32SurfaceProvider> vkSurface_;
     FileAssetReader                       assets_;
+    FileByteReader  dataReader_;
 };
 
 std::unique_ptr<Host> make_host() {

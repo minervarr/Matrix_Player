@@ -10,9 +10,10 @@ audio mixer entirely) and renders its GUI through a first-party Vulkan engine,
 `vk_canvas`. **Windows and Linux are equal peers** — both build a real,
 running GUI from this same source tree. ALSA and JACK2 are Linux's secondary
 output backends (parallel to WASAPI on Windows); USB direct is primary and
-bit-perfect everywhere. `android/` holds a **vertical slice** of the same app
-(one touch track list over the same `core/`), not a third full platform — see
-its own section below.
+bit-perfect everywhere. `android/` is a **third `Host`, not a third app**: the
+phone runs this same `PlayerWindow` — same bars, same grid, same album view,
+same panels — because `player_view.cc` includes no OS header and only ever
+talks to the OS through `host.hh`. See its own section below.
 
 Both engines are consumed as git submodules, each authored by "minervarr" and
 developed independently — read their own `CLAUDE.md` files
@@ -130,7 +131,12 @@ matrix_player/
                                   HWND/HMONITOR/wl_* type directly — everything real-OS goes
                                   through host_ (a Host*, see host.hh)
       host.hh                  — the Host interface: window creation, message pump, monitor
-                                  info, timers, cross-thread events. Two implementations:
+                                  info, timers, cross-thread events, and dataReader()
+                                  (fonts/, which is a directory on desktop and an APK
+                                  slot on Android — see the Android section). THREE
+                                  implementations, four counting the headless one
+                                  tools/ui_capture builds; this seam is the only thing
+                                  that differs between platforms:
       os/windows_host.cc        — real Win32 window/message pump (WM_* dispatch, DPI,
                                   minidump crash handler, WinMain bootstrap)
       os/linux_host.cc          — real Wayland backend (vk_canvas's WaylandDisplay/
@@ -141,6 +147,11 @@ matrix_player/
                                   see MATRIX_HAVE_ALSA)
       os/jack_output.cc/.hh     — Linux secondary output: thin AudioOutput adapter over
                                   audio_engine's JackSink (MATRIX_HAVE_JACK)
+      os/aaudio_output.cc/.hh   — Android's output: thin AudioOutput adapter over
+                                  audio_engine's AAudioSink (MATRIX_HAVE_AAUDIO). No
+                                  device list (the system owns the route) and always
+                                  16-bit, so strictBitperfect on a deeper source is
+                                  REFUSED rather than silently dithered
       wasapi_output.cc/.hh      — Windows secondary output (unchanged, Windows-only)
       panels/settings_panels.hh/.cc — shared row-list/button/panel-header widgets used by
                                   all four settings panels (see "Settings panels" below)
@@ -197,10 +208,12 @@ matrix_player/
                                   including that the two orientations ARE that rotation
                                   of each other, rect by rect
       bar_a.hh/.cc              — bar A's DRAWING and HIT-TESTING, from plain values.
-                                  SHARED WITH ANDROID: android/src/android_player_view.cc
-                                  fills the same BarAModel and gets the same rail, so the
-                                  phone shows the app's real navigation bar rather than a
-                                  lookalike. It takes a Canvas and a struct and nothing
+                                  Extracted when Android still had a UI of its own and
+                                  needed the real rail; that caller is gone (the phone
+                                  runs PlayerWindow now), but the split EARNED ITS KEEP
+                                  and stays: it is the one part of the frame proven to
+                                  draw from plain data, which is what the framework will
+                                  want. It takes a Canvas and a struct and nothing
                                   else. The rule is checkable on its INCLUDES (the prose mentions
                                   player_view.cc on purpose, so a grep over the whole
                                   file would only ever match itself) and must stay empty:
@@ -252,11 +265,14 @@ matrix_player/
                                   fallback faces (CJK/Hangul). Greek/Cyrillic come from NewCM
                                   itself, so base and fallback text are one design
     icons/matrix-icons.otf      — the UI icon glyphs, generated (see tools/icon_font/)
-  android/                      — the Android VERTICAL SLICE (see its own section below).
-                                  Gradle + NDK, its own CMakeLists.txt reaching UP into
-                                  core/ and framework/; src/ holds AndroidHost +
-                                  AndroidPlayerView, which is deliberately NOT a port of
-                                  PlayerWindow
+  android/                      — the third HOST (see its own section below). Gradle +
+                                  NDK, its own CMakeLists.txt reaching UP into core/,
+                                  gui/ and framework/; src/ holds AndroidHost (a real
+                                  implementation of gui/src/host.hh) plus the JNI
+                                  substrate it needs — permissions, safe area, launch
+                                  intent, app paths. NO UI code: main.cc constructs the
+                                  desktop PlayerWindow and runs it. AndroidPlayerView, the
+                                  flat-track-list lookalike this used to be, is deleted
   packaging/
     arch/                        — PKGBUILD + .desktop + icon (Arch package)
     windows/matrix-player.iss    — Inno Setup installer script (built by
@@ -273,7 +289,12 @@ matrix_player/
                                   code. Read the matching one before reopening a decision:
                                   the release-type/quality colors, the two UI typography
                                   passes, the raster glyph cache, the Android port, the
-                                  audio startup notice, fixture-gen, the Windows installer
+                                  audio startup notice, fixture-gen, the Windows installer.
+                                  2026-08-08-android-native-port-design.md is SUPERSEDED
+                                  IN PART by 2026-08-14-android-runs-the-real-app.md and
+                                  says so at the top — it is kept unedited because a spec
+                                  with its history rewritten can no longer explain how the
+                                  project got here
   tools/
     ab_test.cpp                  — Windows-only A/B EQ listening-test tool (matrix_ab_test),
                                   opt-in via -DMATRIX_BUILD_AB_TEST=ON — not built by default
@@ -1020,10 +1041,10 @@ whenever the look changes, not left to drift.
 | Decision | Choice | Why |
 |---|---|---|
 | GUI | vk_canvas (Vulkan) | Custom-rendered, no OS control chrome anywhere — "squeeze the most of every platform," not generic dialogs bolted onto custom UI |
-| Platforms | Windows + Linux, equal peers (+ an Android vertical slice in `android/`) | Both build and run the real GUI from this tree; no platform is "the" project. Android runs a smaller touch UI over the same `core/` — see its section above |
+| Platforms | Windows, Linux and Android run the SAME `PlayerWindow` | One UI, three `Host` implementations. No platform is "the" project, and none has its own copy of the app. Android's remaining gaps are the keyboard and touch ergonomics, not the interface — see its section above |
 | Decoding | `audio_engine`'s own backends: libFLAC, libmpg123, DFF/DSF | First-party and already written for Android — one implementation decodes identically on every platform. Chosen by magic bytes, never by extension. Not FFmpeg |
 | WAV | vendored dr_wav (single-header) | The one format the engine has no decoder for |
-| DB | SQLite (embedded) | Single file, same model as the Android sibling player |
+| DB | SQLite (embedded) | Single file; the same `Db` on all three platforms, from the same `core/` |
 | USB driver | libusb/libusbK | Best isochronous support cross-platform; libusbK (Zadig) only needed on Windows |
 | Audio stack | Bypassed entirely for the primary path | No WASAPI/PulseAudio mixer — raw USB isochronous to DAC |
 | Linux secondary outputs | ALSA + JACK2 (never pipewire-jack) | Mirrors WASAPI's role: a fallback when no DAC is plugged in, or for testing without hardware |
@@ -1034,94 +1055,128 @@ whenever the look changes, not left to drift.
 
 ---
 
-## Android (`android/`) — a vertical slice, in this tree
+## Android (`android/`) — the same app, a third `Host`
 
 There is a real Android target **in this repository** (Gradle + NDK,
-`android/CMakeLists.txt` reaching up into `core/` and `framework/`; build it
-with `android/gradlew`). Read
-`docs/superpowers/specs/2026-08-08-android-native-port-design.md` before
-touching it.
+`android/CMakeLists.txt` reaching up into `core/`, `gui/` and `framework/`;
+build it with `android/gradlew`).
 
-It is a **vertical slice, not a third peer platform**: scan a folder, draw a
-flat touch-scrollable track list, tap to play through `ae::AAudioSink`.
-Deliberately out of scope for now — sidebar, grid, album view, EQ, settings
-panels, the gapless coordinator, `Db`-backed persistence and the listening
-log. So the header of this file still holds: Windows and Linux are the two
-platforms that build the *whole* app.
+**It runs the REAL app.** `android/src/main.cc` constructs `PlayerWindow`,
+hands it an `AndroidHost`, and calls `run()` — the same two lines
+`gui/src/gui_main.cc` runs on the desktop. Bar A, bar B, the album grid, the
+album view, guided search and the four settings panels are drawn on the phone
+by `gui/src/player_view.cc` itself. There is no Android build of the UI and no
+second implementation of anything on screen.
 
-Two boundaries here are the point of the design, and re-crossing them is how
-this turns into a mess:
+### Why this is possible, and why the old design was wrong
 
-1. **`AndroidPlayerView` is NOT a port of `PlayerWindow`,** and
-   `AndroidHost` is NOT an implementation of `Host`. `Host::init()` is
-   hard-typed to the concrete `PlayerWindow`, with no seam another owner could
-   implement; and a touch, phone-sized UI is genuinely different from a
-   sidebar-and-grid desktop one. They are structural siblings that share
-   *primitives*, not code: the same `Canvas`, the same `theme.hh` and
-   `ui_metrics.hh`, unmodified — plus, since the orientation work,
-   `ui_orientation.cc` and `rail_layout.cc`, which are pure enough to cross
-   with no shim, **and `bar_a.cc`, which is the drawing itself**. Bar A now
-   crosses whole: `AndroidPlayerView::recalcLayout()` fills a `BarAModel` and
-   calls the same `drawBarA()`/`barAHitTest()` the desktop calls. That was done
-   by lifting the two methods out of `PlayerWindow` behind a plain-data view
-   model — NOT by widening `Host`, which is the boundary this rule protects.
-   **Bar B has not crossed**: the transport still lives in `player_view.cc`,
-   so the phone draws bar A over the flat track list and no transport bar.
-   Closing that gap is the same move again (`bar_b.hh/.cc` over a `BarBModel`),
-   and it is the one piece of the frame still owned by one platform.
-2. **What it reuses, it reuses UNCHANGED** — `matrix_core` (`scanLibrary`,
-   `Decoder`, and `facets` when guided search reaches the phone) and
-   `vk_canvas_core`, both added by `add_subdirectory` straight from this tree.
-   That is exactly why the purity rules above (`core/`'s zero OS headers,
-   `facets.cpp`/`variants.cpp` linking nothing) are worth keeping: they are
-   what makes one `add_subdirectory` enough. Under the NDK toolchain
-   `PLATFORM_ID` is `Android`, so `FolderWatcher` already falls through to the
-   inotify backend — no new platform split was needed.
+Until 2026-08-14 this section said Android was a *vertical slice*, that
+`AndroidHost` must **not** implement `Host`, and that "a touch, phone-sized UI
+is genuinely different from a sidebar-and-grid desktop one". That produced
+`AndroidPlayerView` — a flat track list that had to be rebuilt feature by
+feature to catch up with an app that already existed.
 
-`android/CMakeLists.txt` defines `sqlite3` itself and compiles the shader set
-from the **desktop** root list into `app/src/main/assets/shaders/` (vk_canvas's
-own Android demo list omits MSDF, and this app draws text) — both documented in
-place, and neither is a fork.
+The premise did not survive being checked:
 
-### Building it, and four things that were wrong until 2026-08-13
+- **`player_view.cc` includes no OS header at all.** Its entire platform
+  coupling is `Host` (a pure virtual interface), `AudioOutput` (another), and
+  `art_view.hh`.
+- **`PlayerWindow::run()` is a loop over `host_->pump()`.** Nothing more.
+- Android already linked `matrix_core`, so `Db`, sqlite, the scanner and the
+  guided search were all present and unused.
+
+So `PlayerWindow` was already portable in fact. What was missing was the third
+implementation of the seam — about 350 lines — not four thousand lines of
+extracted drawing. `AndroidPlayerView` was deleted.
+
+### The four things this rests on
+
+1. **`AndroidHost : public Host`** (`android/src/android_host.hh/.cc`). The
+   twenty methods, modelled directly on `LinuxHost`: bionic has `timerfd` and
+   `eventfd`, so the seek timer and `postAppEvent()` are the same calls, just
+   registered with `ALooper_addFd()` instead of a hand-rolled `poll()`. What a
+   phone genuinely lacks is answered honestly and not faked — `snapToEdge`,
+   `adaptToCurrentMonitor`, `setCursor`, `showWindow` are declared no-ops,
+   exactly as several already are on Wayland.
+2. **The surface can die and come back, and `PlayerWindow` knows it.**
+   `onSurfaceLost()` / `onSurfaceRecreated()` (`player_view.cc`, right after
+   `shutdown()`) are the GPU-only halves of `shutdown()` and `create()`.
+   `APP_CMD_TERM_WINDOW` fires every time the listener leaves the app; the
+   Renderer, the swapchain, every art texture and the glyph atlas go with it,
+   while the database, the library and playback carry on untouched. **Neither
+   desktop host ever calls either method** — they are dead code on Windows and
+   Linux by construction. The split they enforce is CPU-side state survives,
+   GPU-side state does not; getting it wrong is invisible until the second
+   visit, when every string on screen is gone.
+3. **`Host::dataReader()`.** Fonts are files next to the executable on the
+   desktop and entries inside the APK on Android. Routing the face opens
+   through the host is what lets `create()` load the typeface with no `#ifdef`:
+   `exeDir()` is `""` on Android, so `exeDir() + "fonts/…"` IS the asset name.
+   Deliberately separate from `assetReader()` (rooted at `<exe>/assets/` for
+   shaders), and **not** for the music library — album art and audio files are
+   ordinary absolute paths everywhere and still go through `FileByteReader`.
+4. **Touch is translated, not pretended.** `AndroidHost`'s slop is **24 px**:
+   under it the gesture is a tap and the press is delivered at RELEASE (so a
+   finger that slides off cancels, the way a button works everywhere); past it
+   the gesture becomes wheel deltas for good and the press never happens.
+   Hover follows the finger, which is the only honest hover a touch screen has.
+
+`ArtWindow` gets a third branch in `art_view.hh` that declines: it is a second
+top-level window for a second monitor, and a phone has neither. It declines
+rather than being `#ifdef`'d out because `ensureArtWindow()` already treats a
+refused `create()` as permanent — which keeps nine call sites in
+`player_view.cc` free of any knowledge that Android exists.
+
+`AAudioOutput` (`gui/src/os/aaudio_output.hh/.cc`) is the phone's secondary
+backend, in ALSA's and WASAPI's role, over `ae::AAudioSink`. Two things differ
+from the ALSA adapter and both are AAudio's doing: there is **no device list**
+(the system owns the route and moves it when headphones are plugged in), and
+the stream is **always 16-bit**, so `strictBitperfect` on a deeper source is
+refused outright and `deviceMaxBits` is stated as 16 — which is what makes the
+signal-chain readout say "truncated" instead of claiming bit-perfect.
+
+### What is still missing on the phone, and is not hidden
+
+- **No keyboard.** `onCharPortable()` is never fed, so the guided-search box can
+  be seen and not typed into. The IME is separate work.
+- **It will look identical and touch worse.** Hover exists, and the rail's
+  letters are sized for a mouse. That is a design pass, not a seam problem.
+- **libjpeg-turbo is not built for the NDK** (its CMake refuses
+  `add_subdirectory`), so JPEG art decodes through `img_decode_kit`'s
+  `stb_image` fallback. Its one known cost is aspect distortion when the decode
+  box is not square; grid artwork is square.
+
+### Building it
 
 ```bash
 cd android && VULKAN_SDK=/opt/shader-slang sh gradlew assembleDebug --no-daemon
-# SUCCESSFUL is not enough — check the APK actually carries its assets:
+# SUCCESSFUL is not enough — check the APK carries its assets, and the app:
 unzip -l app/build/outputs/apk/debug/app-arm64-v8a-debug.apk | grep -c "assets/fonts/"   # 69
+nm -DC app/build/intermediates/cxx/*/*/obj/arm64-v8a/libmatrix_player_android.so \
+  | grep -c 'PlayerWindow::'                                                             # 143
 ```
 
 `gradlew` has no execute bit in the repo, hence `sh gradlew`.
 
-**This target had never built.** All four causes were silent in different ways:
+`android/CMakeLists.txt` defines `sqlite3` itself, `add_subdirectory`s soxr,
+and compiles the shader set from the **desktop** root list into
+`app/src/main/assets/shaders/` (vk_canvas's own Android demo list omits MSDF,
+and this app draws text). It compiles all of `gui/src` except the other
+platforms' hosts and audio backends, `gui_main.cc`, `art_view.cc`,
+`app_paths.cc` and the tests — the exclusion list is written out in place.
 
-1. **`ae_aaudio` did not exist.** `android/CMakeLists.txt` linked it and no
-   CMake in either repo defined it — `git log -S ae_aaudio` over
-   `framework/audio_engine/CMakeLists.txt` returns *no commit at all*. The
-   sources were committed; the build rule never was, because audio_engine's own
-   `platform/android/` Gradle project compiles them into one library for its
-   own app and exports nothing. Fixed in the submodule, beside `ae_alsa`/
-   `ae_jack`. **Sink only** — `aaudio_source.cpp` is capture, and
-   `backends/mediacodec/` stays unbuilt on purpose: this engine decodes FLAC
-   and MP3 with its own vendored libraries everywhere, because some phones ship
-   no FLAC decoder and a per-device decode path would make "bit-perfect
-   everywhere" depend on the handset.
-2. **`compileSdkVersion` named a platform that is not installed**, and the SDK
-   is root-owned, so Gradle's attempt to install it failed with *"The SDK
-   directory is not writable"*. Now 36, and `targetSdkVersion` is 36 too:
-   Android 16 stops honouring orientation and resizability restrictions on
-   large screens, which is what `ui_orientation.hh` already assumes.
-3. **`ui_min_text_size.gen.h` was looked for only under `build/windows/`**, so
-   an Android build on a Linux-only machine failed telling the developer to run
-   a desktop build they had already run. It now searches all four desktop build
-   trees; the file is identical in each.
-4. **No typeface was wired at all.** `AndroidHost` passed `font=nullptr` to
-   `Canvas`, so every string fell through to the engine's built-in stroke font.
-   Text appeared, which is exactly why nobody noticed. `AndroidHost::initFonts()`
-   is now the desktop path from `PlayerWindow::create()` with one substitution —
-   an `AndroidAssetReader` where the desktop reads files, because the faces live
-   inside the APK. Paths come from `gui/src/ui_fonts.hh`, so the two platforms
-   cannot drift onto different faces.
+**Storage, and the loop that is not there any more.** `APP_CMD_INIT_WINDOW` is
+NOT "the app started" — it fires again every time another activity covers this
+one and the listener returns. Firing `request_all_files_access()` there was an
+infinite loop, and granting the permission did not break it because nothing
+checked the answer. `ensureStoragePermission()` now asks at most once per
+process AND only when `has_all_files_access()` says no; both halves are needed,
+since a listener who declines would otherwise be re-asked on every resume.
+`show_folder_picker_hint()` has **no caller on purpose** (its result cannot be
+read without a Java `onActivityResult` override — see its own comment). The
+scan root comes from the launch intent's `scan_root` extra, handed once to
+`PlayerWindow::commitAddFolder()`, after which the ordinary incremental scan,
+folder watch and `.streamer` sidecar are the desktop's own code.
 
 **It is a `RasterFont`, not MTSDF, on BOTH platforms.** `Canvas::useMsdf()`,
 `Renderer::initMsdf()` and the `.msdf.cache` filename all keep the name from
@@ -1130,8 +1185,25 @@ when it was `MsdfFont`; the class bakes per-size coverage instead
 baker is opt-in behind `MATRIX_GPU_GLYPHS` and was *measured slower*
 (`player_view.cc:362`).
 
+### Two build facts that bit before, and still hold
+
+1. **`ae_aaudio` had no CMake rule anywhere** — the sources were committed, the
+   build rule never was. Fixed in the audio_engine submodule beside `ae_alsa`/
+   `ae_jack`. **Sink only**: `aaudio_source.cpp` is capture, and
+   `backends/mediacodec/` stays unbuilt on purpose, because this engine decodes
+   FLAC and MP3 with its own vendored libraries everywhere — some phones ship
+   no FLAC decoder, and a per-device decode path would make "bit-perfect
+   everywhere" depend on the handset.
+2. **`ui_min_text_size.gen.h` is COPIED from a desktop build tree**
+   (`android/CMakeLists.txt`), because it cannot be regenerated under a
+   cross-compiler. Any of the four desktop trees will do, and a desktop build
+   must have happened first.
+
 **Still not verified: none of this has run on a device.** It compiles, links,
-and packages its assets. Nothing more is claimed.
+packages its assets, and carries the real `PlayerWindow`. Nothing more is
+claimed. The thing to check first on hardware is leaving the app and coming
+back: that is the path §2 above exists for, and the one with the least evidence
+behind it.
 
 ---
 

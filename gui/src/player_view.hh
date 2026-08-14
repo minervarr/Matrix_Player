@@ -29,6 +29,9 @@
 #ifdef MATRIX_HAVE_JACK
 #include "os/jack_output.hh"
 #endif
+#ifdef MATRIX_HAVE_AAUDIO
+#include "os/aaudio_output.hh"
+#endif
 #endif
 #include "core/eq_profiles.h"
 #include "core/eq_manager.h"
@@ -69,7 +72,9 @@ static constexpr float kMinWindowContentH = kUiReferenceHeight;
 // Usb is primary/bit-perfect on both platforms; Wasapi is Windows' secondary
 // backend, Alsa/Jack are Linux's — mirroring WASAPI's role there (see
 // CLAUDE.md's design-decisions table).
-enum class AudioBackend { Usb, Wasapi, Alsa, Jack };
+// Append-only: this value is persisted indirectly (db "audio_backend" stores a
+// name, not an ordinal), but every switch below is written against the set.
+enum class AudioBackend { Usb, Wasapi, Alsa, Jack, AAudio };
 
 class PlayerWindow {
 public:
@@ -111,6 +116,26 @@ public:
     void adaptToCurrentMonitor();             // WM_DISPLAYCHANGE/WM_WINDOWPOSCHANGED re-fit
     void shutdown();               // teardown before the window/renderer die (was WM_DESTROY)
 
+    // ── The drawing surface can come and go ─────────────────────────────────
+    //
+    // On a desktop the window is born once and dies once, so create() builds
+    // the Renderer once and shutdown() tears it down. On Android the surface
+    // dies EVERY time the listener leaves the app and is born again on return
+    // (APP_CMD_TERM_WINDOW / APP_CMD_INIT_WINDOW) — and with it go the
+    // swapchain, every album-art texture, and the glyph atlas that lives in
+    // GPU memory. Neither of these is called by either desktop host.
+    //
+    // The split they enforce is the one that matters: what lives in CPU
+    // memory (the loaded faces, the RasterFont's outlines and its placed
+    // cells) SURVIVES; what lives on the GPU does not. Getting that wrong is
+    // invisible until it isn't — a stale "already uploaded" flag means every
+    // string on screen vanishes on the second visit, with no error anywhere.
+    void onSurfaceLost();
+    // Rebuilds everything the above released, against the host's NEW surface.
+    // Returns false if the Renderer could not be created, in which case the
+    // caller must not draw.
+    bool onSurfaceRecreated();
+
     // Mouse — dispatched from Host's input translation.
     void onMouseMove(int x, int y);
     void onMouseLeave();
@@ -126,6 +151,16 @@ public:
     void onNavForward();
 
     void onTimer();  // periodic playback-position tick, see host_->startTimer()
+
+    // Adds a music root and starts a scan of it — what the folder picker does
+    // when a folder is chosen. Public because a Host may already KNOW the
+    // folder without anyone picking one: Android is launched with a
+    // "scan_root" extra on its intent, and there is no file browser on the
+    // path to that answer. Idempotent at the DB level (addMusicRoot ignores a
+    // duplicate), but the caller should still check hasMusicRoots() rather
+    // than re-adding on every launch.
+    void commitAddFolder(const std::string& root);
+    bool hasMusicRoots();
 
     // Cross-thread completions, delivered via host_->postAppEvent() from a
     // background thread and dispatched back here on the UI thread by Host.
@@ -262,7 +297,6 @@ private:
 
     void drawFolderPicker(Canvas& canvas, const LayoutRect& area);
     void fpLoadDir(const std::string& dir);
-    void commitAddFolder(const std::string& root);
 
     // Layout
     void recalcLayout();

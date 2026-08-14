@@ -1,5 +1,18 @@
 # Android native port
 
+> **SUPERSEDED IN PART, 2026-08-14.** This document's central design decision —
+> that Android needs its own UI class (`AndroidPlayerView`) and that
+> `AndroidHost` must NOT implement `Host` — was reversed. `AndroidPlayerView`
+> is deleted; the phone runs the desktop `PlayerWindow` through a third real
+> `Host`. See `2026-08-14-android-runs-the-real-app.md` for what was actually
+> measured and why the premise did not survive it.
+>
+> The document is kept as written, not edited to match. Everything else in it
+> still holds and is still the reference: the zero-Java rule, the JNI pattern,
+> the AAudio/decoder decisions, `app_paths` for Android, the safe-area and
+> immersive handling, and the build-system findings. A spec with its history
+> rewritten stops being able to explain how the project got here.
+
 ## Context
 
 Matrix Player is Windows + Linux today, both real GUI builds from one source
