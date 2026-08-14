@@ -318,7 +318,13 @@ matrix_player/
                                   REAL PlayerWindow (see create()'s injectedHost) and
                                   reaches a named UI state by SYNTHESIZING the clicks on
                                   the rects recalcLayout() itself computed, so captures
-                                  follow the layout instead of drifting behind it
+                                  follow the layout instead of drifting behind it.
+                                  DETERMINISTIC GIVEN THE SAME BUILD *AND THE SAME
+                                  HARDWARE*: 32-audio-settings enumerates real ALSA
+                                  and USB devices, so plugging a DAC in between two
+                                  runs changes that PNG and nothing else. A lone diff
+                                  on that state is the machine talking, not the code —
+                                  check it before hunting a regression
     icon_preview/                — Debug+Linux-only standalone window drawing ONLY the
                                   icons, at a size ladder + the app's real sizes. Run
                                   ./build/linux_debug/gui/icon_preview to judge icon
@@ -948,14 +954,33 @@ public:
     virtual bool init(PlayerWindow* owner) = 0;
     virtual SurfaceProvider& surfaceProvider() = 0;
     virtual AssetReader&     assetReader()     = 0;
+    virtual AssetReader&     dataReader()      = 0;   // fonts/ — a dir, or an APK slot
     virtual MonitorInfo primaryMonitor() const = 0;
+    virtual SafeInsets  safeInsets() const { return {}; }  // the cutout; zero on desktop
     virtual void pump(bool haveWork) = 0;
     virtual void postAppEvent(AppEvent id, intptr_t p1, intptr_t p2 = 0) = 0;
     virtual void startTimer(TimerId, int intervalMs) = 0;
     // ... window/mode/hotkey/error-dialog methods, see gui/src/host.hh
 };
-std::unique_ptr<Host> make_host();  // os/windows_host.cc or os/linux_host.cc
+std::unique_ptr<Host> make_host();  // os/windows_host.cc, linux_host.cc, or —
+                                    // on Android — nothing: the host is INJECTED
+                                    // by android_main(), and make_host() returns
+                                    // nullptr, which create() refuses cleanly.
 ```
+
+**Two rules this seam enforces, both learned by crashing on a phone:**
+
+1. **Nothing decided before `pump()` may be trusted after it.** `pump()` is
+   where a platform delivers "your surface is gone" (`APP_CMD_TERM_WINDOW` →
+   `onSurfaceLost` → `renderer_.reset()`). `run()` caches nothing across that
+   call; it re-tests `renderer_` after it. A `bool canDraw` computed before the
+   pump and used after it segfaulted on the first launch that hid the system
+   bars, because hiding them recreates the window.
+2. **`safeInsets()` is the CUTOUT and never a system bar.** A bar is software
+   and gets hidden (`enable_immersive`); insetting for one that is not on
+   screen leaves a permanent empty strip. A cutout is glass. `recalcLayout()`
+   applies it in exactly one place — the three frame rects — and everything
+   else derives from those.
 
 `PlayerWindow` calls `host_->` for anything OS-real; `Host::pump()` dispatches
 back into `PlayerWindow`'s public `on*()` methods (`onMouseMove`, `onTimer`,
@@ -1183,6 +1208,21 @@ nm -DC app/build/intermediates/cxx/*/*/obj/arm64-v8a/libmatrix_player_android.so
 ```
 
 `gradlew` has no execute bit in the repo, hence `sh gradlew`.
+
+**Debugging it, and why the log is worth more than it looks.** `android_main()`
+logs five phases, because when that function RETURNS the activity finishes —
+so every startup failure looks identical from outside (the app opens and
+closes) and only the log tells "create() refused" from "something threw" from
+"it ran and quit". And `redirect_stdio_to_logcat()` (`android_host.cc`) dup2s
+stdout/stderr onto a pipe whose reader thread forwards whole lines to logcat
+under the tag `matrix_player` — without it **every `printf` in the app goes to
+/dev/null on Android**, which silences `[Audio]`, `[Scan]`, `[Decoder]` and the
+USB driver's own errors, i.e. the entire diagnostic channel of a 7000-line
+program, on the one platform with no terminal.
+
+```bash
+adb logcat MatrixMain:V AndroidHost:V matrix_player:V DEBUG:V libc:E '*:S'
+```
 
 `android/CMakeLists.txt` defines `sqlite3` itself, `add_subdirectory`s soxr,
 and compiles the shader set from the **desktop** root list into

@@ -2,7 +2,9 @@
 
 **Date:** 2026-08-14
 **Supersedes (in part):** `2026-08-08-android-native-port-design.md`
-**Status:** implemented; **not yet run on a device**
+**Status:** implemented and **running on hardware** (moto g06, Android 15) —
+see "Hardware bring-up" below for the six defects that only a real device
+could have shown, five of which were older than this work
 
 ## Context
 
@@ -158,10 +160,64 @@ Android:
   including `create`, `run`, `drawFrame`, `onSurfaceLost`, `onSurfaceRecreated`.
   This is what distinguishes "the app crossed" from "it compiled".
 
-**Not verified: none of this has run on a device.** No phone is attached to the
-development machine. The first thing to check on hardware is leaving the app and
-coming back, because that is the path the surface-loss work exists for and the
-one with the least evidence behind it.
+## Hardware bring-up (same day, moto g06 / Android 15, 720x1640)
+
+The app runs: the album grid with real artwork, the album view, both bars, the
+New Computer Modern face with its CJK fallback, playback through AAudio, and
+both orientations. **Leaving the app and returning keeps the process and
+redraws everything** — the path §1 exists for, and the one that had the least
+evidence behind it.
+
+Six defects surfaced, and the shape of the list is the finding: **only one was
+introduced by this work.** The rest had been in the tree for months and could
+not be seen on a desktop.
+
+1. **SIGSEGV before the first frame** (mine). Android delivers `APP_CMD_RESUME`
+   while `AndroidHost::init()` is still pumping for its first window, and
+   `onResume()` asked `PlayerWindow` about its music roots — but `create()`
+   opens the database *after* `init()` returns. Null `sqlite3*`. The guard
+   existed (`appReady_`) and was only being applied to the Renderer; it now
+   lives inside the function that has the requirement, not in its callers.
+2. **Immersive mode was a silent no-op.** `fullscreen.hh` used
+   `setSystemUiVisibility`, deprecated in API 30 and **ignored from Android 15**
+   for apps targeting 35+. It ran, raised nothing, and did nothing. Fixed in the
+   vk_canvas submodule with `WindowInsetsController`, legacy kept as fallback.
+3. **Hiding the bars created the cutout problem.** While the status bar is
+   shown, Android keeps the window clear of the camera hole *because the bar
+   covers it*. Hide it and the window goes edge to edge — the full 720x1640
+   panel — and bar A lands under a 70 px notch. Hence `Host::safeInsets()`,
+   which reports the cutout and deliberately **not** the navigation bar: a bar
+   is software and gets hidden, a cutout is glass and can only be avoided.
+4. **`preTransform = caps.currentTransform`** (renderer.cc). That is a
+   *promise* that the app has already rotated its own rendering, not a request
+   for rotation. It never was true. On a desktop `currentTransform` is always
+   IDENTITY so the line could not fail; on the phone it becomes `ROTATE_90` and
+   the whole UI came out upside down and squashed. Now asks for IDENTITY when
+   advertised and lets the compositor rotate.
+5. **A stale `canDraw` across `pump()`** (mine, introduced hours earlier).
+   `run()` decided "there is a renderer" *before* `host_->pump()` and used the
+   answer *after* it — and pump() is exactly where `APP_CMD_TERM_WINDOW`
+   destroys the Renderer. Surfaced only because fixing (2) made the window get
+   recreated during startup. **Rule: nothing decided before pump() may be
+   trusted after it.**
+6. **The Audio Settings radio showed a backend that was not playing.** It
+   re-derived its selection from the saved `audio_backend` string; on a fresh
+   install nothing is saved, no case matched, and the loop fell through to
+   index 0 — always USB Direct. Meanwhile `create()` defaults to AAudio on
+   Android, ALSA on Linux, WASAPI on Windows. **A first-run Linux build has the
+   same lie**; the phone only made it audible, because there the speakers
+   contradict the panel. Now read straight off `audioBackend_`.
+
+Two more of the same family, found by reading rather than by crashing: the
+audio-notice strip was laid out as a tall narrow column in the horizontal
+orientation while its drawing code assumed a wide short one (giant warning
+triangle, text pushed off the strip); and **no build on this machine had an MP3
+decoder at all**, because `python3 initialize_files.py` had never been run and
+its two `message(WARNING)` lines scrolled past in the configure output.
+
+The lesson worth carrying: a desktop-only project accumulates code whose
+failure modes are unreachable on a desktop. Five of these six were latent, and
+none of them needed the port to be wrong to exist.
 
 ## Known gaps, stated rather than hidden
 
