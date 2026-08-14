@@ -23,6 +23,12 @@ class RasterFont;
 
 class ArtWindow {
 public:
+    // A phone has no second monitor and no second top-level window, so the
+    // caller ASKS instead of testing the platform. player_view.cc includes no
+    // OS header and branches on one only for Win32 mouse tracking; keeping it
+    // that way is what lets one file be the app on three platforms, so the
+    // conditional stays in the file that already has to have one.
+    static bool isSupported() { return false; }
     bool create(Host*, const RasterFont* = nullptr) { return false; }
     void show(const std::string&) {}
     void updateImage(const std::string&) {}
@@ -72,6 +78,9 @@ class ArtWindow {
 class ArtWindow : public InputSink {
 #endif
 public:
+    // See the Android branch above: the caller asks instead of testing the
+    // platform.
+    static bool isSupported() { return true; }
     // `shareFontsWith` is the main window's RasterFont, if there is one. Its
     // faces are opened over the same bytes rather than re-read from disk (~39 MB
     // and ~100 ms otherwise) — see RasterFont::openSharedWith(). Pass nullptr

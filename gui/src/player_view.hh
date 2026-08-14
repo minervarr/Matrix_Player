@@ -724,6 +724,43 @@ private:
     // Selection / navigation
     int  selectedAlbumIdx_  = -1;
     bool trackPanelOpen_    = false;
+
+    // ── Full-page SCENES (a third mechanism, and deliberately not a fourth) ──
+    // The content area already had three occupants and the difference between
+    // them is load-bearing (settings_panels.hh documents the regression from
+    // confusing two of them): a PANEL intercepts every event before the
+    // sidebar or the transport is hit-tested; a SECTION and the album VIEW do
+    // not, and are reached by ordinary rect-gated branches.
+    //
+    // These two are for LOOKING AT MUSIC, not for configuring, so they follow
+    // the album view: the transport stays live underneath, Escape and goBack()
+    // close them. That is not a stylistic match — the signal-chain page exists
+    // to be read WHILE something is playing, and a panel would kill the very
+    // Space bar that stops it.
+    //
+    // One enum for both, because they share everything except what they draw:
+    // the same dismissal, the same rect, the same place in drawFrame().
+    enum class ContentOverlay { None, AlbumArt, SignalChain };
+    ContentOverlay overlay_ = ContentOverlay::None;
+    // What the art scene is showing. Kept separately from displayAlbum_
+    // because the two answer different questions: the scene follows the
+    // MUSIC (transportArtTexPath_), and the album view follows the BROWSER.
+    std::string overlayArtPath_;
+    std::string overlayArtLabel_, overlayArtSubLabel_;
+    // Its own texture, at its own size. transportArtTex_ is baked to the
+    // thumbnail's pixels (see loadTransportArtTexture) and is unusable here.
+    TextureHandle overlayArtTex_ = kInvalidTexture;
+    int overlayArtTexW_ = 0, overlayArtTexH_ = 0;
+    std::string overlayArtTexPath_;   // cache key; cleared with the handle
+    int overlayArtBoxW_ = 0, overlayArtBoxH_ = 0;   // box it was resampled for
+    LayoutRect rcOverlayClose_{}, rcOverlaySecondScreen_{}, rcOverlayImage_{};
+    bool hoverOverlayClose_ = false, hoverOverlaySecondScreen_ = false;
+    void openArtOverlay(const std::string& path, const std::string& label,
+                        const std::string& subLabel);
+    void closeOverlay();
+    void drawArtOverlay(Canvas& canvas, const LayoutRect& area);
+    void ensureOverlayArtTexture(int boxW, int boxH);
+    void releaseOverlayArtTexture();
     // Sidebar is two independent things: which album TYPE is being browsed
     // (Albums/EPs/Singles/Remixes — filters the grid), and whether the
     // Settings gear is open (replaces the whole content area). They're

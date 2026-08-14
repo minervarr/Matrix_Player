@@ -1127,7 +1127,7 @@ void PlayerWindow::drawFrame() {
         }
     }
 
-    if (!settingsOpen_ && !trackPanelOpen_) {
+    if (!settingsOpen_ && overlay_ == ContentOverlay::None && !trackPanelOpen_) {
         Rect g = toRect(rcGrid_);
         canvas.rect(g.x, g.y, g.w, g.h, toColor(CLR_BG_MAIN));
 
@@ -1386,7 +1386,7 @@ void PlayerWindow::drawFrame() {
     // the whole content area belongs to this one album — big art on the
     // left, track list on the right, album description and artist bio (from
     // the sidecar files next to the music) below. The page scrolls as one.
-    if (!settingsOpen_ && trackPanelOpen_) {
+    if (!settingsOpen_ && overlay_ == ContentOverlay::None && trackPanelOpen_) {
         Rect tp = toRect(rcTrackPanel_);
         canvas.rect(tp.x, tp.y, tp.w, tp.h, toColor(CLR_BG_TRACKPANEL));
 
@@ -1855,6 +1855,22 @@ void PlayerWindow::drawFrame() {
         }
 
         // No on-screen close button — Escape closes the album view.
+    }
+
+    // ── Full-page scenes (see ContentOverlay) ────────────────────────────
+    // Drawn INSTEAD of the grid / album view / playlists, never over them.
+    // That is not a preference: this renderer emits background images, then
+    // the vector layer, then foreground images, then glyphs — so a backdrop
+    // rect laid over the grid would also cover an image drawn after it, and
+    // text drawn earlier would still show through. Replacing the content
+    // sidesteps the whole ordering problem, and is the same "hide it, don't
+    // float over it" rule bar A's search and AutoEQ list already follow.
+    if (!settingsOpen_ && overlay_ != ContentOverlay::None) {
+        switch (overlay_) {
+        case ContentOverlay::AlbumArt:    drawArtOverlay(canvas, rcGrid_); break;
+        case ContentOverlay::SignalChain: break;   // Phase 2
+        case ContentOverlay::None:        break;
+        }
     }
 
     // ── Bar B: the transport ─────────────────────────────────────────────
@@ -2759,6 +2775,17 @@ void PlayerWindow::loadTransportArtTexture(const std::string& artPath) {
                                              : artPath;
         if (!img.empty()) artWin_.updateImage(img);
     }
+    // The in-app scene follows the same way, and for the same reason — it is
+    // showing the record that is PLAYING, so a gapless boundary onto another
+    // album has to move it. Only the album-cover case: the artist scene is
+    // pinned to the page it was opened from.
+    if (overlay_ == ContentOverlay::AlbumArt && !artWinShowsArtist_ &&
+        !artPath.empty() && artPath != overlayArtPath_) {
+        overlayArtPath_     = artPath;
+        overlayArtLabel_    = currentTitle_;
+        overlayArtSubLabel_ = currentArtist_;
+        invalidate();   // ensureOverlayArtTexture() reloads on the next draw
+    }
     if (!artPath.empty()) {
         // Sized for the transport bar's thumbnail, the only place it is drawn.
         // It used to take max(transport, essential) because Alt+L switched to a
@@ -3112,6 +3139,13 @@ void PlayerWindow::onMouseMove(int x, int y) {
     }
 #endif
 
+    // Scene hover: one button, and only while a scene is showing.
+    if (!settingsOpen_ && overlay_ != ContentOverlay::None) {
+        bool h = rcOverlaySecondScreen_.right > rcOverlaySecondScreen_.left &&
+                 ptInRect(rcOverlaySecondScreen_, x, y) != 0;
+        if (h != hoverOverlaySecondScreen_) { hoverOverlaySecondScreen_ = h; invalidate(); }
+    }
+
     // Chip / suggestion hover. Both lists are small and only exist while the
     // search is in use, so this runs before the rest rather than being folded
     // into a section-specific branch.
@@ -3201,6 +3235,11 @@ CursorShape PlayerWindow::cursorForPoint(int x, int y) const {
     if (hoverSettingsItem_  >= 0) return CursorShape::Hand;
     if (navSection_ == NavSection::Playlists && !settingsOpen_ &&
         (plHoverRow_ >= 0 || plHoverTile_ >= 0 || plHoverRangeTab_ >= 0))
+        return CursorShape::Hand;
+
+    // Inside a scene the whole content area is one click target (it closes),
+    // so the whole content area gets the hand.
+    if (!settingsOpen_ && overlay_ != ContentOverlay::None && ptInRect(rcGrid_, x, y))
         return CursorShape::Hand;
 
     // Artwork opens the fullscreen view; the artist photo does too.
@@ -3293,6 +3332,27 @@ void PlayerWindow::onLButtonDown(int x, int y) {
         return;
     }
 
+    // ── A full-page scene, while one is open ─────────────────────────────
+    // Rect-gated to the content area and tested AFTER the transport, which is
+    // the whole difference between a scene and a panel: the music stays under
+    // the listener's hands while they look at the cover. Everything that lands
+    // inside the area belongs to the scene, so nothing below can fire — the
+    // grid and the album view are not even drawn.
+    if (!settingsOpen_ && overlay_ != ContentOverlay::None && ptInRect(rcGrid_, x, y)) {
+        if (overlay_ == ContentOverlay::AlbumArt &&
+            rcOverlaySecondScreen_.right > rcOverlaySecondScreen_.left &&
+            ptInRect(rcOverlaySecondScreen_, x, y)) {
+            ensureArtWindow();
+            artWin_.show(overlayArtPath_);
+            invalidate();     // the button retires itself if create() failed
+            return;
+        }
+        // Touch anywhere else closes. A picture opened by a tap is closed by a
+        // tap; hunting for an × is desktop vocabulary a phone does not share.
+        closeOverlay();
+        return;
+    }
+
     // Artist photo -> fullscreen. Tested before the track list because the
     // photo sits inside the album view's own scroll area. The photo is the
     // ONLY clickable thing in the sidecar block, and it carries no hover
@@ -3300,16 +3360,20 @@ void PlayerWindow::onLButtonDown(int x, int y) {
     // lights up under the cursor is the wrong vocabulary for it.
     if (trackPanelOpen_ && !artistImgPath_.empty() &&
         rcArtistImg_.right > rcArtistImg_.left && ptInRect(rcArtistImg_, x, y)) {
-        // Straight into the real fullscreen window — the same one the
-        // transport thumbnail opens. The first attempt drew the photo as a
-        // page overlay inside this window, and it could not work: MSDF text
-        // composites in one pass AFTER all geometry (see canvas.hh), so the
-        // track list and the bio printed straight through the photo, and they
-        // scrolled while it sat still. ArtWindow is a real second surface with
-        // its own renderer, so nothing from this window can reach it.
+        // The same scene the transport thumbnail opens.
+        //
+        // A first attempt at this, long before the scene existed, drew the
+        // photo OVER the album view and could not work: MSDF text composites
+        // last, after all geometry (renderer.cc's record order), so the track
+        // list and the bio printed straight through the photo and scrolled
+        // while it sat still. That objection is about drawing a page on top of
+        // another page — the scene REPLACES the content area, so there is no
+        // text left underneath to bleed through.
         artWinShowsArtist_ = true;
-        ensureArtWindow();
-        artWin_.show(artistImgPath_);
+        openArtOverlay(artistImgPath_,
+                       displayAlbum_ >= 0 && displayAlbum_ < (int)albums_.size()
+                           ? albums_[displayAlbum_].artist : std::string(),
+                       std::string());
         return;
     }
 
@@ -3516,6 +3580,12 @@ void PlayerWindow::onLButtonDblClk(int x, int y) {
 // Wayland's pointer coords are already surface-relative).
 void PlayerWindow::onMouseWheel(int x, int y, int delta) {
     if (activePanel_ != SettingsPanel::None) { onPanelWheel(x, y, delta); return; }
+    // A scene owns the content area, so the wheel stops here rather than
+    // scrolling a grid nobody can see — which would otherwise leave the
+    // listener somewhere they never scrolled to when the scene closes.
+    // (The art scene has nothing to scroll; the signal-chain page will.)
+    if (!settingsOpen_ && overlay_ != ContentOverlay::None && ptInRect(rcGrid_, x, y))
+        return;
     if (trackPanelOpen_ && !settingsOpen_ && ptInRect(rcTrackPanel_, x, y)) {
         // The album view scrolls as one page; its content height is
         // measured by the draw block (albumViewContentH_).
@@ -6411,10 +6481,144 @@ void PlayerWindow::onTimer() {
 }
 
 void PlayerWindow::onArtClick() {
-    if (displayAlbum_ < 0) return;
-    artWinShowsArtist_ = false;
-    ensureArtWindow();
-    artWin_.show(albums_[displayAlbum_].artPath);
+    // The path comes from the TRANSPORT, not from displayAlbum_. Those are
+    // different questions and the old code asked the wrong one: the thumbnail
+    // shows what is PLAYING, but it opened the cover of the album being
+    // BROWSED — so walking to another record and touching the thumbnail put
+    // the wrong sleeve on screen, full size, with no hint that it was wrong.
+    if (transportArtTexPath_.empty()) return;
+    openArtOverlay(transportArtTexPath_, currentTitle_, currentArtist_);
+}
+
+// ── The art scene ────────────────────────────────────────────────────────────
+// Replaces ArtWindow as the destination of a click/tap. ArtWindow itself is
+// unchanged and still exists for what it was actually built for — a second
+// MONITOR — but it cannot be the primary answer: it is a second top-level
+// window, which a phone does not have, so on Android the thumbnail simply
+// swallowed the touch. One scene, drawn by this window, works everywhere.
+void PlayerWindow::openArtOverlay(const std::string& path, const std::string& label,
+                                  const std::string& subLabel) {
+    if (path.empty()) return;
+    overlayArtPath_     = path;
+    overlayArtLabel_    = label;
+    overlayArtSubLabel_ = subLabel;
+    overlay_            = ContentOverlay::AlbumArt;
+    invalidate();
+}
+
+void PlayerWindow::closeOverlay() {
+    if (overlay_ == ContentOverlay::None) return;
+    overlay_ = ContentOverlay::None;
+    // The texture is sized for the scene's box and is worth ~one decode to
+    // rebuild, so it goes rather than lingering per closed scene.
+    releaseOverlayArtTexture();
+    hoverOverlayClose_ = hoverOverlaySecondScreen_ = false;
+    invalidate();
+}
+
+void PlayerWindow::releaseOverlayArtTexture() {
+    if (overlayArtTex_ != kInvalidTexture && renderer_)
+        renderer_->destroy_texture(overlayArtTex_);
+    overlayArtTex_  = kInvalidTexture;
+    overlayArtTexW_ = overlayArtTexH_ = 0;
+    overlayArtBoxW_ = overlayArtBoxH_ = 0;
+    // The KEY goes with the handle. Leaving it set is the exact bug
+    // onSurfaceLost() documents: a loader convinced it is already showing the
+    // right thing, in front of an invalid handle, forever.
+    overlayArtTexPath_.clear();
+}
+
+// The quality story is ArtWindow::loadArtTexture()'s, unchanged and for the
+// same reason: ImageFit::kContain resamples on the CPU (Magic Kernel Sharp) to
+// exactly the pixels the art will occupy, so the draw is a 1:1 blit and no GPU
+// filter ever scales it. mips=false follows — at 1:1 level 0 is the only level
+// the sampler can want.
+void PlayerWindow::ensureOverlayArtTexture(int boxW, int boxH) {
+    if (!renderer_ || overlayArtPath_.empty() || boxW <= 0 || boxH <= 0) return;
+    if (overlayArtTex_ != kInvalidTexture && overlayArtTexPath_ == overlayArtPath_ &&
+        overlayArtBoxW_ == boxW && overlayArtBoxH_ == boxH)
+        return;
+    releaseOverlayArtTexture();
+    FileByteReader reader;
+    overlayArtTex_ = createTextureFromImageFile(*renderer_, reader, overlayArtPath_.c_str(),
+                                                boxW, boxH, &overlayArtTexW_, &overlayArtTexH_,
+                                                /*mips=*/false, ImageFit::kContain);
+    if (overlayArtTex_ != kInvalidTexture) {
+        overlayArtTexPath_ = overlayArtPath_;
+        overlayArtBoxW_ = boxW; overlayArtBoxH_ = boxH;
+    }
+}
+
+void PlayerWindow::drawArtOverlay(Canvas& canvas, const LayoutRect& area) {
+    Rect a = toRect(area);
+    // Black, not CLR_BG_MAIN: this is a picture on a wall. It is an ordinary
+    // vector rect and it is safe here precisely because nothing of the grid
+    // was drawn underneath — the art itself goes out on the FOREGROUND image
+    // layer, which composites above this (see renderer.cc's record order).
+    canvas.rect(a.x, a.y, a.w, a.h, toColor(RGB(0, 0, 0)));
+
+    const float pad = metrics_.space(SP_LG);
+    // The caption is reserved BEFORE the box is measured, so the art is never
+    // resampled to a height the text then overlaps.
+    const bool hasCaption = !overlayArtLabel_.empty();
+    const float capH = hasCaption
+        ? metrics_.text.title + metrics_.text.secondary + metrics_.space(SP_MD) * 2.0f
+        : 0.0f;
+
+    const int boxW = (int)std::max(1.0f, a.w - pad * 2.0f);
+    const int boxH = (int)std::max(1.0f, a.h - pad * 2.0f - capH);
+    ensureOverlayArtTexture(boxW, boxH);
+
+    float imgY = a.y + pad, imgH = (float)boxH;
+    if (overlayArtTex_ != kInvalidTexture && overlayArtTexW_ > 0 && overlayArtTexH_ > 0) {
+        // Already resampled to fit, so scale is 1 and this is a straight blit.
+        // The min() is the one-frame safety net for a resize that has landed
+        // before the rebuilt texture has. Whole-pixel destination on both axes:
+        // at 1:1 a half-pixel offset puts every sample between two texels and
+        // bilinear hands back the average, undoing the CPU resample entirely.
+        float s = std::min(boxW / (float)overlayArtTexW_, boxH / (float)overlayArtTexH_);
+        float dw = std::floor(overlayArtTexW_ * s), dh = std::floor(overlayArtTexH_ * s);
+        float dx = std::floor(a.x + (a.w - dw) * 0.5f);
+        float dy = std::floor(a.y + pad + (boxH - dh) * 0.5f);
+        canvas.imageFg(overlayArtTex_, dx, dy, dw, dh);
+        rcOverlayImage_ = { (int)dx, (int)dy, (int)(dx + dw), (int)(dy + dh) };
+        imgY = dy; imgH = dh;
+    } else {
+        canvas.textCentered("No artwork", a.x + a.w * 0.5f, a.y + a.h * 0.5f,
+                            metrics_.text.body, toColor(CLR_TEXT_DIM));
+        rcOverlayImage_ = {};
+    }
+
+    if (hasCaption) {
+        // Centred by MEASURING, the same rule the grid's empty states follow:
+        // Canvas has textCentered() only for the unstyled face, and guessing a
+        // half-width is how the old hardcoded offsets drifted.
+        auto centred = [&](const std::string& s, float y, float sz, ColorRef clr, FontStyle st) {
+            std::string t = truncateToWidth(canvas, s, a.w - pad * 2.0f, sz, st);
+            float w = canvas.textWidthStyled(t, sz, st);
+            canvas.textStyled(t, a.x + (a.w - w) * 0.5f, y, sz, toColor(clr), st);
+        };
+        float ty = imgY + imgH + metrics_.space(SP_MD);
+        centred(overlayArtLabel_, ty, metrics_.text.title, CLR_TEXT_PRIMARY, FontStyle::Bold);
+        if (!overlayArtSubLabel_.empty())
+            centred(overlayArtSubLabel_, ty + metrics_.text.title + metrics_.space(SP_XS),
+                    metrics_.text.secondary, CLR_TEXT_SECONDARY, FontStyle::Italic);
+    }
+
+    // "Second screen" is offered only where a second screen can exist. Asked
+    // of ArtWindow rather than tested with an #ifdef here: the platform answer
+    // belongs to the file that already has the platform branches. A create()
+    // that failed once also retires the button.
+    if (ArtWindow::isSupported() && !artWinFailed_) {
+        const float bw = metrics_.space(panels::kMinActionBtnW * 1.6f);
+        const float bh = metrics_.space(52.0f);
+        rcOverlaySecondScreen_ = { (int)(a.x + a.w - pad - bw), (int)(a.y + pad),
+                                   (int)(a.x + a.w - pad),      (int)(a.y + pad + bh) };
+        panels::drawButton(canvas, rcOverlaySecondScreen_, "Second screen",
+                           hoverOverlaySecondScreen_, metrics_.text.body);
+    } else {
+        rcOverlaySecondScreen_ = {};
+    }
 }
 
 // Flip the now-playing display (title/artist/art/total + track-row highlight) to
@@ -6721,7 +6925,14 @@ bool PlayerWindow::goBack() {
     // Settings PAGE the panel was borrowing, which is not where it came from.
     bool recordForward = true;
 
-    if (activePanel_ != SettingsPanel::None) {
+    if (overlay_ != ContentOverlay::None && !settingsOpen_) {
+        // Outermost first, and like a panel it has no FORWARD: ViewState
+        // describes sections and the views inside them, so a forward entry
+        // here would send the button to whatever was underneath the picture.
+        closeOverlay();
+        moved = true;
+        recordForward = false;
+    } else if (activePanel_ != SettingsPanel::None) {
         closeActivePanel();
         moved = true;
         recordForward = false;
@@ -6934,6 +7145,7 @@ void PlayerWindow::shutdown() {
     if (trackPanelArtTex_ != kInvalidTexture) renderer_->destroy_texture(trackPanelArtTex_);
     if (transportArtTex_ != kInvalidTexture) renderer_->destroy_texture(transportArtTex_);
     if (artistImgTex_ != kInvalidTexture) renderer_->destroy_texture(artistImgTex_);
+    releaseOverlayArtTexture();
 
     // Destroy the Vulkan swapchain/renderer while the host's native window
     // still exists — host_ (and the SurfaceProvider it owns) is torn down
@@ -6971,6 +7183,11 @@ void PlayerWindow::onSurfaceLost() {
     // never comes back.
     trackPanelArtTexAlbum_ = -1;
     transportArtTexPath_.clear();
+    // Same rule, same trap: releaseOverlayArtTexture() clears handle AND key.
+    // overlayArtPath_ is deliberately NOT cleared — that is CPU-side state
+    // (which picture the scene is showing) and it must survive, so returning
+    // to the app finds the scene still open on the same cover.
+    releaseOverlayArtTexture();
 
     glyphBaker_.destroy();
     // The baker's pipelines died with the device. GPU baking is opt-in
