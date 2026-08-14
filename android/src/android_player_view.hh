@@ -36,6 +36,11 @@ public:
     // from AndroidHost's window-init path.
     void startScan(const std::string& rootPath);
 
+    // What to say when the list is empty. "No tracks found" is a lie when the
+    // real answer is "this app cannot read storage yet" -- and that is the
+    // state a listener who declined the permission is actually in.
+    void setEmptyMessage(std::string msg) { emptyMessage_ = std::move(msg); }
+
     // Per-frame update: applies a finished background scan, if any. Call
     // once per frame, before draw().
     void onFrame(float dtSeconds);
@@ -79,6 +84,7 @@ private:
     std::vector<Album> pendingAlbums_;
 
     std::vector<Track> tracks_;  // flattened; main-thread-only after apply
+    std::string emptyMessage_ = "No tracks found.";
 
     // --- scroll/touch state ---
     float scrollY_            = 0.0f;

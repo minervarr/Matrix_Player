@@ -21,6 +21,13 @@ void request_all_files_access(android_app* app);
 // older platforms where the method doesn't exist).
 bool has_all_files_access(android_app* app);
 
+// NO CALLER, deliberately. It was called on every APP_CMD_INIT_WINDOW, which
+// fires again every time the app is backgrounded and returns -- so the listener
+// was asked to pick a folder, forever, in a loop with the permission request
+// below it. Kept (not deleted) because the gesture may be worth making ONCE
+// from a settings screen this slice does not have yet; wire it there, never to
+// a window callback.
+//
 // Fire-and-forget ACTION_OPEN_DOCUMENT_TREE (startActivity(), NOT
 // startActivityForResult()). Its result Uri is never consumed: receiving an
 // activity result requires overriding Activity.onActivityResult(), a Java

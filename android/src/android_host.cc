@@ -98,12 +98,11 @@ void AndroidHost::onWindowInit() {
     // needed (see the design doc's "app_paths for Android" section).
     app_paths::setAndroidPaths("", state_->activity->internalDataPath);
 
-    request_all_files_access(state_);
-    show_folder_picker_hint(state_);
-
-    if (view_) {
-        view_->startScan(read_scan_root_extra(state_));
-    }
+    // NOT the permission request, and NOT the folder picker. Both used to fire
+    // here, and this callback runs every time the window comes back -- see
+    // ensureStoragePermission().
+    ensureStoragePermission();
+    maybeStartScan();
 
     vce::platform::enable_immersive(state_, vce::platform::ImmersiveMode::kFullImmersive);
 
@@ -116,6 +115,12 @@ void AndroidHost::onWindowInit() {
 void AndroidHost::onWindowTerm() {
     orientation_.disable();
     orientation_.stop();
+    // The glyph atlas lives on the GPU, so it dies with the renderer -- but
+    // the FACES are CPU-side and survive. Keeping one flag for both meant
+    // initFonts() returned early on the next window and left the new renderer
+    // with no atlas at all: every string would have vanished after the first
+    // time the app was backgrounded.
+    atlasUploaded_ = false;
     renderer_.reset();
     surface_.reset();
     assets_.reset();
@@ -132,6 +137,11 @@ void AndroidHost::onGainedFocus() {
 
 void AndroidHost::onResume() {
     orientation_.enable();
+    // Coming back from the system Settings screen is the ONE moment the answer
+    // can have changed, and it is the moment storage_permission.hh's own
+    // comment says to re-check on. If it was granted, the scan that found
+    // nothing at startup can now find something.
+    maybeStartScan();
 }
 
 void AndroidHost::onPause() {
@@ -159,7 +169,16 @@ void AndroidHost::onPause() {
 // (player_view.cc:362). So the two platforms take the same path, not merely a
 // similar one.
 void AndroidHost::initFonts() {
-    if (fontsReady_ || !assets_) return;
+    if (!assets_ || !renderer_) return;
+    if (fontsReady_) {
+        // Faces already loaded; only the GPU side is missing. This is the
+        // ordinary path on every window after the first.
+        if (!atlasUploaded_) {
+            renderer_->initMsdf(msdfFont_);
+            atlasUploaded_ = true;
+        }
+        return;
+    }
 
     // The vector fallback. Assets are not files, so this is loadFromMemory()
     // rather than load() -- the one real difference from the desktop path.
@@ -198,10 +217,64 @@ void AndroidHost::initFonts() {
     // for a reason: only a non-zero result (or an atlas the renderer has not
     // seen yet) means the GPU image has to be rebuilt. Same test the desktop
     // makes in refreshGlyphs().
-    if (msdfFont_.ensureGlyphs(cps, glyphSizes_) > 0 || !renderer_->msdfReady())
+    if (msdfFont_.ensureGlyphs(cps, glyphSizes_) > 0 || !renderer_->msdfReady()) {
         renderer_->initMsdf(msdfFont_);
+        atlasUploaded_ = true;
+    }
     fontsReady_ = msdfFont_.valid();
     LOGI("UI fonts ready: msdf=%d, roles=%zu", (int)fontsReady_, glyphSizes_.size());
+}
+
+// ── Storage permission, asked at most once ───────────────────────────────────
+//
+// This used to be two unconditional startActivity() calls in onWindowInit(),
+// and that is a LOOP rather than a prompt. Launching the Settings screen covers
+// this activity, which destroys its window; coming back recreates the window
+// and fires APP_CMD_INIT_WINDOW again, which asked again. Granting the
+// permission did not break the cycle, because nothing ever checked -- the
+// request did not depend on the answer.
+//
+// storage_permission.hh already spelled out the right shape ("re-check
+// has_all_files_access() on the next APP_CMD_RESUME"); has_all_files_access()
+// simply had no caller. Now it has one, and it gates the request.
+//
+// The once-per-process flag is the second half, and it is not redundant: a
+// listener who DECLINES leaves has_all_files_access() false forever, so the
+// check alone would re-ask on every resume -- a slower loop, but the same one.
+// They can grant it from system Settings whenever they like; the app's job is
+// to ask once and then stay out of the way.
+//
+// show_folder_picker_hint() is deliberately NOT called any more. Its result is
+// never read and cannot be without a Java onActivityResult override (see its
+// own comment), so it contributed nothing but a second modal -- and it is the
+// one that literally asks the listener to select a folder. The scan root comes
+// from the launch intent's "scan_root" extra instead, which is what
+// launch_intent.hh has always said.
+void AndroidHost::ensureStoragePermission() {
+    if (storageAsked_) return;
+    storageAsked_ = true;
+    if (has_all_files_access(state_)) {
+        LOGI("storage: all-files access already granted");
+        return;
+    }
+    LOGI("storage: requesting all-files access (once)");
+    request_all_files_access(state_);
+}
+
+// A window is created more than once; a scan must not be. Retried on resume
+// because the permission may have been granted in between, which is exactly
+// when the first attempt would have come back empty.
+void AndroidHost::maybeStartScan() {
+    if (scanStarted_ || !view_) return;
+    if (!has_all_files_access(state_)) {
+        LOGI("storage: no access yet -- deferring the scan");
+        view_->setEmptyMessage("Storage access not granted.\n"
+                               "Settings > Apps > Matrix Player > All files access");
+        return;
+    }
+    scanStarted_ = true;
+    view_->setEmptyMessage("No tracks found.");
+    view_->startScan(read_scan_root_extra(state_));
 }
 
 void AndroidHost::drawFrame() {

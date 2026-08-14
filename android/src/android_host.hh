@@ -52,6 +52,16 @@ private:
     // desktop's before this existed.
     void initFonts();
 
+    // Asks for "All files access" IF it is not already granted, and at most
+    // once per process. Both halves matter -- see the definition: the call it
+    // replaces was unconditional and ran on every window init, which is a
+    // loop, not a prompt.
+    void ensureStoragePermission();
+    // Starts the library scan the first time it can. Kept apart from the
+    // window lifecycle because a window is created more than once and a scan
+    // must not be.
+    void maybeStartScan();
+
     android_app*       state_ = nullptr;
     AndroidPlayerView*  view_  = nullptr;
 
@@ -77,7 +87,15 @@ private:
     RasterFont     msdfFont_;
     std::vector<float>    msdfQuads_;
     std::vector<int>      glyphSizes_;
-    bool           fontsReady_ = false;
+    bool           fontsReady_ = false;   // faces LOADED (survives a window)
+    bool           atlasUploaded_ = false; // atlas uploaded to THIS renderer
+
+    // Both guard against APP_CMD_INIT_WINDOW firing more than once, which it
+    // does every time another activity covers this one and the user comes
+    // back. Treating that callback as "the app started" is what produced the
+    // permission loop.
+    bool           storageAsked_ = false;
+    bool           scanStarted_  = false;
 
     int64_t lastFrameNs_ = 0;
 };

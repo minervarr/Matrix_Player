@@ -173,7 +173,7 @@ void AndroidPlayerView::draw(Canvas& canvas, float screenW, float screenH,
     if (scanning_.load()) {
         canvas.text("Scanning...", left, top, m.text.body, toColor(CLR_TEXT_SECONDARY));
     } else if (tracks_.empty()) {
-        canvas.text("No tracks found.", left, top, m.text.body, toColor(CLR_TEXT_SECONDARY));
+        canvas.text(emptyMessage_, left, top, m.text.body, toColor(CLR_TEXT_SECONDARY));
     }
 
     float y = top - scrollY_;
