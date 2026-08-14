@@ -777,12 +777,19 @@ void PlayerWindow::run() {
         // nothing to stay awake for, so pump() blocks instead of spinning on
         // a dirty flag nobody can service. On both desktops it is never null
         // and this reads exactly as it did.
-        const bool canDraw = renderer_ != nullptr;
-        bool haveWork = canDraw && (pendingFrames_ > 0 || artWin_.hasPendingFrames());
+        bool haveWork = renderer_ && (pendingFrames_ > 0 || artWin_.hasPendingFrames());
         host_->pump(haveWork);
         if (host_->quitRequested()) { running_ = false; break; }
 
-        if (canDraw && pendingFrames_ > 0) { drawFrame(); pendingFrames_--; }
+        // renderer_ is re-tested HERE, after the pump, and that is the whole
+        // point: pump() is where a platform delivers "your surface is gone"
+        // (Android's APP_CMD_TERM_WINDOW -> onSurfaceLost), so a decision made
+        // before it can be false by now. It was, briefly, and it crashed on
+        // the very first launch after the system bars were hidden — hiding
+        // them recreates the window, so the app destroys and rebuilds its
+        // Renderer during startup. drawFrame() dereferences renderer_ on its
+        // second line and does not check.
+        if (renderer_ && pendingFrames_ > 0) { drawFrame(); pendingFrames_--; }
         // ArtWindow is a second window on this same thread with its own
         // Renderer — no second message pump, so drive its frame here too.
         if (artWin_.isVisible()) artWin_.renderIfDirty();

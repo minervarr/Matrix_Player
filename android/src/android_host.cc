@@ -216,7 +216,10 @@ void AndroidHost::handleAppCmd(android_app* app, int32_t cmd) {
             // A rotation arrives here as an ordinary resize, which is exactly
             // what ui_orientation.hh assumes: the layout is derived from the
             // window's own shape and nothing ever asks Android which way up
-            // the device is.
+            // the device is. Confirmed on a moto g06 — turning the phone
+            // delivers CONFIG_CHANGED, then WINDOW_RESIZED with the window
+            // already reporting 1640x720, and the app lays out horizontal from
+            // that alone.
             // The cutout moves with the screen: what was a 70 px top inset in
             // portrait is a side inset in landscape. Re-queried here rather
             // than cached from startup, exactly as safe_area.hh asks.
