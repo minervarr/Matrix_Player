@@ -978,14 +978,6 @@ static std::string loadSidecarText(const fsys::path& dir,
     return {};
 }
 
-// "44.1kHz / 16-bit" — the transport readout of the playing track's format.
-static std::string formatQualityText(int sampleRate, int bitDepth) {
-    if (sampleRate <= 0 || bitDepth <= 0) return {};
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%.1fkHz / %d-bit", sampleRate / 1000.0, bitDepth);
-    return buf;
-}
-
 // "24/96" — compact badge for the track panel header, derived from real
 // track metadata (not the folder-name suffix).
 static std::string formatQualityBadge(int sampleRate, int bitDepth) {
@@ -1879,22 +1871,26 @@ void PlayerWindow::drawFrame() {
 
         // ── One authoring frame, two orientations ───────────────────────────
         //
-        // Everything textual below is written ONCE, for a WIDE bar. In the
-        // horizontal layout the bar is tall instead, so the text is emitted
-        // under a -90 degree rotation about the bar's own centre — the same
-        // counter-clockwise turn that maps the whole vertical layout onto the
-        // horizontal one, which is why the result reads bottom-to-top.
+        // Bar B is LAID OUT once, for a WIDE bar. In the horizontal layout the
+        // bar is tall instead, and the -90 degree turn about its own centre —
+        // the same counter-clockwise turn that maps the whole vertical layout
+        // onto the horizontal one — is what puts each thing back where the
+        // layout meant it. `authored()` converts a real screen rect into those
+        // wide-bar coordinates; in the vertical layout it is the identity.
         //
-        // `authored()` converts a real screen rect into the coordinates to
-        // author at so that the rotation lands it back where the layout put
-        // it; `unauthored()` goes the other way, for hit rects computed here.
-        // In the vertical layout both are the identity.
+        // NOTHING IN THIS BAR IS DRAWN ROTATED ANY MORE. The rotation is now
+        // only a coordinate system for PLACEMENT, and every glyph comes out
+        // upright. That follows the frame's own rule rather than abandoning
+        // it: text is turned when its LENGTH runs along the bar, which is why
+        // bar A's initials never were. What used to be long here — the
+        // now-playing title — is gone (see the ordinal below), and what
+        // remains is a track number, a five-character state tag and a clock.
         //
-        // The ARTWORK and the three BUTTONS are drawn OUTSIDE that rotation,
-        // at their real rects. Canvas::image() does not honour setRotation()
-        // at all (canvas.hh:124) — and the buttons must not rotate even
-        // though rect() would: a Prev triangle turned on its side points up,
-        // which is a different instruction.
+        // The ARTWORK and the three BUTTONS were always outside the rotation.
+        // Canvas::image() does not honour setRotation() at all (canvas.hh:124)
+        // — and the buttons must not rotate even though rect() would: a Prev
+        // triangle turned on its side points up, which is a different
+        // instruction.
         const bool barBVert = (curOrientation_ == UiOrientation::Vertical);
         const float bpx = t.x + t.w * 0.5f, bpy = t.y + t.h * 0.5f;
         auto authored = [&](const LayoutRect& r) -> Rect {
@@ -1905,13 +1901,6 @@ void PlayerWindow::drawFrame() {
             const float ay1 = bpy + ((float)r.right  - bpx);
             return { ax0, ay0, ax1 - ax0, ay1 - ay0 };
         };
-        auto unauthored = [&](float ax0, float ay0, float ax1, float ay1) -> LayoutRect {
-            if (barBVert) return { (int)ax0, (int)ay0, (int)ax1, (int)ay1 };
-            return { (int)(bpx + (ay0 - bpy)), (int)(bpy - (ax1 - bpx)),
-                     (int)(bpx + (ay1 - bpy)), (int)(bpy - (ax0 - bpx)) };
-        };
-        const float kQuarterTurn = -1.57079633f;   // 90 degrees counter-clockwise
-
         canvas.rect(t.x, t.y, t.w, t.h, toColor(CLR_BG_TRANSPORT));
         // The hairline goes on the bar's INNER edge, the one facing the
         // content: the top in Vertical, the left in Horizontal.
@@ -1922,26 +1911,62 @@ void PlayerWindow::drawFrame() {
         Rect artR = toRect(rcTransportArt_);
         drawArtOrPlaceholder(canvas, transportArtTex_, artR.x, artR.y, artR.w, artR.h);
 
-        if (!barBVert) canvas.setRotation(kQuarterTurn, bpx, bpy);
-        const Rect tv = authored(rcTransport_);   // the bar, as a wide one
+        const Rect tv    = authored(rcTransport_);      // the bar, as a wide one
+        const Rect infoR = authored(rcTransportInfo_);
 
-        // Now-playing title/artist. Title gets base-name priority: the
-        // trailing "(Deluxe)"-class modifier is what truncates first, never
-        // the name itself (see splitNameModifier).
-        Rect infoR = authored(rcTransportInfo_);
-        drawNameWithModifier(canvas,
-                             currentTitle_.empty() ? "No track" : currentTitle_,
-                             infoR.x, infoR.y, infoR.w,
-                             metrics_.text.title, CLR_TEXT_PRIMARY, FontStyle::Bold);
-        std::string artist = currentArtist_;
-        if (!artist.empty()) {
-            std::string a = truncateToWidth(canvas, artist, infoR.w,
-                                            metrics_.text.secondary, FontStyle::Italic);
-            canvas.textStyled(a, infoR.x, infoR.y + titleArtistAdvance(metrics_.text.title),
-                              metrics_.text.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Italic);
+        // ── What is playing: the track's ORDINAL, drawn upright ───────────
+        // The title and artist used to live here and no longer do. At a bar
+        // thickness of space(130) the name never fitted, and in the
+        // horizontal layout it came out rotated on its side down the whole
+        // bar. It was also the one thing here that repeats: the THUMBNAIL
+        // says which record is playing and does not change when the listener
+        // browses elsewhere, so what is genuinely missing is which track of
+        // it. The name has not been dropped — touching the thumbnail opens it
+        // full size with the title and artist under it.
+        //
+        // Upright in BOTH orientations, which follows the frame's own rule
+        // rather than breaking it: text is rotated when its LENGTH runs along
+        // the bar (the now-playing title once did, the AutoEQ profile name
+        // still does). A one-to-four character ordinal is the same case as
+        // bar A's initials, which have never rotated either.
+        //
+        // Authored coordinates place it; the DRAW is unrotated. mapPoint()
+        // inverts the turn for a single point, so the anchor lands exactly
+        // where the wide-bar layout put it.
+        auto mapPoint = [&](float ax, float ay) -> std::pair<float, float> {
+            if (barBVert) return { ax, ay };
+            return { bpx + (ay - bpy), bpy - (ax - bpx) };
+        };
+        {
+            std::string ord;
+            if (currentAlbum_ >= 0 && currentAlbum_ < (int)albums_.size() &&
+                currentTrack_ >= 0 && currentTrack_ < (int)albums_[currentAlbum_].tracks.size()) {
+                const Album& alb = albums_[currentAlbum_];
+                const Track& tr  = alb.tracks[currentTrack_];
+                // The disc prefix appears only when there IS more than one
+                // disc. On a single-disc record "D1" is noise that says
+                // nothing, and this bar has no room for a word that adds
+                // nothing. Decided from the album's own tracks, never stored.
+                int maxDisc = 0;
+                for (const Track& x : alb.tracks) maxDisc = std::max(maxDisc, x.discNumber);
+                if (maxDisc > 1 && tr.discNumber > 0)
+                    ord = "D" + std::to_string(tr.discNumber) + " \xC2\xB7 ";
+                ord += std::to_string(tr.trackNumber > 0 ? tr.trackNumber
+                                                         : currentTrack_ + 1);
+            }
+            const bool has = !ord.empty();
+            const std::string shown = has ? ord : "\xE2\x80\x94";   // em dash: nothing yet
+            const float sz = metrics_.text.title;
+            float w = canvas.textWidthStyled(shown, sz, FontStyle::Bold);
+            // Near end of the info cell, not its middle: it belongs beside the
+            // artwork it qualifies, and in the vertical layout that cell is
+            // wide enough that centring would strand it far from the thumb.
+            auto [sx, sy] = mapPoint(infoR.x + metrics_.space(SP_MD) + w * 0.5f,
+                                     infoR.y + infoR.h * 0.5f);
+            canvas.textStyled(shown, sx - w * 0.5f, sy - sz * 0.5f, sz,
+                              toColor(has ? CLR_TEXT_PRIMARY : CLR_TEXT_DIM),
+                              FontStyle::Bold);
         }
-
-        if (!barBVert) canvas.clearRotation();
 
         // Three buttons only — prev / play-stop / next, same combined
         // play-stop toggle. No pause: this user only ever
@@ -1963,71 +1988,104 @@ void PlayerWindow::drawFrame() {
             drawUiIcon(canvas, b.rc, b.icon, toColor(b.clr));
         }
 
-        if (!barBVert) canvas.setRotation(kQuarterTurn, bpx, bpy);
-
-        // Far end, minimal: elapsed/total time, then the DSP state tag,
-        // baseline-aligned and vertically centered in the bar. Hovering the
-        // tag swaps the whole cluster for the full signal-path readout
-        // (source format » DSP stage » output backend). '→' (U+2192) IS baked
-        // now (see refreshGlyphs), so swapping it in is a free choice
-        // rather than a missing glyph — '»' stays because a chevron reads as a
-        // separator at this size where an arrow reads as a claim of direction.
+        // ── Far end: the DSP state, then the clock, stacked and upright ──
+        // Three short lines rather than one long one, and not for style: at a
+        // bar thickness of space(130) the upright budget is 130 - 2*SP_MD =
+        // 92 units, which "2:34 / 3:14" does not fit and "2:34" does. The
+        // stack is what the measurement allows. It is used in BOTH
+        // orientations so the frame stays one layout instead of two.
         {
             // Reflects what the chain ACHIEVED (bpState_, set in onPlay), not
             // what the toggle requested — claiming BITPERFECT while silently
             // truncating would be exactly the dishonesty this badge exists to
             // prevent. Before playback starts bpState_ is Off, so fall back to
             // the toggle for the idle label.
-            const char* dsp;
+            const char* dsp;      // full form
+            const char* dspShort; // when 92 units will not take the full one
             ColorRef    dspClr;
             switch (bpState_) {
-            case BpState::Exact:     dsp = "BITPERFECT";     dspClr = CLR_ACCENT;   break;
+            case BpState::Exact:     dsp = "BITPERFECT";     dspShort = "EXACT";
+                                     dspClr = CLR_ACCENT;   break;
             // Asterisk, not a lie in either direction: exact up to the server.
-            case BpState::ViaServer: dsp = "BITPERFECT*";    dspClr = CLR_ACCENT;   break;
-            case BpState::Degraded:  dsp = "NOT BITPERFECT"; dspClr = CLR_WARNING;  break;
+            case BpState::ViaServer: dsp = "BITPERFECT*";    dspShort = "EXACT*";
+                                     dspClr = CLR_ACCENT;   break;
+            case BpState::Degraded:  dsp = "NOT BITPERFECT"; dspShort = "ALTERED";
+                                     dspClr = CLR_WARNING;  break;
             case BpState::Off:
             default:
-                dsp    = bitperfectMode_.load() && !isPlaying_ ? "BITPERFECT" : "REF EQ";
-                dspClr = bitperfectMode_.load() && !isPlaying_ ? CLR_ACCENT : CLR_TEXT_DIM;
+                dsp      = bitperfectMode_.load() && !isPlaying_ ? "BITPERFECT" : "REF EQ";
+                dspShort = bitperfectMode_.load() && !isPlaying_ ? "EXACT"      : "REF EQ";
+                dspClr   = bitperfectMode_.load() && !isPlaying_ ? CLR_ACCENT : CLR_TEXT_DIM;
                 break;
             }
-            // The outer margin must EXCEED the gap inside the cluster (the
-            // space(24) between clock and badge, below). At 16 it did not, so
-            // the reading and the state sat closer to the window edge than to
-            // each other and read as one run of text.
-            float rightEdge = tv.x + tv.w - metrics_.space(SP_LG);
-            float cy = tv.y + tv.h * 0.5f;
-            float tagW = canvas.textWidthStyled(dsp, metrics_.text.caption, FontStyle::Math);
 
-            // Hover hit rect always tracks the compact tag's home (with a
-            // little slop), so the hover state stays stable while the
-            // expanded readout is showing.
-            const float badgeSlop = metrics_.space(8.0f);
-            // Back to SCREEN coordinates: this one is a hit rect, and
-            // onMouseMove tests it against a real pointer position.
-            rcDspBadge_ = unauthored(rightEdge - tagW - badgeSlop, cy - metrics_.text.caption,
-                                     rightEdge + badgeSlop,        cy + metrics_.text.caption);
+            // Only ONE axis is constrained, and pretending otherwise would
+            // cost information for nothing. Upright text runs ACROSS the bar
+            // in the horizontal layout, so its room is the bar's thickness —
+            // 130 - 2*SP_MD = 92 units, which "NOT BITPERFECT" overruns and
+            // "ALTERED" does not. In the vertical layout the same text runs
+            // ALONG the bar, where there is room to spare and the full word
+            // costs nothing. So the short form answers a MEASURED overrun,
+            // never an orientation.
+            const float sidePad = metrics_.space(SP_MD);
+            const float capSz   = metrics_.text.caption;
+            const float secSz   = metrics_.text.secondary;
+            // The bar's THICKNESS, which is its width when it stands on the
+            // right and its height when it lies along the bottom. Taking t.w
+            // unconditionally is how the cluster first came out a full window
+            // wide in the vertical layout and landed on top of the buttons.
+            const float thickness = barBVert ? t.h : t.w;
+            const float hardCap = barBVert ? 0.0f : (thickness - sidePad * 2.0f);
+            const bool  fitsFull = hardCap <= 0.0f ||
+                canvas.textWidthStyled(dsp, capSz, FontStyle::Math) <= hardCap;
+            const char* tag = fitsFull ? dsp : dspShort;
 
-            // The badge no longer EXPANDS under the pointer. It used to
-            // unfurl the whole chain along the bar, which worked only while
-            // that text ran the bar's length — and only ever had room for a
-            // sentence. Touching it now opens the signal-chain page, which
-            // can say the whole thing; hover is just a cue that it is a button.
-            canvas.textStyled(dsp, rightEdge - tagW, cy - metrics_.text.caption * 0.5f,
-                              metrics_.text.caption,
-                              toColor(hoverDspBadge_ ? CLR_TEXT_PRIMARY : dspClr),
-                              FontStyle::Math);
+            char elapsedBuf[32], totalBuf[32];
+            snprintf(elapsedBuf, sizeof(elapsedBuf), "%d:%02d",
+                     seekPosMs_ / 60000, (seekPosMs_ % 60000) / 1000);
+            snprintf(totalBuf, sizeof(totalBuf), "%d:%02d",
+                     seekTotalMs_ / 60000, (seekTotalMs_ % 60000) / 1000);
 
-            char timeBuf[64];
-            snprintf(timeBuf, sizeof(timeBuf), "%d:%02d / %d:%02d",
-                    seekPosMs_ / 60000, (seekPosMs_ % 60000) / 1000,
-                    seekTotalMs_ / 60000, (seekTotalMs_ % 60000) / 1000);
-            float timeW = canvas.textWidthStyled(timeBuf, metrics_.text.secondary, FontStyle::Math);
-            canvas.textStyled(timeBuf, rightEdge - tagW - metrics_.space(24.0f) - timeW,
-                              cy - metrics_.text.secondary * 0.5f,
-                              metrics_.text.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Math);
+            const float lineGap = metrics_.space(SP_XS);
+            const float blockH  = capSz + lineGap + secSz + lineGap * 1.5f + capSz;
+            // The cell is as wide as its widest line and never narrower than
+            // the bar, so all three lines share one centre and the cluster
+            // still hugs the far end when a word runs long.
+            float cellW = std::max(canvas.textWidthStyled(tag, capSz, FontStyle::Math),
+                          std::max(canvas.textWidthStyled(elapsedBuf, secSz, FontStyle::Math),
+                                   canvas.textWidthStyled(totalBuf, capSz, FontStyle::Math)));
+            cellW = std::max(cellW, thickness - sidePad * 2.0f);
+
+            // Anchored where the wide-bar layout always put this cluster, then
+            // mapped to a screen point and drawn UNROTATED. In the horizontal
+            // layout the mapped point IS the bar's centre line; in the
+            // vertical one it is the far edge, so the cell hangs off it.
+            const float farEnd = tv.x + tv.w - metrics_.space(SP_LG);
+            auto [ax, ay] = mapPoint(farEnd, tv.y + tv.h * 0.5f);
+            // The old single line ENDED at farEnd, so under the turn it ran
+            // downward from the top edge. The stack keeps that: it hangs off
+            // the anchor in the horizontal layout instead of straddling it,
+            // which would push the first line into the window's edge.
+            const float cxCell = barBVert ? ax - cellW * 0.5f : ax;
+            const float blockTop = barBVert ? ay - blockH * 0.5f : ay;
+            float ly = blockTop;
+
+            auto line = [&](const char* str, float sz, ColorRef clr, FontStyle st) {
+                float w = canvas.textWidthStyled(str, sz, st);
+                canvas.textStyled(str, cxCell - w * 0.5f, ly, sz, toColor(clr), st);
+                ly += sz + lineGap;
+            };
+            // The hit rect covers the whole stack: the tag is the button, and
+            // a finger aiming at it should not have to miss the clock to hit
+            // it. Screen coordinates already — nothing here is rotated.
+            rcDspBadge_ = { (int)(cxCell - cellW * 0.5f), (int)(blockTop - lineGap),
+                            (int)(cxCell + cellW * 0.5f), (int)(blockTop + blockH + lineGap) };
+
+            line(tag, capSz, hoverDspBadge_ ? CLR_TEXT_PRIMARY : dspClr, FontStyle::Math);
+            ly += lineGap * 0.5f;
+            line(elapsedBuf, secSz, CLR_TEXT_SECONDARY, FontStyle::Math);
+            line(totalBuf,   capSz, CLR_TEXT_DIM,       FontStyle::Math);
         }
-        if (!barBVert) canvas.clearRotation();
     }
 
     // (No on-screen orientation toggle — Alt+L switches Horizontal/Vertical.)
