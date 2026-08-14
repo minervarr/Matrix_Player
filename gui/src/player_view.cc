@@ -2336,10 +2336,28 @@ void PlayerWindow::recalcLayout() {
     // Bitperfect-mismatch warning strip: an overlay along the bar's inner
     // edge. Doesn't reserve/shrink grid space — this is a rare, transient
     // event, not worth a permanent layout dependency.
+    //
+    // ALWAYS a wide, short strip along the bottom of the content area, in both
+    // orientations — and that is not a preference, it is what the drawing code
+    // has always assumed. drawFrame() sizes the warning icon as `w.h - 8` and
+    // then places the text to its right, which is only sane while the rect is
+    // wider than it is tall.
+    //
+    // It used to be orientation-dependent, and the horizontal branch produced
+    // a 45-px-WIDE column running the full height of the screen beside bar B.
+    // Three symptoms, one cause: the strip appeared down the right-hand edge; a
+    // ~700 px warning triangle was drawn because the icon takes its size from
+    // the rect's HEIGHT; and the message itself was pushed off the strip
+    // entirely by that icon, so the banner rendered with no text in it at all.
+    //
+    // Identical to the old VERTICAL branch, by construction rather than by
+    // coincidence: in the vertical layout rcGrid_.bottom IS rcBarB_.top, and
+    // rcGrid_'s side edges ARE bar B's. In the horizontal layout the same
+    // expression spans from bar A's inner edge to bar B's, which is the strip
+    // that has room for a sentence.
     int warnH = (int)metrics_.space(45.0f);
-    rcAudioNotice_ = barBVertical
-        ? LayoutRect{ rcBarB_.left, rcBarB_.top - warnH, rcBarB_.right, rcBarB_.top }
-        : LayoutRect{ rcBarB_.left - warnH, rcBarB_.top, rcBarB_.left, rcBarB_.bottom };
+    rcAudioNotice_ = { rcGrid_.left, rcGrid_.bottom - warnH,
+                       rcGrid_.right, rcGrid_.bottom };
 
     // Centre buttons: the app's primary interactive elements. Three of them,
     // prev / play-stop / next (no pause, no separate stop), centred on the
