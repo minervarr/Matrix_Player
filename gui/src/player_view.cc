@@ -4107,17 +4107,24 @@ void PlayerWindow::onAudioSettings() {
 #endif
 #endif
 
-    std::string backend = db_.loadSetting("audio_backend");
+    // The radio shows WHAT IS PLAYING, read straight off audioBackend_.
+    //
+    // It used to re-derive the answer from the saved "audio_backend" string,
+    // and that is a second source of truth for a question that already has
+    // one. The two disagreed in the case that matters most — a fresh install,
+    // where nothing is saved: no string matched, the loop fell through to
+    // index 0, and index 0 is ALWAYS USB Direct. Meanwhile create() defaults
+    // to ALSA on Linux, WASAPI on Windows and AAudio on Android, never to USB
+    // (probing for a DAC nobody plugged in makes a driver error the listener's
+    // first impression). So the panel claimed USB Direct while the music came
+    // out of the speakers.
+    //
+    // Found on a phone, but it was never Android's bug: a first-run Linux
+    // build says USB Direct and plays through ALSA in exactly the same way.
+    // The phone only made it audible.
     asBackendSelIdx_ = 0;
     for (int i = 0; i < (int)asBackendOptions_.size(); i++) {
-        AudioBackend b = asBackendOptions_[i];
-        if ((b == AudioBackend::Wasapi && backend == "wasapi") ||
-            (b == AudioBackend::Alsa   && backend == "alsa")   ||
-            (b == AudioBackend::Jack   && backend == "jack")   ||
-            (b == AudioBackend::AAudio && backend == "aaudio")) {
-            asBackendSelIdx_ = i;
-            break;
-        }
+        if (asBackendOptions_[i] == audioBackend_) { asBackendSelIdx_ = i; break; }
     }
 
     asHoverBackendRow_ = -1;
@@ -5915,7 +5922,12 @@ void PlayerWindow::onPlay(StartCause cause) {
         isPlaying_ = false;
         return;
     }
-    printf("[onPlay] USB streaming started, ring=%zu\n", output_->ringAvailable());
+    // Names the backend that actually started. It said "USB" unconditionally,
+    // which on a phone reads as confirmation that the USB path is running
+    // while the sound is coming out of the speakers — the same class of lie
+    // the backend radio was telling a few hundred lines up.
+    printf("[onPlay] %s streaming started, ring=%zu\n",
+           audioBackendLabel().c_str(), output_->ringAvailable());
     fflush(stdout);
 
     startGaplessCoordinator(callbackI32, capturedOutSr, capturedDacCh);
