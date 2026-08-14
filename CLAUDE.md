@@ -1025,10 +1025,11 @@ has always drawn its now-playing strip at.
 not intended.** `computeRailLayout()` places everything along the bar's long
 axis and maps to window rects in exactly one function; `rail_layout_test`
 asserts the two orientations are that rotation of each other rect by rect, so
-an edit that special-cases one of them fails the test. Bar B's drawing does the
-same thing at draw time — every line of its text is authored once for a *wide*
-bar and emitted under a −90° rotation when the layout is horizontal
-(`authored()`/`unauthored()` in `drawFrame()`).
+an edit that special-cases one of them fails the test. Bar B does the same at
+draw time — everything in it is LAID OUT once for a *wide* bar and mapped
+through `authored()` in `drawFrame()`. **What the turn no longer does is
+rotate glyphs:** it is a coordinate system for placement, and every string in
+bar B is emitted upright (see rule 4).
 
 Five things here are load-bearing:
 
@@ -1045,14 +1046,25 @@ Five things here are load-bearing:
    by `theme.hh`'s existing text ladder: PRIMARY 242, SECONDARY 170, DIM 128.
    That ladder is FULL: 128 is already the WCAG floor, so a fourth `S` has
    nowhere to go. Position is what teaches them; colour only confirms.
-4. **The letters are NOT rotated in the horizontal layout**, though everything
-   else in the frame is. A single capital reads the same upright either way.
-   Rotation is for text whose LENGTH runs along the bar — the AutoEQ profile
-   name, the now-playing title. `Canvas` honours `setRotation()` for text but
-   **not** for `image()`, so nothing in either bar may depend on a rotated
-   bitmap; the transport artwork is square and needs none. The three transport
-   buttons are drawn unrotated on purpose: a Prev triangle turned on its side
-   points up, which is a different instruction.
+4. **Text is turned only when its LENGTH runs along the bar** — today that is
+   the AutoEQ profile name in bar A, and nothing else. Bar A's initials never
+   rotated (a single capital reads the same either way), and since the bar B
+   pass **nothing in bar B does either**: the now-playing title, which was the
+   one long string there, is gone, and what replaced it is a track ORDINAL —
+   the same case as an initial. The state tag and the clock are short enough
+   to stand upright too, stacked in three lines.
+   That stack is a MEASUREMENT, not a preference: upright text in the
+   horizontal layout has the bar's thickness to live in, `130 − 2×SP_MD` =
+   **92 units**, which `2:34 / 3:14` overruns and `2:34` does not. For the
+   same reason the DSP tag carries a short form (`EXACT` / `EXACT*` /
+   `ALTERED`) chosen by measuring against that budget — never by orientation,
+   so a narrower screen serves itself and the vertical layout still shows the
+   full words.
+   `Canvas` honours `setRotation()` for text but **not** for `image()`, so
+   nothing in either bar may depend on a rotated bitmap; the transport artwork
+   is square and needs none. The three transport buttons are drawn unrotated
+   on purpose: a Prev triangle turned on its side points up, which is a
+   different instruction.
 5. **Overlays inside a bar must HIDE what they cover, not float over it.** The
    renderer emits every rect before every glyph, so a panel drawn last still
    comes out under text drawn earlier. Both the open search field and the
@@ -1063,6 +1075,75 @@ Five things here are load-bearing:
 The **simple variant** of each orientation (thumbnail + play button) is
 designed but deliberately not built — see
 `docs/superpowers/specs/2026-08-12-orientation-modes-design.md`.
+
+### Full-page scenes (`ContentOverlay` in `player_view.hh`)
+
+The content area has **four** occupants, and the difference between them is
+load-bearing rather than stylistic:
+
+| | Intercepts input | Reached by | Example |
+|---|---|---|---|
+| **Panel** (`activePanel_`) | **Yes — everything** | dispatchers at the top of every handler | Audio Settings |
+| **Section** (`navSection_`) | No | late `ptInRect` branches | Playlists |
+| **View** (`trackPanelOpen_`) | No | late branches; Escape / `goBack()` | the album view |
+| **Scene** (`overlay_`) | No | late branches; Escape / `goBack()` | fullscreen art, signal chain |
+
+The rule `settings_panels.hh` records is *panel for configuring, everything
+else for music*. Both scenes are for looking at music — and the signal-chain
+page exists to be read **while something is playing**, which a panel would make
+impossible by swallowing the space bar. One enum serves both, because they
+differ only in what they draw.
+
+Three things here will bite whoever adds the third scene:
+
+1. **A scene REPLACES the content; it never floats over it.** The renderer
+   records background images → the vector layer → foreground images → **glyphs
+   last** (`renderer.cc`). So a backdrop rect laid over the grid still comes out
+   *under* any `imageFg` art, and *under* text drawn earlier. Drawing the scene
+   instead of the grid removes the ordering problem entirely — the same "hide
+   it, don't float over it" rule bar A's search and AutoEQ list follow. An
+   earlier attempt at the artist photo as a floating overlay failed on exactly
+   this and is why `ArtWindow` was built.
+2. **The art scene owns its own texture.** `transportArtTex_` is baked to the
+   thumbnail's pixels and is unusable full size. The scene reuses
+   `ArtWindow::loadArtTexture()`'s recipe — `ImageFit::kContain` + `mips=false`
+   + a `floor()`ed 1:1 blit — so the CPU resamples once and no GPU filter ever
+   scales it. `releaseOverlayArtTexture()` clears the cache KEY with the handle;
+   `onSurfaceLost()` calls it and deliberately keeps `overlayArtPath_`, because
+   GPU state dies and CPU state survives.
+3. **`ArtWindow` still exists and is still right.** It is a second top-level
+   window for a second MONITOR, which is why the Android branch declines it and
+   why the thumbnail's touch used to vanish on a phone. It is now offered as
+   *Second screen* from inside the scene, gated on `ArtWindow::isSupported()` —
+   asked of that class rather than tested with an `#ifdef`, since the platform
+   answer belongs to the file that already has the branches.
+
+### The signal chain (`SignalChain` in `player_view.hh`, `drawSignalChain`)
+
+Touching the DSP tag in bar B opens a per-stage readout: SOURCE, DSP, OUTPUT.
+It replaced a hover expansion that could only ever hold one sentence.
+
+`chain_` is filled **once, in `onPlay()`**, where every fact is still in scope,
+and cleared in `onStop()` and at the top of `onPlay()` so it can never describe
+a track that stopped. Nothing is derived at draw time. Four rules:
+
+1. **Zero and empty mean "this backend does not know", and the page DROPS the
+   row.** `AudioOutput::getConfiguredBits()/wireFormat()/deviceName()` are
+   virtuals with neutral defaults for exactly this. A chain that overclaims is
+   the one failure this readout exists to prevent.
+2. **Every stage says what is NOT happening too.** "No resampling", "no
+   filters", "no dither" are answers, not omissions.
+3. **`Quant::Truncated` is not a fourth kind of dither — it is the absence of
+   one where bits are still dropped.** On the Reference-EQ fast path (rates
+   already match) the EQ snaps once to int32 and the OUTPUT ADAPTER narrows it
+   with a plain shift: AAudio's `>> 16`, ALSA's `S16_LE` branch, a USB endpoint
+   below 32. The page reports this in the warning colour. **The truncation
+   itself is untouched** — changing the audio path is a `dsp_null_test`-gated
+   decision, and this is a readout.
+4. **Declared vs actual is compared here for the first time.** The scan reads a
+   header, the decoder opens the stream, and nothing had ever checked they
+   agree — when they don't, every number the app shows about that track came
+   from the wrong one.
 
 ### Settings panels (`gui/src/panels/settings_panels.hh/.cc`)
 
@@ -1099,7 +1180,7 @@ whenever the look changes, not left to drift.
 | USB driver | libusb/libusbK | Best isochronous support cross-platform; libusbK (Zadig) only needed on Windows |
 | Audio stack | Bypassed entirely for the primary path | No WASAPI/PulseAudio mixer — raw USB isochronous to DAC |
 | Linux secondary outputs | ALSA + JACK2 (never pipewire-jack) | Mirrors WASAPI's role: a fallback when no DAC is plugged in, or for testing without hardware |
-| Album art (fullscreen) | Separate window (`ArtWindow`, both platforms) | Dual-monitor: art on one screen, controls on other |
+| Album art (fullscreen) | An in-app SCENE on every platform; `ArtWindow` is the opt-in *Second screen* | A phone has no second top-level window, so a second window cannot be the primary answer. Dual-monitor is still served — art on one screen, controls on the other — it is just no longer the only way |
 | Submodules | `audio_engine`, `vk_canvas`, `soxr`, `libjpeg-turbo` | dr_flac + sqlite3 vendored directly (single-header / amalgamation, no submodule needed) |
 | Build | CMake + Ninja | Clang (MSYS2 UCRT64, targeting `x86_64-w64-windows-gnu`) on Windows, GCC/Clang on Linux — no MSVC, no Visual Studio, no `.sln`/Makefiles |
 | `core/` | Zero OS headers (one PIMPL'd exception: FolderWatcher) | Portable app logic reusable without dragging in either platform's headers |
