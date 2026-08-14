@@ -1868,7 +1868,7 @@ void PlayerWindow::drawFrame() {
     if (!settingsOpen_ && overlay_ != ContentOverlay::None) {
         switch (overlay_) {
         case ContentOverlay::AlbumArt:    drawArtOverlay(canvas, rcGrid_); break;
-        case ContentOverlay::SignalChain: break;   // Phase 2
+        case ContentOverlay::SignalChain: drawSignalChain(canvas, rcGrid_); break;
         case ContentOverlay::None:        break;
         }
     }
@@ -2008,51 +2008,24 @@ void PlayerWindow::drawFrame() {
             rcDspBadge_ = unauthored(rightEdge - tagW - badgeSlop, cy - metrics_.text.caption,
                                      rightEdge + badgeSlop,        cy + metrics_.text.caption);
 
-            if (hoverDspBadge_) {
-                std::string src;
-                if (displayAlbum_ >= 0 && displayAlbum_ < (int)albums_.size() &&
-                    displayTrack_ >= 0 && displayTrack_ < (int)albums_[displayAlbum_].tracks.size()) {
-                    const Track& dt = albums_[displayAlbum_].tracks[displayTrack_];
-                    src = formatQualityText(dt.sampleRate, dt.bitDepth);
-                }
-                struct Seg { std::string text; ColorRef clr; };
-                std::vector<Seg> segs;
-                if (!src.empty()) {
-                    segs.push_back({src, CLR_TEXT_DIM});
-                    segs.push_back({" \xC2\xBB ", CLR_TEXT_DIM});
-                }
-                segs.push_back({dsp, dspClr});
-                segs.push_back({" \xC2\xBB ", CLR_TEXT_DIM});
-                segs.push_back({audioBackendLabel(), CLR_TEXT_DIM});
-                // The reason, in words. "Full transparency" means the user
-                // should never have to infer WHY the badge says what it says.
-                if (!bpDetail_.empty()) {
-                    segs.push_back({"  \xE2\x80\x94  ", CLR_TEXT_DIM});
-                    segs.push_back({bpDetail_, bpState_ == BpState::Degraded
-                                                   ? CLR_WARNING : CLR_TEXT_DIM});
-                }
+            // The badge no longer EXPANDS under the pointer. It used to
+            // unfurl the whole chain along the bar, which worked only while
+            // that text ran the bar's length — and only ever had room for a
+            // sentence. Touching it now opens the signal-chain page, which
+            // can say the whole thing; hover is just a cue that it is a button.
+            canvas.textStyled(dsp, rightEdge - tagW, cy - metrics_.text.caption * 0.5f,
+                              metrics_.text.caption,
+                              toColor(hoverDspBadge_ ? CLR_TEXT_PRIMARY : dspClr),
+                              FontStyle::Math);
 
-                float total = 0;
-                for (auto& s : segs) total += canvas.textWidthStyled(s.text, metrics_.text.caption, FontStyle::Math);
-                float sx = rightEdge - total;
-                float sy = cy - metrics_.text.caption * 0.5f;
-                for (auto& s : segs) {
-                    canvas.textStyled(s.text, sx, sy, metrics_.text.caption, toColor(s.clr), FontStyle::Math);
-                    sx += canvas.textWidthStyled(s.text, metrics_.text.caption, FontStyle::Math);
-                }
-            } else {
-                canvas.textStyled(dsp, rightEdge - tagW, cy - metrics_.text.caption * 0.5f,
-                                  metrics_.text.caption, toColor(dspClr), FontStyle::Math);
-
-                char timeBuf[64];
-                snprintf(timeBuf, sizeof(timeBuf), "%d:%02d / %d:%02d",
-                        seekPosMs_ / 60000, (seekPosMs_ % 60000) / 1000,
-                        seekTotalMs_ / 60000, (seekTotalMs_ % 60000) / 1000);
-                float timeW = canvas.textWidthStyled(timeBuf, metrics_.text.secondary, FontStyle::Math);
-                canvas.textStyled(timeBuf, rightEdge - tagW - metrics_.space(24.0f) - timeW,
-                                  cy - metrics_.text.secondary * 0.5f,
-                                  metrics_.text.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Math);
-            }
+            char timeBuf[64];
+            snprintf(timeBuf, sizeof(timeBuf), "%d:%02d / %d:%02d",
+                    seekPosMs_ / 60000, (seekPosMs_ % 60000) / 1000,
+                    seekTotalMs_ / 60000, (seekTotalMs_ % 60000) / 1000);
+            float timeW = canvas.textWidthStyled(timeBuf, metrics_.text.secondary, FontStyle::Math);
+            canvas.textStyled(timeBuf, rightEdge - tagW - metrics_.space(24.0f) - timeW,
+                              cy - metrics_.text.secondary * 0.5f,
+                              metrics_.text.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Math);
         }
         if (!barBVert) canvas.clearRotation();
     }
@@ -3144,6 +3117,8 @@ void PlayerWindow::onMouseMove(int x, int y) {
         bool h = rcOverlaySecondScreen_.right > rcOverlaySecondScreen_.left &&
                  ptInRect(rcOverlaySecondScreen_, x, y) != 0;
         if (h != hoverOverlaySecondScreen_) { hoverOverlaySecondScreen_ = h; invalidate(); }
+        bool hc = overlay_ == ContentOverlay::SignalChain && ptInRect(rcScClose_, x, y) != 0;
+        if (hc != hoverScClose_) { hoverScClose_ = hc; invalidate(); }
     }
 
     // Chip / suggestion hover. Both lists are small and only exist while the
@@ -3332,6 +3307,14 @@ void PlayerWindow::onLButtonDown(int x, int y) {
         return;
     }
 
+    // The DSP badge is a button now, not a hover target. Tested here, in bar
+    // B, so it stays reachable while a scene is open — including its own.
+    if (ptInRect(rcDspBadge_, x, y)) {
+        if (overlay_ == ContentOverlay::SignalChain) closeOverlay();
+        else { overlay_ = ContentOverlay::SignalChain; scScrollY_ = 0; invalidate(); }
+        return;
+    }
+
     // ── A full-page scene, while one is open ─────────────────────────────
     // Rect-gated to the content area and tested AFTER the transport, which is
     // the whole difference between a scene and a panel: the music stays under
@@ -3339,6 +3322,13 @@ void PlayerWindow::onLButtonDown(int x, int y) {
     // inside the area belongs to the scene, so nothing below can fire — the
     // grid and the album view are not even drawn.
     if (!settingsOpen_ && overlay_ != ContentOverlay::None && ptInRect(rcGrid_, x, y)) {
+        if (overlay_ == ContentOverlay::SignalChain) {
+            // A page of text, not a picture: it closes by its Close button,
+            // Escape or the back gesture, never by touching the words — a
+            // reader's finger lands on a page constantly.
+            if (ptInRect(rcScClose_, x, y)) closeOverlay();
+            return;
+        }
         if (overlay_ == ContentOverlay::AlbumArt &&
             rcOverlaySecondScreen_.right > rcOverlaySecondScreen_.left &&
             ptInRect(rcOverlaySecondScreen_, x, y)) {
@@ -3583,9 +3573,16 @@ void PlayerWindow::onMouseWheel(int x, int y, int delta) {
     // A scene owns the content area, so the wheel stops here rather than
     // scrolling a grid nobody can see — which would otherwise leave the
     // listener somewhere they never scrolled to when the scene closes.
-    // (The art scene has nothing to scroll; the signal-chain page will.)
-    if (!settingsOpen_ && overlay_ != ContentOverlay::None && ptInRect(rcGrid_, x, y))
+    if (!settingsOpen_ && overlay_ != ContentOverlay::None && ptInRect(rcGrid_, x, y)) {
+        if (overlay_ == ContentOverlay::SignalChain) {
+            // scContentH_ is measured by the draw; the clamp there heals a
+            // stale value in one frame (same contract as the album view).
+            const int viewH = rcGrid_.bottom - rcGrid_.top;
+            scScrollY_ = std::clamp(scScrollY_ - delta, 0, std::max(0, scContentH_ - viewH));
+            invalidate();
+        }
         return;
+    }
     if (trackPanelOpen_ && !settingsOpen_ && ptInRect(rcTrackPanel_, x, y)) {
         // The album view scrolls as one page; its content height is
         // measured by the draw block (albumViewContentH_).
@@ -5620,6 +5617,9 @@ void PlayerWindow::onPlay(StartCause cause) {
     // Likewise the achieved-state badge: it must never describe a past track.
     bpState_ = BpState::Off;
     bpDetail_.clear();
+    // Same rule, and it matters more here: a stale chain would keep a whole
+    // page of confident numbers about a track that stopped playing.
+    chain_ = SignalChain{};
     Track t;
     {
         std::lock_guard<std::mutex> lk(albumsMu_);
@@ -5828,6 +5828,53 @@ void PlayerWindow::onPlay(StartCause cause) {
         bpDetail_ = why;
         printf("[Audio] signal path: %s\n", bpDetail_.c_str());
         fflush(stdout);
+
+        // ── The same facts, kept instead of flattened into that sentence ──
+        // Everything here is READ, never derived: the source half from the
+        // decoder that opened the file, the declared half from the row the
+        // scan wrote, and the output half from what configure() negotiated.
+        chain_ = SignalChain{};
+        chain_.valid       = true;
+        chain_.codec       = active_->codecName();
+        chain_.srcRate     = active_->sampleRate();
+        chain_.srcBits     = fileBits;
+        chain_.srcChannels = active_->channels();
+        chain_.srcSubslotBytes = active_->subslotBytes();
+        chain_.srcIsFloat  = active_->isFloat();
+        chain_.srcIsDsd    = active_->isDsd();
+        if (currentAlbum_ >= 0 && currentAlbum_ < (int)albums_.size() &&
+            currentTrack_ >= 0 && currentTrack_ < (int)albums_[currentAlbum_].tracks.size()) {
+            const Track& t = albums_[currentAlbum_].tracks[currentTrack_];
+            chain_.declRate = t.sampleRate; chain_.declBits = t.bitDepth;
+            chain_.declChannels = t.channels;
+            chain_.fileSize = t.fileSize;   chain_.durationMs = t.durationMs;
+        }
+        chain_.bitperfect    = isBitperfect;
+        chain_.backend       = audioBackendLabel();
+        chain_.deviceName    = output_ ? output_->deviceName() : std::string();
+        chain_.wire          = output_ ? output_->wireFormat()  : std::string();
+        chain_.outRate       = outSr;
+        chain_.outChannels   = output_ ? output_->getConfiguredChannels() : 0;
+        chain_.outBits       = output_ ? output_->getConfiguredBits() : 0;
+        chain_.deviceMaxBits = deviceMaxBits;
+        // Bit-perfect clears the EQ outright (see below), so the DSP half is
+        // known here and is simply empty. The Reference-EQ path fills its own
+        // resample/dither/EQ fields further down, where those exist.
+        if (isBitperfect) chain_.quant = Quant::None;
+        // The profile is looked up rather than asked of EqManager, which
+        // retains only "is something loaded" — deliberately, since it is
+        // touched by the audio thread. eqCurrent_ is the same key the sidebar
+        // switcher and applyDeviceEq() both use.
+        if (!eqCurrent_.name.empty()) {
+            ensureEqProfiles();
+            if (const EqProfile* p = eqProfiles_.findByKey(eqCurrent_.name, eqCurrent_.source,
+                                                           eqCurrent_.form)) {
+                chain_.eqProfile     = p->name;
+                chain_.eqPreamp      = p->preamp;
+                chain_.eqFilterCount = (int)p->filters.size();
+                chain_.eqFilters     = p->filters;
+            }
+        }
     }
 
     int capturedOutSr  = outSr;
@@ -5878,6 +5925,34 @@ void PlayerWindow::onPlay(StartCause cause) {
 
     const bool needsResample = (capturedFileSr != capturedOutSr);
     const int  srcCh         = active_->channels();
+
+    // ── Record the chain, once, where every part of it is still in scope ──
+    // Reference-EQ path only; the bit-perfect branch fills its own copy above,
+    // because the two paths genuinely run different stages and a single shared
+    // "fill it in later" would have to guess which ran.
+    chain_.resampled = needsResample;
+    chain_.rsFrom    = capturedFileSr;
+    chain_.rsTo      = capturedOutSr;
+    // Not a label chosen here: soxr_quality_spec(SOXR_VHQ, 0) is what gets
+    // created below, and this says exactly that and nothing more.
+    chain_.rsQuality = needsResample ? "soxr VHQ (28-bit, ~140 dB SNR)" : nullptr;
+    // ditherAndQuantize() picks noise shaping at 16 bits and flat TPDF above,
+    // and dither.h bypasses both at >= 32. Mirrored, not re-decided — if that
+    // rule ever moves, this is a second place that has to move with it.
+    if (!needsResample) {
+        // Fast path: the EQ snaps once to int32 and writes. No dither stage
+        // runs here — but the OUTPUT ADAPTER still narrows int32 to whatever
+        // the device takes, with a plain shift and no dither. Below 32 bits
+        // that is a truncation, and it has to be said.
+        chain_.quant = (capturedBits > 0 && capturedBits < 32) ? Quant::Truncated
+                                                              : Quant::None;
+    }
+    else if (capturedBits >= 32)    chain_.quant = Quant::None;
+    else if (capturedBits == 16)    chain_.quant = Quant::NoiseShaped;
+    else                            chain_.quant = Quant::Tpdf;
+    chain_.quantFromBits = 32;              // the EQ's own working grid
+    chain_.quantToBits   = capturedBits;
+    chain_.eqActive      = eqManager_.isActive();
 
     // Pre-allocate buffers outside the lambda — never allocate on the audio thread.
     // kDecodeChunk is the decoder's typical output frame count per callback.
@@ -6025,6 +6100,7 @@ void PlayerWindow::onStop() {
     // Nothing is playing, so the badge falls back to showing the mode toggle.
     bpState_ = BpState::Off;
     bpDetail_.clear();
+    chain_ = SignalChain{};
 
     // Stop the sink BEFORE joining the decode threads — see onPlay() for why:
     // the decode thread is typically blocked inside output_->writeXBlocking(),
@@ -6547,6 +6623,197 @@ void PlayerWindow::ensureOverlayArtTexture(int boxW, int boxH) {
         overlayArtTexPath_ = overlayArtPath_;
         overlayArtBoxW_ = boxW; overlayArtBoxH_ = boxH;
     }
+}
+
+// ── The signal chain, in full ────────────────────────────────────────────────
+// This replaced a one-line readout that expanded under the pointer, which had
+// two problems: it could only ever hold a sentence, and once bar B's text
+// stopped rotating there was no line to expand into. A page can say what is
+// actually happening, stage by stage — including the stages that are NOT
+// running, because "no resampling" and "no dither" are the answers a listener
+// came here to read.
+//
+// Every value is read from chain_, which onPlay() filled where the facts were
+// still in scope. Nothing is recomputed here and nothing is guessed: a field
+// left at zero means the backend does not publish it, and the row is dropped
+// rather than filled with something plausible.
+void PlayerWindow::drawSignalChain(Canvas& canvas, const LayoutRect& area) {
+    LayoutRect content = panels::drawHeader(canvas, area, "Signal chain",
+                                            metrics_.scale, metrics_.text.header, rcScClose_);
+    Rect c = toRect(content);
+    canvas.setClip(c.x, c.y, c.w, c.h);
+
+    const float pad     = metrics_.space(SP_LG);
+    const float labelW  = metrics_.space(190.0f);
+    const float lineH   = metrics_.space(30.0f);
+    float y = c.y + pad - (float)scScrollY_;
+
+    auto section = [&](const char* title) {
+        y += metrics_.space(SP_MD);
+        canvas.textStyled(title, c.x + pad, y, metrics_.text.caption,
+                          toColor(CLR_TEXT_DIM), FontStyle::Bold);
+        y += lineH;
+    };
+    // label + value on one row; an empty label continues the previous one, so
+    // a stage's detail lines up under its own text rather than under its name.
+    auto row = [&](const std::string& label, const std::string& value, ColorRef clr) {
+        if (value.empty()) return;
+        if (!label.empty())
+            canvas.textStyled(label, c.x + pad, y, metrics_.text.body,
+                              toColor(CLR_TEXT_SECONDARY), FontStyle::Roman);
+        canvas.textStyled(value, c.x + pad + labelW, y, metrics_.text.body,
+                          toColor(clr), FontStyle::Roman);
+        y += lineH;
+    };
+    auto note = [&](const std::string& s, ColorRef clr) {
+        if (s.empty()) return;
+        canvas.textStyled(s, c.x + pad + labelW, y, metrics_.text.secondary,
+                          toColor(clr), FontStyle::Italic);
+        y += lineH;
+    };
+
+    const SignalChain& s = chain_;
+    if (!s.valid) {
+        canvas.textStyled("Nothing is playing.", c.x + pad, y, metrics_.text.body,
+                          toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        y += lineH;
+    } else {
+        auto fmtHz = [](int hz) {
+            // Grouped, because 192000 and 19200 are one glance apart otherwise.
+            std::string d = std::to_string(hz), out;
+            int n = 0;
+            for (int i = (int)d.size() - 1; i >= 0; i--) {
+                out.insert(out.begin(), d[i]);
+                if (++n % 3 == 0 && i > 0) out.insert(out.begin(), ' ');
+            }
+            return out + " Hz";
+        };
+
+        // ── SOURCE ──
+        section("SOURCE");
+        {
+            std::string line = s.codec.empty() ? "unknown container" : s.codec;
+            line += "  \xC2\xB7  " + fmtHz(s.srcRate);
+            if (s.srcIsDsd)        line += "  \xC2\xB7  1-bit DSD";
+            else if (s.srcIsFloat) line += "  \xC2\xB7  float32";
+            else if (s.srcBits > 0) line += "  \xC2\xB7  " + std::to_string(s.srcBits) + "-bit";
+            if (s.srcChannels > 0) line += "  \xC2\xB7  " + std::to_string(s.srcChannels) + " ch";
+            row("File", line, CLR_TEXT_PRIMARY);
+            // Bytes per sample ON THE WIRE is not the same number as the
+            // significant bits, and the gap between them is real: 24 bits in a
+            // 4-byte slot wastes a quarter of the bus and is not 32-bit audio.
+            if (s.srcSubslotBytes > 0 && s.srcBits > 0 &&
+                s.srcSubslotBytes * 8 != s.srcBits)
+                note(std::to_string(s.srcBits) + " significant bits in a " +
+                     std::to_string(s.srcSubslotBytes) + "-byte sample", CLR_TEXT_DIM);
+            // Average rate, derived here because nothing stores it. Honest
+            // about being an average: a VBR MP3 has no single bitrate.
+            if (s.fileSize > 0 && s.durationMs > 0) {
+                long long kbps = s.fileSize * 8 / s.durationMs;
+                row("Average rate", std::to_string(kbps) + " kbps", CLR_TEXT_PRIMARY);
+            }
+            // The comparison nothing has ever made. The library row and the
+            // decoder can disagree — the scan reads a header, the decoder opens
+            // the stream — and when they do, every number the app shows about
+            // that track came from the wrong one.
+            std::string mismatch;
+            if (s.declRate > 0 && s.declRate != s.srcRate)
+                mismatch = "the library says " + fmtHz(s.declRate);
+            else if (s.declBits > 0 && s.srcBits > 0 && s.declBits != s.srcBits)
+                mismatch = "the library says " + std::to_string(s.declBits) + "-bit";
+            else if (s.declChannels > 0 && s.declChannels != s.srcChannels)
+                mismatch = "the library says " + std::to_string(s.declChannels) + " ch";
+            if (!mismatch.empty())
+                note("Scanned metadata disagrees: " + mismatch, CLR_WARNING);
+        }
+
+        // ── DSP ──
+        section("DSP");
+        if (s.bitperfect) {
+            row("Mode", "Bit-perfect \xE2\x80\x94 no processing", CLR_ACCENT);
+            note("EQ, resampling and dither are all bypassed by design.", CLR_TEXT_DIM);
+        } else {
+            row("Mode", "Reference EQ", CLR_TEXT_PRIMARY);
+            if (s.eqActive && !s.eqProfile.empty()) {
+                std::string hdr = s.eqProfile;
+                char buf[64];
+                snprintf(buf, sizeof(buf), "  \xC2\xB7  preamp %+.1f dB  \xC2\xB7  %d biquads",
+                         s.eqPreamp, s.eqFilterCount);
+                row("AutoEQ", hdr + buf, CLR_TEXT_PRIMARY);
+                // The filters themselves. This is the one part of the page long
+                // enough to need the scroll, and it is the point of the page:
+                // "EQ is on" says nothing about what the EQ is DOING.
+                for (const EqFilter& f : s.eqFilters) {
+                    char fb[128];
+                    snprintf(fb, sizeof(fb), "%-4s %8.0f Hz  %+5.1f dB  Q %.2f",
+                             f.type.c_str(), f.fc, f.gain, f.q);
+                    canvas.textStyled(fb, c.x + pad + labelW + metrics_.space(SP_MD), y,
+                                      metrics_.text.secondary, toColor(CLR_TEXT_DIM),
+                                      FontStyle::Math);
+                    y += metrics_.space(24.0f);
+                }
+                y += metrics_.space(SP_XS);
+                note("64-bit double precision, no FMA contraction.", CLR_TEXT_DIM);
+            } else {
+                row("AutoEQ", "none \xE2\x80\x94 no filters applied", CLR_TEXT_DIM);
+            }
+            if (s.resampled)
+                row("Resampling", fmtHz(s.rsFrom) + " \xE2\x86\x92 " + fmtHz(s.rsTo) + "  \xC2\xB7  " +
+                                  (s.rsQuality ? s.rsQuality : ""), CLR_TEXT_PRIMARY);
+            else
+                row("Resampling", "none \xE2\x80\x94 the device runs the file's own rate",
+                    CLR_TEXT_DIM);
+            switch (s.quant) {
+            case Quant::NoiseShaped:
+                row("Quantization", std::to_string(s.quantFromBits) + " \xE2\x86\x92 " +
+                        std::to_string(s.quantToBits) + "-bit  \xC2\xB7  TPDF dither, noise-shaped",
+                    CLR_TEXT_PRIMARY);
+                break;
+            case Quant::Tpdf:
+                row("Quantization", std::to_string(s.quantFromBits) + " \xE2\x86\x92 " +
+                        std::to_string(s.quantToBits) + "-bit  \xC2\xB7  flat TPDF dither",
+                    CLR_TEXT_PRIMARY);
+                break;
+            case Quant::Truncated:
+                row("Quantization", std::to_string(s.quantFromBits) + " \xE2\x86\x92 " +
+                        std::to_string(s.quantToBits) + "-bit  \xC2\xB7  truncated, no dither",
+                    CLR_WARNING);
+                note("The EQ snaps once to 32-bit and the output narrows it with a "
+                     "plain shift.", CLR_WARNING);
+                break;
+            case Quant::None:
+                row("Quantization", "one rounded snap to 32-bit, no dither needed",
+                    CLR_TEXT_DIM);
+                break;
+            }
+        }
+
+        // ── OUTPUT ──
+        section("OUTPUT");
+        {
+            std::string line = s.backend;
+            if (s.outRate > 0)     line += "  \xC2\xB7  " + fmtHz(s.outRate);
+            if (s.outBits > 0)     line += "  \xC2\xB7  " + std::to_string(s.outBits) + "-bit";
+            if (s.outChannels > 0) line += "  \xC2\xB7  " + std::to_string(s.outChannels) + " ch";
+            row("Backend", line, CLR_TEXT_PRIMARY);
+            row("Device", s.deviceName, CLR_TEXT_PRIMARY);
+            row("Wire format", s.wire, CLR_TEXT_PRIMARY);
+            // The badge's own sentence, in the one place with room for it.
+            if (!bpDetail_.empty())
+                note(bpDetail_, bpState_ == BpState::Degraded ? CLR_WARNING : CLR_TEXT_DIM);
+        }
+    }
+
+    canvas.clearClip();
+    scContentH_ = (int)(y + scScrollY_ - c.y + pad);
+    // Same self-healing clamp the album view uses, and for the same reason:
+    // the height is measured BY the draw, so recalcLayout() only ever sees the
+    // previous frame's value.
+    const int viewH  = content.bottom - content.top;
+    const int capped = (int)clampScroll((float)scScrollY_, (float)scContentH_, (float)viewH);
+    if (capped != scScrollY_) { scScrollY_ = capped; markDirty(); }
+
+    panels::drawButton(canvas, rcScClose_, "Close", hoverScClose_, metrics_.text.body);
 }
 
 void PlayerWindow::drawArtOverlay(Canvas& canvas, const LayoutRect& area) {

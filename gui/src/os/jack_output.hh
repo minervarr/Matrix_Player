@@ -34,6 +34,15 @@ public:
     void close() override;
     int  getConfiguredRate()     const override { return sink_.activeFormat().sampleRate; }
     int  getConfiguredChannels() const override { return channels_; }
+    // JACK is float32 end to end, which is why BpState::ViaServer exists: our
+    // samples reach jackd intact, and the SERVER owns the final conversion to
+    // the device. 32 here describes our side of that boundary, not the card's.
+    int  getConfiguredBits() const override {
+        return sink_.activeFormat().sampleRate > 0 ? 32 : 0;
+    }
+    std::string wireFormat() const override {
+        return sink_.activeFormat().sampleRate > 0 ? "float32 to jackd" : std::string();
+    }
 
     // AudioOutput's defaults for all six of these are no-ops (audio_output.h:32-50),
     // which silently disabled the app's smoothness machinery on JACK: no

@@ -35,6 +35,19 @@ public:
     virtual void close() = 0;
     virtual int  getConfiguredRate()     const = 0;
     virtual int  getConfiguredChannels() const = 0;
+    // The rest of what was NEGOTIATED, for the signal-chain readout.
+    //
+    // Zero and empty mean "this backend does not know", and the readout OMITS
+    // the row rather than filling it in. That is the whole point of the
+    // neutral default: a chain that claims a wire format it never checked is
+    // worse than one that admits the gap, and this app's badge exists
+    // precisely to not overclaim. Backends that do know (ALSA and AAudio both
+    // hold a whole ae::AudioFormat already) override them.
+    virtual int  getConfiguredBits() const { return 0; }
+    virtual std::string wireFormat()  const { return {}; }
+    // The device actually in use, in words a listener would recognise. Not the
+    // key getActiveDeviceKey() builds, which is for the EQ assignment table.
+    virtual std::string deviceName()  const { return {}; }
     virtual size_t ringAvailable() const { return 0; }
     // Milliseconds of audio accepted by this output but not yet rendered by the
     // device (ring buffer + any in-flight/device queue). Lets the caller report
@@ -83,6 +96,19 @@ public:
     void close()  override {}
     int  getConfiguredRate()     const override { return d_.getConfiguredRate(); }
     int  getConfiguredChannels() const override { return d_.getConfiguredChannels(); }
+    // The driver has known all of this since parseDescriptors(); it simply had
+    // no way out through this interface. The wire format is expressed as the
+    // significant bits inside the SUBSLOT, because that pair is the whole
+    // story on a UAC endpoint (24 significant bits in a 4-byte slot is a
+    // different thing from 32, and the difference is audible to nobody but
+    // matters to anyone reading this page).
+    int  getConfiguredBits() const override { return d_.getConfiguredBitDepth(); }
+    std::string wireFormat() const override {
+        const int b = d_.getConfiguredBitDepth(), sub = d_.getConfiguredSubslotSize();
+        if (b <= 0 || sub <= 0) return {};
+        return std::to_string(b) + "-bit in " + std::to_string(sub) + "-byte slot";
+    }
+    std::string deviceName() const override { return d_.getDeviceInfo(); }
     size_t ringAvailable() const override { return d_.ringAvailable(); }
     int  pendingPlaybackMs() const override { return d_.getPendingPlaybackMs(); }
 

@@ -42,6 +42,18 @@ public:
     void close() override;
     int  getConfiguredRate()     const override { return fmt_.sampleRate; }
     int  getConfiguredChannels() const override { return fmt_.channels; }
+    // fmt_ has carried these since configure() negotiated them; only the two
+    // above were ever published. The wire format is what the header comment at
+    // the top of this file already names (S32_LE / S24_3LE / S16_LE), derived
+    // from the negotiated depth rather than restated as a second truth.
+    int  getConfiguredBits() const override { return fmt_.bitDepth; }
+    std::string wireFormat() const override {
+        if (fmt_.subslotBytes <= 0) return {};
+        if (fmt_.isFloat)           return "FLOAT_LE";
+        if (fmt_.bitDepth == 24 && fmt_.subslotBytes == 3) return "S24_3LE";
+        return "S" + std::to_string(fmt_.bitDepth) + "_LE";
+    }
+    std::string deviceName() const override { return deviceId_; }
 
     // Same six AudioOutput no-ops JackOutput had to implement (audio_output.h:32-50).
     // The device buffer is this backend's only cushion, so these report on it

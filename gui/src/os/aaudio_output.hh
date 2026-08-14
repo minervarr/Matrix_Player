@@ -35,6 +35,16 @@ public:
 
     int  getConfiguredRate()     const override { return fmt_.sampleRate; }
     int  getConfiguredChannels() const override { return fmt_.channels; }
+    // Always 16-bit PCM_I16 — see this file's header comment. Stated rather
+    // than left at the neutral default precisely because it is the fact that
+    // makes the readout say "truncated" instead of claiming bit-perfect.
+    int  getConfiguredBits() const override { return fmt_.bitDepth; }
+    std::string wireFormat() const override {
+        return fmt_.subslotBytes > 0 ? "PCM_I16" : std::string();
+    }
+    // Deliberately none: AAudio owns the route and moves it when headphones
+    // are plugged in, so any name this returned would be a name the app
+    // cannot keep true.
 
     std::string lastError() const override { return lastError_; }
 

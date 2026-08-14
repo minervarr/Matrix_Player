@@ -32,6 +32,20 @@ public:
     int64_t totalFrames()   const { return totalFrames_; }
     int  bitsPerSample() const { return bitsPerSample_; }
 
+    // What the MAGIC BYTES said this file is — "FLAC", "WAV", "MP3", "DSD",
+    // or empty when nothing is open. Never the extension: open() has always
+    // chosen the decoder by content, which is the only reason an MP3 misnamed
+    // .flac plays at all. The label was already computed and then thrown
+    // away, printed only on the failure path.
+    const std::string& codecName() const { return codecName_; }
+    // The rest of the format the decoder actually reported. ae::AudioFormat
+    // carries these and open() used to drop them on the floor; the signal
+    // chain readout is the first thing that needs them, and inventing them at
+    // the UI would be a guess dressed as a fact.
+    int  subslotBytes()  const { return subslotBytes_; }
+    bool isFloat()       const { return isFloat_; }
+    bool isDsd()         const { return isDsd_; }
+
     // Start decode loop on a background thread, calling cb with PCM chunks.
     void startAsync(PcmCallback cb);
     // Bit-perfect decode loop: emits left-justified int32 chunks (see PcmS32Callback).
@@ -58,6 +72,10 @@ private:
     int channels_      = 0;
     int64_t totalFrames_   = 0;
     int bitsPerSample_ = 0;
+    std::string codecName_;
+    int  subslotBytes_ = 0;
+    bool isFloat_      = false;
+    bool isDsd_        = false;
 
     std::thread              thread_;
     std::atomic<bool>        running_{false};

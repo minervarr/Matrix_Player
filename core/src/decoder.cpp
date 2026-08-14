@@ -188,6 +188,9 @@ bool Decoder::open(const std::string& path) {
         channels_      = (int)impl_->wav.channels;
         totalFrames_   = (int64_t)impl_->wav.totalPCMFrameCount;
         bitsPerSample_ = (int)impl_->wav.bitsPerSample;
+        codecName_     = "WAV";
+        subslotBytes_  = bitsPerSample_ / 8;
+        isFloat_       = (impl_->wav.translatedFormatTag == DR_WAVE_FORMAT_IEEE_FLOAT);
         return true;
     }
 
@@ -238,6 +241,12 @@ bool Decoder::open(const std::string& path) {
     sampleRate_    = impl_->fmt.sampleRate;
     channels_      = impl_->fmt.channels;
     bitsPerSample_ = impl_->fmt.bitDepth;
+    // Kept rather than dropped: `want` is what the magic bytes said, and the
+    // three format flags are what the decoder itself reported.
+    codecName_     = want ? want : "";
+    subslotBytes_  = impl_->fmt.subslotBytes;
+    isFloat_       = impl_->fmt.isFloat;
+    isDsd_         = impl_->fmt.isDsd;
     // ae::Decoder reports duration, not a frame count; the app wants frames.
     int64_t ms = impl_->dec->durationMs();
     totalFrames_ = (ms > 0 && sampleRate_ > 0) ? ms * sampleRate_ / 1000 : 0;
@@ -268,6 +277,9 @@ void Decoder::close() {
     channels_ = 0;
     totalFrames_ = 0;
     bitsPerSample_ = 0;
+    codecName_.clear();
+    subslotBytes_ = 0;
+    isFloat_ = isDsd_ = false;
 }
 
 void Decoder::startAsync(PcmCallback cb) {

@@ -38,6 +38,28 @@ public:
     void close()  override;
     int  getConfiguredRate()     const override { return rate_; }
     int  getConfiguredChannels() const override { return channels_; }
+    // wireFormat_ is what configure() actually negotiated with the endpoint,
+    // as opposed to getMaxBitDepth(), which is a CAPABILITY probe and answers
+    // a different question. The signal-chain page needs the former.
+    int getConfiguredBits() const override {
+        switch (wireFormat_) {
+        case WireFormat::Int16:     return 16;
+        case WireFormat::Int24In32: return 24;
+        case WireFormat::Int32:
+        case WireFormat::Float32:
+        default:                    return 32;
+        }
+    }
+    std::string wireFormat() const override {
+        if (rate_ <= 0) return {};
+        switch (wireFormat_) {
+        case WireFormat::Float32:   return "float32";
+        case WireFormat::Int32:     return "S32";
+        case WireFormat::Int24In32: return "S24 in 32-bit slot";
+        case WireFormat::Int16:     return "S16";
+        }
+        return {};
+    }
     size_t ringAvailable() const override;
     int  pendingPlaybackMs() const override;
     bool waitForData(int minSamples, int timeoutMs) override;

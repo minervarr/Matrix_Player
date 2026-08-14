@@ -757,6 +757,11 @@ private:
     bool hoverOverlayClose_ = false, hoverOverlaySecondScreen_ = false;
     void openArtOverlay(const std::string& path, const std::string& label,
                         const std::string& subLabel);
+    void drawSignalChain(Canvas& canvas, const LayoutRect& area);
+    int  scScrollY_ = 0;
+    int  scContentH_ = 0;      // measured by the draw, like albumViewContentH_
+    LayoutRect rcScClose_{};
+    bool hoverScClose_ = false;
     void closeOverlay();
     void drawArtOverlay(Canvas& canvas, const LayoutRect& area);
     void ensureOverlayArtTexture(int boxW, int boxH);
@@ -1083,7 +1088,53 @@ private:
         Degraded    // something was genuinely lost (depth truncated)
     };
     BpState     bpState_ = BpState::Off;
-    std::string bpDetail_;      // one line, shown in the hover readout
+    std::string bpDetail_;      // one line, shown on the badge's page
+
+    // ── The signal chain, as DATA ────────────────────────────────────────
+    // Everything below was already computed, and then thrown away: the codec
+    // label was a local printed only on failure, the resampler's rates and
+    // quality lived in a lambda that dies with the callback, the target depth
+    // was a local called capturedBits, and the whole chain was summarised into
+    // one 192-char sentence. A page cannot show what nobody kept.
+    //
+    // Nothing here is DERIVED at draw time and nothing is guessed. A field
+    // left at its zero means "not known", and the page omits that row rather
+    // than inventing a plausible value — the same rule the badge follows, for
+    // the same reason: this readout exists to be trusted about loss.
+    // Truncated is not a fourth flavour of dither — it is the ABSENCE of one
+    // at a stage that still drops bits. The Reference-EQ fast path (rates
+    // already match) quantizes once to int32 and hands that to the output
+    // adapter, which narrows it with a plain shift: AAudio's `>> 16`, ALSA's
+    // S16_LE branch, a USB endpoint configured below 32. That is a real loss
+    // and the page has to name it; saying "one rounded snap, no dither" there
+    // reads as "nothing was lost", which is the exact overclaim this readout
+    // exists to prevent.
+    enum class Quant { None, Tpdf, NoiseShaped, Truncated };
+    struct SignalChain {
+        bool valid = false;          // false until a track actually starts
+        // SOURCE — what the DECODER opened, plus what the SCAN had recorded.
+        // Both, because they can disagree (nothing has ever compared them),
+        // and a library that says 44.1 about a 48 kHz file is worth saying.
+        std::string codec;
+        int srcRate = 0, srcBits = 0, srcChannels = 0, srcSubslotBytes = 0;
+        bool srcIsFloat = false, srcIsDsd = false;
+        int declRate = 0, declBits = 0, declChannels = 0;
+        int64_t fileSize = 0;  int durationMs = 0;
+        // DSP
+        bool bitperfect = false;
+        bool eqActive   = false;
+        std::string eqProfile;
+        double eqPreamp = 0.0;
+        int    eqFilterCount = 0;
+        std::vector<EqFilter> eqFilters;
+        bool resampled = false;  int rsFrom = 0, rsTo = 0;
+        const char* rsQuality = nullptr;
+        Quant quant = Quant::None;  int quantFromBits = 0, quantToBits = 0;
+        // OUTPUT
+        std::string backend, deviceName, wire;
+        int outRate = 0, outBits = 0, outChannels = 0, deviceMaxBits = 0;
+    };
+    SignalChain chain_;
 #ifdef _WIN32
     std::wstring     wasapiDeviceId_;
     WasapiMode       wasapiMode_    = WasapiMode::Shared;
