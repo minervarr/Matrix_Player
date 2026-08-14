@@ -188,7 +188,14 @@ target_link_libraries(matrix_player_android
     # FLAC decoder, and a per-device decode path would make "bit-perfect
     # everywhere" depend on the handset. AMediaCodec would be a second,
     # divergent decode path for formats already covered.
-    ae_core ae_usb usb1 ae_flac ae_aaudio
+    # ae_mp3 belongs here for the same reason ae_flac does: this engine decodes
+    # with its own vendored libraries on EVERY platform, so an MP3 sounds the
+    # same on the phone as on the desktop. Its source is a download rather than
+    # a submodule (libmpg123 has no official Git repo), so a tree that never ran
+    # `python3 initialize_files.py` simply has no ae_mp3 target and core/'s own
+    # CMake degrades to "will not decode MP3" with a warning. That is what this
+    # build did until 2026-08-14 — on BOTH platforms, not just here.
+    ae_core ae_usb usb1 ae_flac ae_mp3 ae_aaudio
     matrix_core
     sqlite3
     soxr

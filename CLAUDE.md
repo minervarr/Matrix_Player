@@ -434,6 +434,22 @@ Both were latent bugs nobody had hit before this toolchain existed to compile th
 **Both platforms**: submodules first if empty —
 `git submodule update --init --recursive`.
 
+**And then, once**, or the player silently cannot decode MP3:
+
+```bash
+cd framework/audio_engine && python3 initialize_files.py
+```
+
+libmpg123 has no official Git repository (upstream is SVN + release tarballs),
+so audio_engine downloads the pinned tarball instead of vendoring it. Without
+that step `ae_mp3` is never defined, `core/CMakeLists.txt` degrades
+`MATRIX_HAVE_MP3` to off, and **every** platform builds a player that opens no
+MP3 at all. It is a `message(WARNING)` in a wall of configure output —
+`third_party/mpg123 not fetched` followed by `will not decode MP3` — which is
+exactly how it went unnoticed until an MP3 misnamed `.flac` surfaced it on a
+phone. The generated `config.h` for both linux and android IS committed; only
+the sources are fetched.
+
 **Tests**: there is no ctest/gtest framework, but there are eight assert-based
 pure-logic test executables, built **Debug-only** (see the bottom of
 `gui/CMakeLists.txt` and of `core/CMakeLists.txt`) and run directly. Convention
@@ -636,6 +652,16 @@ Two mechanisms in `db.cpp`, with a strict division of labour:
   nothing parses ID3 yet. `topGenres()` excludes empty genres rather than
   bucketing them as "Unknown", which would otherwise top the chart meaning
   nothing.
+- **The scanner indexes `.flac` and `.wav` and nothing else**
+  (`core/src/library.cpp:488`), so a correctly named `.mp3` is never
+  discovered — the same shape as the `.dsf`/`.dff` gap in the TODOs. The
+  DECODER handles MP3 (verified on a phone: libmpg123 opens it and reports its
+  rate), and the only reason an MP3 can reach it today is being misnamed
+  `.flac`, which is how this was found. Fixing the extension list alone is not
+  enough: `scanLibraryParallel` picks its metadata parser with
+  `files[j].flac ? quickParseFLAC : quickParseWAV`, and there is no ID3 reader
+  for a third branch to call — an indexed MP3 would list as its filename with
+  no duration.
 - `topAlbums`/`topArtists`/`topGenres` need the join to `tracks`, so a track
   deleted from the library drops out of *those* rankings. Its plays survive
   everywhere else, including `topTracks` — that is the one place a deletion
