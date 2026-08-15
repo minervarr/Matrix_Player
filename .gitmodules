@@ -10,3 +10,6 @@
 [submodule "libs/thirdparty/libjpeg-turbo"]
 	path = third_party/libjpeg-turbo
 	url = https://github.com/libjpeg-turbo/libjpeg-turbo.git
+[submodule "libs/firstparty/app_shell"]
+	path = framework/app_shell
+	url = https://github.com/minervarr/App_shell.git

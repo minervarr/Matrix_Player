@@ -1,7 +1,0 @@
-# LaTeX build products. The .tex is the source; build it with:
-#   pdflatex app_shell.tex   (twice, for the table of contents)
-*.pdf
-*.aux
-*.log
-*.out
-*.toc

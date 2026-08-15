@@ -203,8 +203,9 @@ matrix_player/
       hotkey_ids.hh, art_view.hh/.cc, audio_output.h, log_util.h
     CMakeLists.txt              — builds the matrix_player executable, per-platform source/lib lists
   framework/
-    app_shell/                  — FIRST-PARTY: the application shell. The Host/AppView
-                                  seam and all THREE of its implementations (Win32,
+    app_shell/                  — git submodule (github.com/minervarr/App_shell).
+                                  The application shell: the Host/AppView seam
+                                  and all THREE of its implementations (Win32,
                                   Wayland, Android), plus app_paths, ui_metrics,
                                   ui_orientation, layout_rect and color. Lifted out of
                                   gui/ so a second app can LINK the desktop+Android
@@ -213,14 +214,12 @@ matrix_player/
                                   Read its own CLAUDE.md first. Targets: app_shell
                                   (portable, links nothing) plus exactly one of
                                   app_shell_win32 / app_shell_wayland /
-                                  app_shell_android. A PLAIN DIRECTORY in this
-                                  repository and deliberately not a submodule: it is
-                                  first-party, it changes in step with the app that
-                                  uses it, and a fourth clone step buys nothing. A
-                                  second app copies the folder or points its own
-                                  add_subdirectory() at this one. `audio_engine` and
-                                  `vk_canvas` remain submodules because they were
-                                  developed independently and predate this repo
+                                  app_shell_android. First-party, same as
+                                  `audio_engine` and `vk_canvas` — a second app adds
+                                  it the same way: `git submodule add` the repo, then
+                                  `add_subdirectory()` it. Committed and pushed with
+                                  its OWN `git_wrapper`, from inside the submodule,
+                                  before the parent repo's own push — see its CLAUDE.md
     audio_engine/               — git submodule (github.com/minervarr/audio_engine).
                                   core/ (pure C++) + backends/{usb,alsa,jack,wasapi,flac,mp3,dsd}/
                                   + api/ (C ABI, not used by this app — we link the C++ targets
@@ -1227,7 +1226,7 @@ to the device, looking at music belongs to the app.**
 | Audio stack | Bypassed entirely for the primary path | No WASAPI/PulseAudio mixer — raw USB isochronous to DAC |
 | Linux secondary outputs | ALSA + JACK2 (never pipewire-jack) | Mirrors WASAPI's role: a fallback when no DAC is plugged in, or for testing without hardware |
 | Album art (fullscreen) | An in-app SCENE on every platform; `ArtWindow` is the opt-in *Second screen* | A phone has no second top-level window, so a second window cannot be the primary answer. Dual-monitor is still served — art on one screen, controls on the other — it is just no longer the only way |
-| Submodules | `audio_engine`, `vk_canvas`, `soxr`, `libjpeg-turbo` | dr_flac + sqlite3 vendored directly (single-header / amalgamation, no submodule needed) |
+| Submodules | `app_shell`, `audio_engine`, `vk_canvas`, `soxr`, `libjpeg-turbo` | dr_flac + sqlite3 vendored directly (single-header / amalgamation, no submodule needed) |
 | Build | CMake + Ninja | Clang (MSYS2 UCRT64, targeting `x86_64-w64-windows-gnu`) on Windows, GCC/Clang on Linux — no MSVC, no Visual Studio, no `.sln`/Makefiles |
 | `core/` | Zero OS headers (one PIMPL'd exception: FolderWatcher) | Portable app logic reusable without dragging in either platform's headers |
 
