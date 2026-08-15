@@ -33,7 +33,7 @@ pkgname=('matrix-player-universal'
          'matrix-player-v3'
          'matrix-player-v4'
          'matrix-player-zen4')
-pkgver=0.1.0.r104.g9571fea
+pkgver=0.1.0.r146.g9fe2ee7
 pkgrel=1
 arch=('x86_64')
 url='https://github.com/minervarr/Matrix_Player'
@@ -45,14 +45,23 @@ license=('custom')
 # stands between a downloader and a missing-library error at first launch.
 depends=('alsa-lib' 'jack2' 'vulkan-icd-loader' 'wayland' 'libxkbcommon' 'gcc-libs')
 
-# shader-slang-bin: slangc is REQUIRED at build time — no .spv is committed,
-#   and VceShaders.cmake otherwise falls back to a hardcoded Windows path.
+# slangc is REQUIRED at build time — no .spv is committed, and VceShaders.cmake
+#   otherwise falls back to a hardcoded Windows path — but deliberately NOT a
+#   named makedepend: shader-slang-bin (prebuilt) and shader-slang-git (built
+#   from source) both provide it, at two different install paths, and neither
+#   `provides=` the other's package name (shader-slang-git provides only
+#   `shader-slang`) — so pacman's own dependency resolution cannot treat them
+#   as interchangeable, and this makepkg's version rejects the `pkgA|pkgB`
+#   alternative syntax outright. prepare() checks for a real slangc binary
+#   itself (via _slangc(), which also does the checking at build time) and
+#   fails with an actionable message if neither package is installed.
 # nasm: libjpeg-turbo's SIMD. Without it JPEG artwork decode silently drops to
-#   the C paths.
+#   the C paths — makepkg's sandboxed build has no way to install it lazily,
+#   so it stays a hard makedepend even though a manual `build.sh` tolerates
+#   its absence.
 # wayland-protocols + wayland: wayland-scanner generates the xdg-shell and
 #   idle-inhibit glue from the system protocol XML at build time.
-makedepends=('git' 'cmake' 'ninja' 'shader-slang-bin' 'vulkan-headers'
-             'wayland-protocols' 'nasm')
+makedepends=('git' 'cmake' 'ninja' 'vulkan-headers' 'wayland-protocols' 'nasm')
 
 options=('!lto' '!debug')
 
@@ -89,7 +98,17 @@ _arch_level() {
     esac
 }
 
-_slangc() { command -v slangc || echo /opt/shader-slang-bin/bin/slangc; }
+# PATH first, then both package layouts: shader-slang-bin installs to
+# /opt/shader-slang-bin/bin/, shader-slang-git to /opt/shader-slang/bin/ —
+# neither puts slangc on PATH. First existing candidate wins; if the
+# makedepend above is satisfied, one of the three always resolves.
+_slangc() {
+    command -v slangc && return
+    for _c in /opt/shader-slang-bin/bin/slangc /opt/shader-slang/bin/slangc; do
+        [[ -x "$_c" ]] && { echo "$_c"; return; }
+    done
+    echo /opt/shader-slang-bin/bin/slangc   # last resort: matches the error makepkg would show
+}
 
 pkgver() {
     cd "${srcdir}/matrix_player"
@@ -121,6 +140,15 @@ prepare() {
         return 1
     }
     ln -sfn "${_mpg}" framework/audio_engine/third_party/mpg123
+
+    # Neither shader-slang-bin nor shader-slang-git is a declared makedepend
+    # (see the comment above makedepends= for why) — so this is the actual
+    # enforcement, failing here rather than four times over inside build().
+    [[ -x "$(_slangc)" ]] || {
+        echo "==> ERROR: no slangc found. Install shader-slang-bin or shader-slang-git" >&2
+        echo "    (checked PATH, /opt/shader-slang-bin/bin, /opt/shader-slang/bin)" >&2
+        return 1
+    }
 }
 
 build() {
