@@ -282,6 +282,11 @@ set(MATRIX_STATE_HOME "" CACHE STRING
     "Directory name under $HOME for the DB/log/atlas cache (e.g. .matrix_player). Empty = write beside the executable.")
 set(APP_SHELL_APP_NAME  "matrix_player"    CACHE STRING "" FORCE)
 set(APP_SHELL_WIN_CLASS "MatrixPlayerMain" CACHE STRING "" FORCE)
+# The two the USER sees. Both desktop hosts used to have these written into
+# them as literals; naming them here is what let a second consumer stop
+# announcing itself as this one.
+set(APP_SHELL_WINDOW_TITLE "Matrix Player" CACHE STRING "" FORCE)
+set(APP_SHELL_APP_ID       "matrix-player" CACHE STRING "" FORCE)
 if(MATRIX_STATE_HOME)
     set(APP_SHELL_STATE_HOME "${MATRIX_STATE_HOME}" CACHE STRING "" FORCE)
 endif()
