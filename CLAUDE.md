@@ -1168,6 +1168,55 @@ whenever the look changes, not left to drift.
 
 ---
 
+## Optional capabilities (the rule that keeps three platforms one app)
+
+Some things one platform can do and another cannot: a second top-level window,
+a physical keyboard, a cursor, a resizable window. The danger is not the gap —
+it is designing against the RICHEST platform and discovering the gap later, at
+which point the poorest platform needs an interface of its own and there are
+two apps again. That is exactly how the fullscreen artwork went wrong once:
+`ArtWindow` (the ceiling) was built first, the in-window scene (the floor)
+arrived afterwards and came out second-class.
+
+Four rules, in the order they bind:
+
+1. **Design the FLOOR, not the ceiling.** What the app *is* must work on the
+   poorest device; everything above that is an enhancement that changes
+   nothing. Fullscreen art in the app's own window IS the feature. If second
+   monitors vanished from every platform tomorrow, nothing would be missing.
+2. **An optional capability may not occupy layout.** It is offered through a
+   GESTURE, or an entry in a menu that already exists — never through a control
+   that reserves surface. A button that exists here and not there is two
+   layouts to keep, plus a hole on the platform that lacks it. A swipe costs no
+   pixels: where the capability exists it does something, where it does not the
+   screen is IDENTICAL. This is the rule that turns "it's different on Android"
+   into "a gesture that doesn't answer", and it is the one that was broken —
+   `drawArtOverlay()` used to draw a `Second screen` button.
+3. **The capability is ASKED, never inferred from the platform.** The question
+   goes to the class that already owns the platform branches
+   (`ArtWindow::isSupported()`), so `player_view.cc` keeps not knowing Android
+   exists. This alone is NOT enough — it was already true when the design split
+   in two — which is why it is rule 3 and not rule 1.
+4. **Every `Host` states what it can do, out loud, at startup.** One
+   `[Caps]` line in the log (`logCapabilities()`, `player_view.cc`). Costs
+   nothing and turns "it surprised me on the phone" into something read before
+   the code is written.
+
+The consequence worth naming: **Android stops being a case.** There is no
+"whatever Android can manage". There is one app, plus a gesture that on some
+devices also ejects the artwork into a window of its own. The day a foldable
+supports it, `ArtWindow::isSupported()` returns true there and the gesture
+starts answering — with no change to the interface.
+
+**Where the rule does NOT reach**, stated so nobody assumes it does: a
+capability that genuinely changes what there is to CONFIGURE. The Audio
+Settings device list has no phone equivalent, because on Android the system
+owns the route; that page really is different. The boundary is the one
+`settings_panels.hh` already draws for another reason — **configuring belongs
+to the device, looking at music belongs to the app.**
+
+---
+
 ## Design decisions (don't change without reason)
 
 | Decision | Choice | Why |

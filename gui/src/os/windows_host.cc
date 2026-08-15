@@ -357,7 +357,21 @@ private:
             return 0;
 
         case WM_LBUTTONDOWN:
-            owner_->onLButtonDown(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+            dragStartX_ = GET_X_LPARAM(lp); dragStartY_ = GET_Y_LPARAM(lp);
+            dragValid_  = true;
+            owner_->onLButtonDown(dragStartX_, dragStartY_);
+            return 0;
+
+        // A drag that has ended. The 4 px here only means "the pointer really
+        // moved"; whether the stroke was long enough to MEAN something is the
+        // app's question (PlayerWindow::onDragEnd), not this file's.
+        case WM_LBUTTONUP:
+            if (dragValid_) {
+                const int dx = GET_X_LPARAM(lp) - dragStartX_;
+                const int dy = GET_Y_LPARAM(lp) - dragStartY_;
+                dragValid_ = false;
+                if (std::abs(dx) > 4 || std::abs(dy) > 4) owner_->onDragEnd(dx, dy);
+            }
             return 0;
 
         case WM_LBUTTONDBLCLK:
@@ -416,6 +430,9 @@ private:
     }
 
     PlayerWindow* owner_ = nullptr;
+    // Where the button went down, for onDragEnd() — see WM_LBUTTONDOWN/UP.
+    int       dragStartX_ = 0, dragStartY_ = 0;
+    bool      dragValid_  = false;
     HWND      hwnd_  = nullptr;
     HINSTANCE hInst_ = nullptr;
     HMONITOR  lastMonitor_ = nullptr;

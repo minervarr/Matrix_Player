@@ -142,6 +142,18 @@ public:
     void onLButtonDown(int x, int y);
     void onLButtonDblClk(int x, int y);
     void onMouseWheel(int x, int y, int delta);
+    // A DRAG that has ended: the pointer (or the finger) travelled dx,dy with
+    // the button held and has just been released. Reported by the host rather
+    // than reconstructed here, because each platform already tracks it — Win32
+    // from WM_LBUTTONDOWN/UP, Wayland from PointerAction::Down/Up, Android
+    // from its own 24 px slop, which is also why the SLOP stays a host
+    // property and the MEANING stays an app one. A tap never reaches this.
+    //
+    // It exists for the fullscreen artwork: a swipe ejects the picture onto a
+    // second screen where a second screen can exist, and does nothing where it
+    // cannot — a gesture costs no layout, which is the whole point (see
+    // "Optional capabilities" in CLAUDE.md).
+    void onDragEnd(int dx, int dy);
     // The two extra buttons on the side of a mouse (Win32 XBUTTON1/XBUTTON2,
     // evdev BTN_SIDE/BTN_EXTRA). Back is Escape by another name — the same
     // one-step-out that a browser's back button performs; forward re-enters
@@ -746,17 +758,19 @@ private:
     // because the two answer different questions: the scene follows the
     // MUSIC (transportArtTexPath_), and the album view follows the BROWSER.
     std::string overlayArtPath_;
-    std::string overlayArtLabel_, overlayArtSubLabel_;
     // Its own texture, at its own size. transportArtTex_ is baked to the
     // thumbnail's pixels (see loadTransportArtTexture) and is unusable here.
     TextureHandle overlayArtTex_ = kInvalidTexture;
     int overlayArtTexW_ = 0, overlayArtTexH_ = 0;
     std::string overlayArtTexPath_;   // cache key; cleared with the handle
     int overlayArtBoxW_ = 0, overlayArtBoxH_ = 0;   // box it was resampled for
-    LayoutRect rcOverlayClose_{}, rcOverlaySecondScreen_{}, rcOverlayImage_{};
-    bool hoverOverlayClose_ = false, hoverOverlaySecondScreen_ = false;
-    void openArtOverlay(const std::string& path, const std::string& label,
-                        const std::string& subLabel);
+    LayoutRect rcOverlayImage_{};
+    void openArtOverlay(const std::string& path);
+    // The swipe's destination: ArtWindow, where one can exist. Returns false
+    // where it cannot, and the gesture then does nothing at all — no message,
+    // no empty state, no reserved pixel. See CLAUDE.md, "Optional
+    // capabilities".
+    bool ejectArtToSecondScreen();
     void drawSignalChain(Canvas& canvas, const LayoutRect& area);
     int  scScrollY_ = 0;
     int  scContentH_ = 0;      // measured by the draw, like albumViewContentH_

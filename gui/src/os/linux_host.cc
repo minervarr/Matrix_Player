@@ -204,6 +204,8 @@ public:
                 lastDownTime_ = now;
                 lastDownX_ = (int)e.x; lastDownY_ = (int)e.y;
                 lastDownValid_ = true;
+                dragStartX_ = (int)e.x; dragStartY_ = (int)e.y;
+                dragValid_  = true;
                 if (isDouble) {
                     owner_->onLButtonDblClk((int)e.x, (int)e.y);
                     lastDownValid_ = false;  // don't chain a third click into another dblclk
@@ -214,6 +216,17 @@ public:
                 owner_->onNavBack();      // the mouse's back button — see input.hh
             } else if (e.button == 4) {
                 owner_->onNavForward();
+            }
+            break;
+        case PointerAction::Up:
+            // A drag that has ended. The 4 px is only "the pointer actually
+            // moved" — whether the stroke was long enough to MEAN anything is
+            // the app's question, not this file's (PlayerWindow::onDragEnd).
+            if (e.button == 0 && dragValid_) {
+                const int dx = (int)e.x - dragStartX_, dy = (int)e.y - dragStartY_;
+                dragValid_ = false;
+                if (std::abs(dx) > 4 || std::abs(dy) > 4)
+                    owner_->onDragEnd(dx, dy);
             }
             break;
         case PointerAction::Leave:
@@ -289,6 +302,11 @@ private:
     bool lastDownValid_ = false;
     std::chrono::steady_clock::time_point lastDownTime_;
     int lastDownX_ = 0, lastDownY_ = 0;
+    // Where the button went down, for onDragEnd(). Separate from lastDown*_
+    // above: those belong to the double-click heuristic and are cleared by it,
+    // and a drag must not be cancelled by a preceding double-click.
+    int  dragStartX_ = 0, dragStartY_ = 0;
+    bool dragValid_  = false;
 };
 
 std::unique_ptr<Host> make_host() {

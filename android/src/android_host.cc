@@ -387,9 +387,18 @@ void AndroidHost::onTouchMove(float x, float y) {
 }
 
 void AndroidHost::onTouchUp(float x, float y, bool cancelled) {
-    const bool wasTap = touchDown_ && !touchDragging_ && !cancelled;
+    const bool wasTap  = touchDown_ && !touchDragging_ && !cancelled;
+    const bool wasDrag = touchDown_ &&  touchDragging_ && !cancelled;
+    const float dx = x - touchStartX_, dy = y - touchStartY_;
     touchDown_     = false;
     touchDragging_ = false;
+
+    // A finished drag is reported as such, in addition to the wheel deltas it
+    // already produced along the way. The app uses it for gestures that are
+    // about the WHOLE stroke rather than its increments (the artwork's swipe);
+    // the slop that decided this was a drag at all stays here, because it is a
+    // property of a touch screen and not of the app.
+    if (wasDrag) owner_->onDragEnd((int)dx, (int)dy);
     if (!wasTap) return;
 
     // A press is delivered at RELEASE, not at contact. That is what makes a
