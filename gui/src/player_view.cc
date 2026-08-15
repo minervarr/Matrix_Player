@@ -1968,34 +1968,105 @@ void PlayerWindow::drawFrame() {
             return { bpx + (ay - bpy), bpy - (ax - bpx) };
         };
         {
+            // WHAT kind of record, and only then WHICH track of it. A "1" on a
+            // single is a number that was never in doubt — every single has
+            // one track, so the digit carries no information at all, while the
+            // word does: a one-track release can equally be a single, a remix
+            // or a live recording, and nothing else on this bar says which.
+            //
+            // So the type is always shown, and the number joins it only when
+            // there IS more than one track to be at. Same rule as the disc
+            // prefix below, one level up.
+            const char* type      = nullptr;
+            const char* typeShort = nullptr;
             std::string ord;
             if (currentAlbum_ >= 0 && currentAlbum_ < (int)albums_.size() &&
                 currentTrack_ >= 0 && currentTrack_ < (int)albums_[currentAlbum_].tracks.size()) {
                 const Album& alb = albums_[currentAlbum_];
                 const Track& tr  = alb.tracks[currentTrack_];
-                // The disc prefix appears only when there IS more than one
-                // disc. On a single-disc record "D1" is noise that says
-                // nothing, and this bar has no room for a word that adds
-                // nothing. Decided from the album's own tracks, never stored.
-                int maxDisc = 0;
-                for (const Track& x : alb.tracks) maxDisc = std::max(maxDisc, x.discNumber);
-                if (maxDisc > 1 && tr.discNumber > 0)
-                    ord = "D" + std::to_string(tr.discNumber) + " \xC2\xB7 ";
-                ord += std::to_string(tr.trackNumber > 0 ? tr.trackNumber
-                                                         : currentTrack_ + 1);
+                switch (alb.releaseType) {
+                case Album::ReleaseType::Ep:          type = "EP";     typeShort = "EP";    break;
+                case Album::ReleaseType::Single:      type = "SINGLE"; typeShort = "SINGLE";break;
+                case Album::ReleaseType::Remix:       type = "REMIX";  typeShort = "REMIX"; break;
+                // The only one long enough to need a short form at all, and it
+                // is chosen by MEASURING below, never by orientation.
+                case Album::ReleaseType::Compilation: type = "COMPILATION"; typeShort = "COMP."; break;
+                case Album::ReleaseType::Live:        type = "LIVE";   typeShort = "LIVE";  break;
+                case Album::ReleaseType::Album:
+                default:                              type = "ALBUM";  typeShort = "ALBUM"; break;
+                }
+                if (alb.tracks.size() > 1) {
+                    // The disc prefix appears only when there IS more than one
+                    // disc. On a single-disc record "D1" is noise that says
+                    // nothing, and this bar has no room for a word that adds
+                    // nothing. Decided from the album's own tracks, never stored.
+                    int maxDisc = 0;
+                    for (const Track& x : alb.tracks) maxDisc = std::max(maxDisc, x.discNumber);
+                    if (maxDisc > 1 && tr.discNumber > 0)
+                        ord = "D" + std::to_string(tr.discNumber) + " \xC2\xB7 ";
+                    ord += std::to_string(tr.trackNumber > 0 ? tr.trackNumber
+                                                             : currentTrack_ + 1);
+                }
             }
-            const bool has = !ord.empty();
-            const std::string shown = has ? ord : "\xE2\x80\x94";   // em dash: nothing yet
-            const float sz = metrics_.text.title;
-            float w = canvas.textWidthStyled(shown, sz, FontStyle::Bold);
-            // Near end of the info cell, not its middle: it belongs beside the
-            // artwork it qualifies, and in the vertical layout that cell is
-            // wide enough that centring would strand it far from the thumb.
-            auto [sx, sy] = mapPoint(infoR.x + metrics_.space(SP_MD) + w * 0.5f,
+
+            const float typeSz = metrics_.text.caption;
+            const float ordSz  = metrics_.text.body;
+            // Same budget, same reasoning as the DSP tag: upright text runs
+            // ACROSS the bar in the horizontal layout, so its room is the
+            // bar's thickness less the padding either side. Vertical is
+            // unconstrained, and the full word costs nothing there.
+            const float sidePad   = metrics_.space(SP_MD);
+            const float thickness = barBVert ? t.h : t.w;
+            const float hardCap   = barBVert ? 0.0f : (thickness - sidePad * 2.0f);
+            const char* typeTag = nullptr;
+            if (type) {
+                typeTag = (hardCap <= 0.0f ||
+                           canvas.textWidthStyled(type, typeSz, FontStyle::Math) <= hardCap)
+                          ? type : typeShort;
+            }
+
+            // ONE line, because this label is the mirror of the DSP tag at the
+            // other end and a two-line stack here would out-weigh it. Nothing
+            // playing: an em dash, which says "no track" without pretending to
+            // be a type.
+            const bool hasOrd = !ord.empty();
+            std::string oneLine;
+            if (!typeTag)      oneLine = "\xE2\x80\x94";
+            else if (!hasOrd)  oneLine = typeTag;
+            else               oneLine = std::string(typeTag) + "  \xC2\xB7  " + ord;
+
+            const float lineGap = metrics_.space(SP_XS);
+            // ... unless it does not fit ACROSS the bar, which is the only
+            // constrained axis. "COMPILATION · D2 · 7" overruns 92 units and
+            // then falls back to two lines rather than being cut. Measured,
+            // exactly like the tag's own short form — never by orientation.
+            const bool twoLines = hardCap > 0.0f && hasOrd && typeTag &&
+                canvas.textWidthStyled(oneLine, typeSz, FontStyle::Math) > hardCap;
+
+            const float blockH = twoLines ? (typeSz + lineGap + ordSz) : typeSz;
+            float cellW = twoLines
+                ? std::max(canvas.textWidthStyled(typeTag, typeSz, FontStyle::Math),
+                           canvas.textWidthStyled(ord, ordSz, FontStyle::Bold))
+                : canvas.textWidthStyled(oneLine, typeSz, FontStyle::Math);
+
+            // Anchored beside the artwork it qualifies — the near end of its
+            // cell, not the middle of it. That is what mirrors the DSP tag,
+            // which sits against the clock at its own end.
+            auto [sx, sy] = mapPoint(infoR.x + cellW * 0.5f,
                                      infoR.y + infoR.h * 0.5f);
-            canvas.textStyled(shown, sx - w * 0.5f, sy - sz * 0.5f, sz,
-                              toColor(has ? CLR_TEXT_PRIMARY : CLR_TEXT_DIM),
-                              FontStyle::Bold);
+            float ly = sy - blockH * 0.5f;
+            auto line = [&](const std::string& str, float sz, ColorRef clr, FontStyle st) {
+                float w = canvas.textWidthStyled(str, sz, st);
+                canvas.textStyled(str, sx - w * 0.5f, ly, sz, toColor(clr), st);
+                ly += sz + lineGap;
+            };
+            if (twoLines) {
+                line(typeTag, typeSz, CLR_TEXT_DIM,     FontStyle::Math);
+                line(ord,     ordSz,  CLR_TEXT_PRIMARY, FontStyle::Bold);
+            } else {
+                line(oneLine, typeSz, hasOrd ? CLR_TEXT_SECONDARY : CLR_TEXT_DIM,
+                     FontStyle::Math);
+            }
         }
 
         // Three buttons only — prev / play-stop / next, same combined
@@ -2077,44 +2148,46 @@ void PlayerWindow::drawFrame() {
                      seekTotalMs_ / 60000, (seekTotalMs_ % 60000) / 1000);
 
             const float lineGap = metrics_.space(SP_XS);
-            const float blockH  = capSz + lineGap + secSz + lineGap * 1.5f + capSz;
-            // The cell is as wide as its widest line and never narrower than
-            // the bar, so all three lines share one centre and the cluster
-            // still hugs the far end when a word runs long.
-            float cellW = std::max(canvas.textWidthStyled(tag, capSz, FontStyle::Math),
-                          std::max(canvas.textWidthStyled(elapsedBuf, secSz, FontStyle::Math),
-                                   canvas.textWidthStyled(totalBuf, capSz, FontStyle::Math)));
-            cellW = std::max(cellW, thickness - sidePad * 2.0f);
 
-            // Anchored where the wide-bar layout always put this cluster, then
-            // mapped to a screen point and drawn UNROTATED. In the horizontal
-            // layout the mapped point IS the bar's centre line; in the
-            // vertical one it is the far edge, so the cell hangs off it.
-            const float farEnd = tv.x + tv.w - metrics_.space(SP_LG);
-            auto [ax, ay] = mapPoint(farEnd, tv.y + tv.h * 0.5f);
-            // The old single line ENDED at farEnd, so under the turn it ran
-            // downward from the top edge. The stack keeps that: it hangs off
-            // the anchor in the horizontal layout instead of straddling it,
-            // which would push the first line into the window's edge.
-            const float cxCell = barBVert ? ax - cellW * 0.5f : ax;
-            const float blockTop = barBVert ? ay - blockH * 0.5f : ay;
-            float ly = blockTop;
+            // ── The clock: the artwork's mirror, at the far end ───────────
+            // Two rows, centred in a cell the artwork's own size and the same
+            // distance from its end of the bar. That pairing is the whole
+            // balance: a square of 92 on one side, two rows of type on the
+            // other, each with its label facing the centre.
+            {
+                const Rect cR = authored(rcTransportClock_);
+                const float blockH = secSz + lineGap + capSz;
+                auto [cx, cy] = mapPoint(cR.x + cR.w * 0.5f, cR.y + cR.h * 0.5f);
+                float ly = cy - blockH * 0.5f;
+                auto line = [&](const char* str, float sz, ColorRef clr) {
+                    float w = canvas.textWidthStyled(str, sz, FontStyle::Math);
+                    canvas.textStyled(str, cx - w * 0.5f, ly, sz, toColor(clr),
+                                      FontStyle::Math);
+                    ly += sz + lineGap;
+                };
+                line(elapsedBuf, secSz, CLR_TEXT_SECONDARY);
+                line(totalBuf,   capSz, CLR_TEXT_DIM);
+            }
 
-            auto line = [&](const char* str, float sz, ColorRef clr, FontStyle st) {
-                float w = canvas.textWidthStyled(str, sz, st);
-                canvas.textStyled(str, cxCell - w * 0.5f, ly, sz, toColor(clr), st);
-                ly += sz + lineGap;
-            };
-            // The hit rect covers the whole stack: the tag is the button, and
-            // a finger aiming at it should not have to miss the clock to hit
-            // it. Screen coordinates already — nothing here is rotated.
-            rcDspBadge_ = { (int)(cxCell - cellW * 0.5f), (int)(blockTop - lineGap),
-                            (int)(cxCell + cellW * 0.5f), (int)(blockTop + blockH + lineGap) };
-
-            line(tag, capSz, hoverDspBadge_ ? CLR_TEXT_PRIMARY : dspClr, FontStyle::Math);
-            ly += lineGap * 0.5f;
-            line(elapsedBuf, secSz, CLR_TEXT_SECONDARY, FontStyle::Math);
-            line(totalBuf,   capSz, CLR_TEXT_DIM,       FontStyle::Math);
+            // ── The DSP tag: the type label's mirror, and the button ──────
+            // Against the clock at its own end, one line, on the bar's centre
+            // line. It used to sit on top of the clock as one three-line
+            // column hugging the far edge, which left the whole span between
+            // the Next button and that column empty — the bar read heavy on
+            // one side. rcDspBadge_ is now geometry (see recalcLayout) and
+            // covers the tag alone, so the clock is no longer a button.
+            {
+                const Rect bR = authored(rcDspBadge_);
+                const float w = canvas.textWidthStyled(tag, capSz, FontStyle::Math);
+                // The FAR end of its cell — up against the clock — which is
+                // what makes it the mirror of the type label sitting against
+                // the artwork.
+                auto [bx, by] = mapPoint(bR.x + bR.w - w * 0.5f,
+                                         bR.y + bR.h * 0.5f);
+                canvas.textStyled(tag, bx - w * 0.5f, by - capSz * 0.5f, capSz,
+                                  toColor(hoverDspBadge_ ? CLR_TEXT_PRIMARY : dspClr),
+                                  FontStyle::Math);
+            }
         }
     }
 
@@ -2442,7 +2515,8 @@ void PlayerWindow::recalcLayout() {
     int btnSize   = (int)metrics_.space(71.0f);
     int btnGap    = (int)metrics_.space(SP_MD);
     int totalBtnL = btnSize * 3 + btnGap * 2;
-    int btnA      = barBLong / 2 - totalBtnL / 2;
+    const int btnA0 = barBLong / 2 - totalBtnL / 2;   // kept: btnA is walked below
+    int btnA      = btnA0;
     int btnC      = (barThickness - btnSize) / 2;
     rcBtnPrev_ = barB(btnA, btnA + btnSize, btnC, btnC + btnSize);
     btnA += btnSize + btnGap;
@@ -2450,13 +2524,55 @@ void PlayerWindow::recalcLayout() {
     btnA += btnSize + btnGap;
     rcBtnNext_ = barB(btnA, btnA + btnSize, btnC, btnC + btnSize);
 
-    // Now-playing text runs from the art thumb to ~2cm (76px @96dpi) short of
-    // the first button. In Horizontal it is drawn rotated to read bottom-to-
-    // top; the rect is the same span either way.
+    // ── The bar is a BALANCE, and the play button is its fulcrum ─────────
+    //
+    // Each half is built the same way — a MASS and a LABEL — and the labels
+    // face the centre:
+    //
+    //   [pad][artwork][gap][TYPE]   <  ▮  >   [MODE][gap][clock][pad]
+    //          mass         label              label        mass
+    //
+    // The artwork (a 92 square) and the clock (two rows) are the two masses;
+    // the release type and the DSP state are the two labels. Both ends use
+    // the SAME pad and the SAME mass-to-label gap, so the symmetry does not
+    // depend on how long any word happens to be.
+    //
+    // It is ONE composition, not one per orientation: authored() maps it, and
+    // in the narrow bar the two halves simply run along the bar's length —
+    // artwork above its type, clock below its tag — which is how the cluster
+    // already stacked. Bar B is still laid out once, for a wide bar.
+    //
+    // The cross axis is the bar's own centre line for EVERYTHING here. The
+    // info cell used to open with space(26) against a space(19) bottom, which
+    // put its centre at 68.5 of a 130 bar instead of 65 — every label centred
+    // inside it therefore sat 3.5 units low. That was a leftover from when
+    // this cell held a title AND an artist with their own leading, and it is
+    // a bug, not a decision. Do not put it back.
+    // The label cells run from their mass to the buttons, less one pad. They
+    // used to stop space(76) short, which in the NARROW bar left a cell of 28
+    // units for a word 60 wide: the text was anchored at the cell's far edge
+    // and drawn straight out of it, so the DSP tag rendered a few pixels below
+    // its own hit rect and a finger on the word missed the button. Nothing
+    // moves on screen by widening it — both labels are anchored at the ends
+    // that face their masses — but the rect now contains what it draws.
+    const int mirrorGap = tPad;
     const int infoA0 = tPad + artSide + tPad;
-    const int infoA1 = (barBLong / 2 - totalBtnL / 2) - (int)metrics_.space(76.0f);
-    rcTransportInfo_ = barB(infoA0, infoA1, (int)metrics_.space(26.0f),
-                            barThickness - tPad);
+    const int infoA1 = btnA0 - mirrorGap;
+    rcTransportInfo_ = barB(infoA0, infoA1, tPad, barThickness - tPad);
+
+    // The clock's cell is exactly the artwork's size, because it is the mirror
+    // of the artwork: same span, same distance from its own end of the bar.
+    const int clockA1 = barBLong - tPad;
+    const int clockA0 = clockA1 - artSide;
+    rcTransportClock_ = barB(clockA0, clockA1, tPad, barThickness - tPad);
+
+    // The DSP tag: the mirror of the type label, and a button. It is computed
+    // HERE rather than in the draw (where it used to be) so it is geometry
+    // like everything else — and it no longer swallows the clock, which is
+    // now a separate cell at the far end.
+    const int modeA1 = clockA0 - tPad;
+    const int modeA0 = btnA0 + totalBtnL + mirrorGap;
+    rcDspBadge_ = barB(modeA0, modeA1, tPad, barThickness - tPad);
 
     // (The album view has no on-screen close button — Escape closes it.)
 
@@ -3343,18 +3459,15 @@ void PlayerWindow::onLButtonDown(int x, int y) {
     if (activePanel_ != SettingsPanel::None) { onPanelClick(x, y); return; }
 
     // ── The artwork scene owns the window, so it is tested FIRST ──────────
+    // (see onLButtonDblClk for why a single tap no longer closes it)
     // Unlike every other scene, this one is not rect-gated to the content
     // area: it took the whole window and neither bar was drawn. Testing the
     // transport first — as the signal chain rightly does — would fire the
     // play button and the DSP badge through a picture, off rects that describe
     // a bar nobody can see. So it intercepts everything, which makes it the
-    // one scene that behaves like a panel while it is up. A tap anywhere
-    // closes: a picture opened by a tap is closed by a tap, and hunting for an
-    // × is desktop vocabulary a phone does not share.
-    if (!settingsOpen_ && overlay_ == ContentOverlay::AlbumArt) {
-        closeOverlay();
-        return;
-    }
+    // one scene that behaves like a panel while it is up. It SWALLOWS the tap
+    // and does nothing: closing is a double tap, handled in onLButtonDblClk.
+    if (!settingsOpen_ && overlay_ == ContentOverlay::AlbumArt) return;
 
     // The suggestion dropdown is tested FIRST: it floats over the nav rows,
     // so without this a click meant for "1990s" would land on whichever
@@ -3598,6 +3711,19 @@ void PlayerWindow::onLButtonDown(int x, int y) {
 
 void PlayerWindow::onLButtonDblClk(int x, int y) {
     if (activePanel_ != SettingsPanel::None) return;  // no double-click behavior inside panels
+
+    // ── Leaving the artwork takes TWO taps ───────────────────────────────
+    // A single tap used to close it, and on a phone that is one careless
+    // finger away from losing the picture you just opened — this scene is
+    // meant to be left up and looked at. The double is the platform's own:
+    // both hosts already synthesize it at 400 ms with a small radius (see
+    // linux_host.cc and android_host.cc), so there is no second timer here
+    // and no threshold of this scene's own to drift from the rest of the app.
+    // Miss the window and the pair is simply not a double — tap again.
+    if (!settingsOpen_ && overlay_ == ContentOverlay::AlbumArt) {
+        closeOverlay();
+        return;
+    }
 
     // Double-click the transport thumbnail closes the fullscreen art view.
     // Single-click already opens it (onLButtonDown -> onArtClick), so a fast

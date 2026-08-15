@@ -421,15 +421,21 @@ private:
 
     // Transport sub-regions. rcBtnPlay_ is the combined play/stop toggle —
     // there is deliberately no pause and no seek anywhere (this user only
-    // ever stops or starts from zero). rcDspBadge_ is written by drawFrame()
-    // (its width is the measured badge text) and read by onMouseMove() to
-    // reveal the full signal-path readout on hover.
-    LayoutRect rcTransportArt_  = {};
-    LayoutRect rcTransportInfo_ = {};
-    LayoutRect rcBtnPrev_       = {};
-    LayoutRect rcBtnPlay_       = {};
-    LayoutRect rcBtnNext_       = {};
-    LayoutRect rcDspBadge_      = {};
+    // ever stops or starts from zero).
+    //
+    // The bar is a BALANCE about the play button (see recalcLayout): artwork
+    // and clock are the two masses at the two ends, type and DSP tag the two
+    // labels facing the centre. All five are plain geometry now — rcDspBadge_
+    // used to be written by drawFrame() from the measured text, and grew to
+    // cover the clock as well, which is why touching the clock opened the
+    // signal chain. The tag is the button; the clock is not.
+    LayoutRect rcTransportArt_   = {};
+    LayoutRect rcTransportInfo_  = {};
+    LayoutRect rcBtnPrev_        = {};
+    LayoutRect rcBtnPlay_        = {};
+    LayoutRect rcBtnNext_        = {};
+    LayoutRect rcDspBadge_       = {};
+    LayoutRect rcTransportClock_ = {};
     // Non-modal bitperfect-mismatch warning strip, drawn above the transport
     // bar when audioNotice_ is non-empty. See draw()/onLButtonDown().
     LayoutRect rcAudioNotice_ = {};

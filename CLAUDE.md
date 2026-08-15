@@ -1065,7 +1065,24 @@ Five things here are load-bearing:
    is square and needs none. The three transport buttons are drawn unrotated
    on purpose: a Prev triangle turned on its side points up, which is a
    different instruction.
-5. **Overlays inside a bar must HIDE what they cover, not float over it.** The
+5. **Bar B is a BALANCE, and the play button is its fulcrum.** The three
+   buttons are centred on the whole bar, so everything else is placed in
+   mirrored pairs about them: a MASS and a LABEL on each side, the labels
+   facing the centre — `[pad][artwork][gap][TYPE] ◀ ▮ ▶ [MODE][gap][clock][pad]`.
+   The artwork (a square) and the clock (two rows) are the masses; the release
+   type and the DSP tag are the labels, one line each. Both ends use the same
+   pad and the same mass-to-label gap, so the symmetry does not depend on how
+   long a word runs. Everything sits on the bar's centre line in the cross
+   axis: `rcTransportInfo_` used to open with `space(26)` against a `space(19)`
+   bottom, which put every label centred inside it 3.5 units low — a leftover
+   from when a title and an artist lived there, not a decision. It is still
+   ONE composition, authored for a wide bar and mapped; in the narrow bar the
+   two halves simply run along its length.
+   A label's CELL must be able to hold its text: the cells once stopped
+   `space(76)` short of the buttons, leaving 28 units for a word 60 wide, and
+   the DSP tag was drawn a few pixels outside its own hit rect — the word was
+   visible and not clickable.
+6. **Overlays inside a bar must HIDE what they cover, not float over it.** The
    renderer emits every rect before every glyph, so a panel drawn last still
    comes out under text drawn earlier. Both the open search field and the
    unfurled AutoEQ list are handled in the geometry (`RailInput::searchOpen` /
