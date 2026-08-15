@@ -2,8 +2,9 @@
 // construction/run. Platform bootstrap (DPI awareness, crash handling, log
 // redirection, COM init on Windows; signal handling on Linux) lives in each
 // platform's own os/windows_host.cc / os/linux_host.cc, behind a thin
-// WinMain()/main() that calls matrix_player_main() below once bootstrap is
+// WinMain()/main() that calls app_shell_main() below once bootstrap is
 // done — see those files.
+#include "app_main.hh"     // app_shell: the entry point this file DEFINES
 #include "player_view.hh"
 #include "usb_audio.h"
 #include <cstdio>
@@ -81,7 +82,7 @@ static void logBuildStamp() {
     fflush(stdout);
 }
 
-int matrix_player_main() {
+int app_shell_main() {
     logBuildStamp();
 
     if (getenv("MATRIX_ISO_TEST")) {

@@ -108,7 +108,7 @@ public:
     }
 
     void adaptToCurrentMonitor() override {}
-    void snapToEdge(int) override {}
+    void snapToEdge(SnapEdge) override {}
     void invalidate() override {}
     void setCursor(CursorShape) override {}
     void setKeepAwake(bool) override {}

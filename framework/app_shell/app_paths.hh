@@ -14,8 +14,9 @@
 //
 // They are the same directory by default, so a build tree and the tarball in
 // dist/linux/ stay exactly what they have always been: one self-contained
-// folder you can move anywhere. Defining MATRIX_STATE_HOME at build time
-// (see gui/CMakeLists.txt) moves the writable half to $HOME/<that name>/,
+// folder you can move anywhere. Defining APP_SHELL_STATE_HOME at build time
+// (the consumer sets it; see the root CMakeLists.txt) moves the writable half
+// to $HOME/<that name>/,
 // which is what a system package needs — /opt/matrix_player is root-owned and
 // the atlas cache is per-user regardless, since bakeFallbackGlyphs() bakes
 // whatever CJK/Hangul/Kana the listener's own library happens to contain.
@@ -35,7 +36,7 @@ namespace app_paths {
 const std::string& exeDir();
 
 // Directory for files the app writes, UTF-8, WITH a trailing separator.
-// Created on first call. Equal to exeDir() unless MATRIX_STATE_HOME was
+// Created on first call. Equal to exeDir() unless APP_SHELL_STATE_HOME was
 // defined at build time; falls back to exeDir() if the home directory is
 // unknown or the directory cannot be created and written to, so a stripped
 // environment degrades to the old behaviour instead of failing to start.

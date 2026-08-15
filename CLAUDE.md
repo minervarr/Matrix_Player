@@ -129,19 +129,10 @@ matrix_player/
       player_view.hh/.cc        — the app: layout, drawing (Canvas), hit-testing, playback
                                   orchestration, gapless coordinator. Never touches a raw
                                   HWND/HMONITOR/wl_* type directly — everything real-OS goes
-                                  through host_ (a Host*, see host.hh)
-      host.hh                  — the Host interface: window creation, message pump, monitor
-                                  info, timers, cross-thread events, and dataReader()
-                                  (fonts/, which is a directory on desktop and an APK
-                                  slot on Android — see the Android section). THREE
-                                  implementations, four counting the headless one
-                                  tools/ui_capture builds; this seam is the only thing
-                                  that differs between platforms:
-      os/windows_host.cc        — real Win32 window/message pump (WM_* dispatch, DPI,
-                                  minidump crash handler, WinMain bootstrap)
-      os/linux_host.cc          — real Wayland backend (vk_canvas's WaylandDisplay/
-                                  WaylandWindow), timerfd for the seek-update timer,
-                                  eventfd-woken cross-thread event queue, main() bootstrap
+                                  through host_ (a Host*) and app_view.hh — BOTH now in
+                                  framework/app_shell, along with all three Host
+                                  implementations. See that section below; what is left
+                                  in gui/ is this application and nothing else
       os/alsa_output.cc/.hh     — Linux secondary output: thin AudioOutput adapter over
                                   audio_engine's AlsaSink (only built if ALSA was found —
                                   see MATRIX_HAVE_ALSA)
@@ -157,43 +148,11 @@ matrix_player/
                                   all four settings panels (see "Settings panels" below)
       theme.hh                  — the color palette; player_view.cc and the panels both
                                   draw from this one place
-      color.hh, layout_rect.hh  — portable ColorRef/LayoutRect (replace COLORREF/RECT)
-      app_paths.hh/.cc          — WHERE FILES LIVE, and the one rule about it:
-                                  READ-ONLY data (fonts/, assets/shaders/,
-                                  eq_profiles.json) is exe-relative and stays that way;
-                                  everything WRITTEN (matrix_player.db, the log, the
-                                  ~45 MB atlas cache pruneStaleCaches() also deletes
-                                  from) goes through stateDir(). The two are the same
-                                  directory by default, so a build tree and the
-                                  dist/linux/ tarballs remain one self-contained folder
-                                  you can move anywhere. -DMATRIX_STATE_HOME=.matrix_player
-                                  splits them, sending the writable half to $HOME/<name>/
-                                  — what a system package needs, since /opt is root-owned
-                                  and the atlas cache is per-user regardless (it holds
-                                  whatever scripts the listener's own library contains).
-                                  Deliberately NOT XDG; a plain dotdir, no spec involved.
-                                  Also the single home of exe-directory discovery, which
-                                  had drifted into four copies (both hosts, openLogFile,
-                                  tools/ui_capture)
-      ui_metrics.hh/.cc         — the single scale factor: 5 type roles from one ratio,
-                                  plus space()/stroke(). Takes the window's SHORT SIDE,
-                                  not its height: identical for every window wider than
-                                  tall, but a 1080x1920 monitor would otherwise scale
-                                  1.78x because the screen is TALL, not big. Tested by
-                                  ui_metrics_test.cc
-      ui_orientation.hh/.cc     — Horizontal or Vertical, derived from the shape the
-                                  window ALREADY has and never asked of the OS, which is
-                                  why it works the same on Wayland (a client cannot size
-                                  or position itself), on Windows, and on Android (where
-                                  rotation arrives as an ordinary resize — the manifest
-                                  already declares configChanges=orientation and locks no
-                                  screenOrientation). Automatic by default; Alt+L takes a
-                                  manual override that STICKS, persisted in settings.
-                                  Replaces UiMode{Essential,Complete}, which was a window
-                                  rectangle wearing a mode's name. NAMED ui_orientation
-                                  because vk_canvas's Android platform already ships an
-                                  orientation.hh (physical device orientation, from the
-                                  accelerometer). PURE — ui_orientation_test links it alone
+      hotkey_ids.hh             — WHICH KEY MEANS WHAT: Alt+F/J/C/U/G/H/L. Stays here
+                                  because that is an application's decision — create()
+                                  hands the table to host_->registerHotkey() and
+                                  onHotkey() turns an id into a SnapEdge. The hosts used
+                                  to hold these ids themselves
       rail_layout.hh/.cc        — where everything in BAR A goes: the seven filter
                                   initials, the search cell, Settings, the AutoEQ box.
                                   Computed once along the bar's LONG AXIS and mapped at
@@ -244,6 +203,18 @@ matrix_player/
       hotkey_ids.hh, art_view.hh/.cc, audio_output.h, log_util.h
     CMakeLists.txt              — builds the matrix_player executable, per-platform source/lib lists
   framework/
+    app_shell/                  — FIRST-PARTY: the application shell. The Host/AppView
+                                  seam and all THREE of its implementations (Win32,
+                                  Wayland, Android), plus app_paths, ui_metrics,
+                                  ui_orientation, layout_rect and color. Lifted out of
+                                  gui/ so a second app can LINK the desktop+Android
+                                  plumbing instead of copying it — vk_canvas makes the
+                                  DRAWING portable, this makes the PROGRAM portable.
+                                  Read its own CLAUDE.md first. Targets: app_shell
+                                  (portable, links nothing) plus exactly one of
+                                  app_shell_win32 / app_shell_wayland /
+                                  app_shell_android. Still an ordinary directory in this
+                                  repository, NOT yet a submodule — see "app_shell" below
     audio_engine/               — git submodule (github.com/minervarr/audio_engine).
                                   core/ (pure C++) + backends/{usb,alsa,jack,wasapi,flac,mp3,dsd}/
                                   + api/ (C ABI, not used by this app — we link the C++ targets
@@ -265,14 +236,16 @@ matrix_player/
                                   fallback faces (CJK/Hangul). Greek/Cyrillic come from NewCM
                                   itself, so base and fallback text are one design
     icons/matrix-icons.otf      — the UI icon glyphs, generated (see tools/icon_font/)
-  android/                      — the third HOST (see its own section below). Gradle +
+  android/                      — the Android BUILD (see its own section below): Gradle +
                                   NDK, its own CMakeLists.txt reaching UP into core/,
-                                  gui/ and framework/; src/ holds AndroidHost (a real
-                                  implementation of gui/src/host.hh) plus the JNI
-                                  substrate it needs — permissions, safe area, launch
-                                  intent, app paths. NO UI code: main.cc constructs the
-                                  desktop PlayerWindow and runs it. AndroidPlayerView, the
-                                  flat-track-list lookalike this used to be, is deleted
+                                  gui/ and framework/. src/ holds exactly ONE file now —
+                                  main.cc, which constructs the desktop PlayerWindow,
+                                  hands it an AndroidHost and runs it. AndroidHost and
+                                  its JNI substrate (permissions, safe area, launch
+                                  intent, app paths) moved to framework/app_shell/os/,
+                                  none of it being about music. AndroidPlayerView, the
+                                  flat-track-list lookalike this all used to be, is
+                                  deleted
   packaging/
     arch/                        — PKGBUILD + .desktop + icon (Arch package)
     windows/matrix-player.iss    — Inno Setup installer script (built by
@@ -465,10 +438,10 @@ linkage against the engine.
 
 ```bash
 scripts/linux/build.sh --debug
-./build/linux_debug/gui/ui_metrics_test    # type scale + spacing/stroke math
+./build/linux_debug/app_shell_build/ui_metrics_test     # type scale + spacing/stroke
 ./build/linux_debug/gui/ui_icons_test      # icon codepoints + placement math
 ./build/linux_debug/gui/ui_text_test       # ordinal suffixes (the teens: 11th, not 11st)
-./build/linux_debug/gui/ui_orientation_test # Horizontal/Vertical from window shape
+./build/linux_debug/app_shell_build/ui_orientation_test # Horizontal/Vertical from shape
 ./build/linux_debug/gui/rail_layout_test   # bar A's anchors, and the 90-degree rotation
 ./build/linux_debug/core/variants_test     # album-variant grouping, edition terms, trackKey()
 ./build/linux_debug/core/stats_test        # listening log, aggregate queries, schema migration
@@ -944,29 +917,36 @@ The GUI is **entirely vk_canvas-rendered** — no native OS controls anywhere in
 the app (the four settings panels, described below, replaced the last native
 Win32 dialogs). `player_view.cc` draws through `Canvas` (rect/text/image
 primitives, MSDF text) and never allocates a raw window/control itself — the
-real window, message pump, and monitor queries live behind `Host` (`host.hh`).
+real window, message pump, and monitor queries live behind `Host`
+(`framework/app_shell/host.hh`).
 
-### The Host abstraction
+### The application shell (`framework/app_shell/`)
 
-```cpp
-class Host {
-public:
-    virtual bool init(PlayerWindow* owner) = 0;
-    virtual SurfaceProvider& surfaceProvider() = 0;
-    virtual AssetReader&     assetReader()     = 0;
-    virtual AssetReader&     dataReader()      = 0;   // fonts/ — a dir, or an APK slot
-    virtual MonitorInfo primaryMonitor() const = 0;
-    virtual SafeInsets  safeInsets() const { return {}; }  // the cutout; zero on desktop
-    virtual void pump(bool haveWork) = 0;
-    virtual void postAppEvent(AppEvent id, intptr_t p1, intptr_t p2 = 0) = 0;
-    virtual void startTimer(TimerId, int intervalMs) = 0;
-    // ... window/mode/hotkey/error-dialog methods, see gui/src/host.hh
-};
-std::unique_ptr<Host> make_host();  // os/windows_host.cc, linux_host.cc, or —
-                                    // on Android — nothing: the host is INJECTED
-                                    // by android_main(), and make_host() returns
-                                    // nullptr, which create() refuses cleanly.
-```
+**The Host seam and all three of its implementations are not in this repository
+any more** — they are a first-party library, because they are not about music.
+Read `framework/app_shell/CLAUDE.md`; what follows is only what a reader of THIS
+app needs.
+
+`PlayerWindow` implements `AppView` (`app_shell/app_view.hh`) and calls
+`host_->` for anything OS-real. `Host::pump()` dispatches back into those
+`on*()` methods, so `player_view.cc`'s layout/drawing/hit-testing is identical
+on all three platforms.
+
+Three couplings had to be cut for that seam to be a library, and each left a
+shape here worth knowing:
+
+1. **`AppEvent` and `TimerId` are declared in `player_view.hh` now**, not in
+   `host.hh`, and travel through `Host` as plain `int`. `PlayerWindow::
+   onAppEvent()` is the ONE place either is decoded — that switch used to be
+   written out four times over, once per backend plus once in `ui_capture`.
+2. **`create()` registers this app's hotkeys** (`host_->registerHotkey(id,
+   'F')`, seven of them, right after `host_->init()`), and `onHotkey()` turns
+   an id into a `SnapEdge`. Both hosts used to hold the Alt+F/J/C/U/G/H/L table
+   themselves. `hotkey_ids.hh` stays in `gui/src`, which is the point.
+3. **`onHostReady()` is where the launch argument becomes a music root.**
+   `AndroidHost` used to read the intent's `"scan_root"` extra and call
+   `commitAddFolder()` itself; now it is TOLD that key by `android/src/main.cc`
+   and merely states the string through `Host::launchArgument()`.
 
 **Two rules this seam enforces, both learned by crashing on a phone:**
 
@@ -982,27 +962,20 @@ std::unique_ptr<Host> make_host();  // os/windows_host.cc, linux_host.cc, or —
    applies it in exactly one place — the three frame rects — and everything
    else derives from those.
 
-`PlayerWindow` calls `host_->` for anything OS-real; `Host::pump()` dispatches
-back into `PlayerWindow`'s public `on*()` methods (`onMouseMove`, `onTimer`,
-`onHostResized`, ...) — the same methods `windows_host.cc`'s old `wndProc`
-switch and `linux_host.cc`'s Wayland callbacks both call into, so
-`player_view.cc`'s layout/drawing/hit-testing code is identical on both
-platforms.
-
 **Mouse back/forward** (the two thumb buttons) reach `PlayerWindow::onNavBack()`
 / `onNavForward()` from both hosts. Windows needs only `windows_host.cc`
-(`WM_XBUTTONDOWN`), but Linux needed the vk_canvas submodule: `PointerEvent::
+(now `app_shell/os/win32_host.cc`), but Linux needed the vk_canvas submodule: `PointerEvent::
 button` only knew left/right/middle, so `input.hh` gained `3 = back, 4 =
 forward` and `wayland_display.cc` gained the `BTN_SIDE`/`BTN_EXTRA` mapping.
 That is a submodule change — commit it with `git_wrapper`, which pushes
 submodules before the parent.
 
 **What has no Wayland equivalent, by design** (documented narrowing, not a
-silent gap): global hotkeys (Alt+F/J/C/U/G/H edge-snap) are system-wide
-`RegisterHotKey` calls on Windows but focused-window-only checks on Linux (no
-cross-compositor equivalent); `adaptToCurrentMonitor()`/`snapToEdge()` are
-no-ops on Linux (Wayland clients cannot query "which monitor" or reposition
-themselves).
+silent gap): the hotkeys this app registers (Alt+F/J/C/U/G/H edge-snap) become
+system-wide `RegisterHotKey` calls on Windows but focused-window-only checks on
+Linux (no cross-compositor equivalent); `adaptToCurrentMonitor()`/
+`snapToEdge()` are no-ops on Linux (Wayland clients cannot query "which
+monitor" or reposition themselves).
 
 **Alt+L is NOT in that list any more**, and that is the point of the
 orientation work: it used to ask the compositor for a window size and wait for
@@ -1238,6 +1211,7 @@ to the device, looking at music belongs to the app.**
 
 | Decision | Choice | Why |
 |---|---|---|
+| App shell | `framework/app_shell` — the Host/AppView seam and all three of its implementations | Not about music, so not in this repository's `gui/`. vk_canvas makes the DRAWING portable; this makes the PROGRAM portable, which is what lets a second app get desktop + Android by linking rather than copying |
 | GUI | vk_canvas (Vulkan) | Custom-rendered, no OS control chrome anywhere — "squeeze the most of every platform," not generic dialogs bolted onto custom UI |
 | Platforms | Windows, Linux and Android run the SAME `PlayerWindow` | One UI, three `Host` implementations. No platform is "the" project, and none has its own copy of the app. Android's remaining gaps are the keyboard and touch ergonomics, not the interface — see its section above |
 | Decoding | `audio_engine`'s own backends: libFLAC, libmpg123, DFF/DSF | First-party and already written for Android — one implementation decodes identically on every platform. Chosen by magic bytes, never by extension. Not FFmpeg |
@@ -1289,11 +1263,15 @@ extracted drawing. `AndroidPlayerView` was deleted.
 
 ### The four things this rests on
 
-1. **`AndroidHost : public Host`** (`android/src/android_host.hh/.cc`). The
-   twenty methods, modelled directly on `LinuxHost`: bionic has `timerfd` and
-   `eventfd`, so the seek timer and `postAppEvent()` are the same calls, just
-   registered with `ALooper_addFd()` instead of a hand-rolled `poll()`. What a
-   phone genuinely lacks is answered honestly and not faked — `snapToEdge`,
+1. **`AndroidHost : public Host`** — now
+   `framework/app_shell/os/android_host.hh/.cc`, together with the JNI
+   plumbing it needs (`launch_intent`, `safe_area`, `storage_permission`,
+   `app_paths_android`), because none of that is about music. **All that is
+   left in `android/src/` is `main.cc`.** The twenty methods are modelled
+   directly on the Wayland host: bionic has `timerfd` and `eventfd`, so the
+   seek timer and `postAppEvent()` are the same calls, just registered with
+   `ALooper_addFd()` instead of a hand-rolled `poll()`. What a phone genuinely
+   lacks is answered honestly and not faked — `snapToEdge`,
    `adaptToCurrentMonitor`, `setCursor`, `showWindow` are declared no-ops,
    exactly as several already are on Wayland.
 2. **The surface can die and come back, and `PlayerWindow` knows it.**
@@ -1374,9 +1352,14 @@ adb logcat MatrixMain:V AndroidHost:V matrix_player:V DEBUG:V libc:E '*:S'
 `android/CMakeLists.txt` defines `sqlite3` itself, `add_subdirectory`s soxr,
 and compiles the shader set from the **desktop** root list into
 `app/src/main/assets/shaders/` (vk_canvas's own Android demo list omits MSDF,
-and this app draws text). It compiles all of `gui/src` except the other
-platforms' hosts and audio backends, `gui_main.cc`, `art_view.cc`,
-`app_paths.cc` and the tests — the exclusion list is written out in place.
+and this app draws text). It `add_subdirectory`s `framework/app_shell` (which
+brings the host, `app_paths`, `ui_metrics` and `ui_orientation`) and compiles
+the rest of `gui/src` except the other platforms' audio backends,
+`gui_main.cc`, `art_view.cc` and the tests — the exclusion list is written out
+in place. Two variables must be set BEFORE that `add_subdirectory`:
+`APP_SHELL_APP_NAME` (or the logcat tag stops being `matrix_player`) and
+`APP_SHELL_NATIVE_APP_GLUE_DIR` (native_app_glue ships inside the NDK, so only
+this file knows where it is).
 
 **Storage, and the loop that is not there any more.** `APP_CMD_INIT_WINDOW` is
 NOT "the app started" — it fires again every time another activity covers this

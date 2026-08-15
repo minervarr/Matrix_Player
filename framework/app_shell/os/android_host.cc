@@ -11,11 +11,11 @@
 #include <cstdio>
 #include <thread>
 
-#include "app_paths.hh"          // gui/src: the exeDir()/stateDir() seam itself
+#include "app_main.hh"           // APP_SHELL_LOG_NAME, the logcat tag
+#include "app_paths.hh"          // the exeDir()/stateDir() seam itself
 #include "app_paths_android.hh"  // and this platform's one-time setter for it
 #include "fullscreen.hh"  // vce::platform::enable_immersive/query_nav_bar_height
 #include "launch_intent.hh"
-#include "player_view.hh"  // gui/src: the app itself
 #include "safe_area.hh"
 #include "storage_permission.hh"
 
@@ -81,7 +81,7 @@ void redirect_stdio_to_logcat() {
             if (n <= 0) return;   // pipe closed: the process is going away
             for (ssize_t i = 0; i < n; ++i) {
                 if (buf[i] == '\n') {
-                    __android_log_write(ANDROID_LOG_INFO, "matrix_player", line.c_str());
+                    __android_log_write(ANDROID_LOG_INFO, APP_SHELL_LOG_NAME, line.c_str());
                     line.clear();
                 } else if (buf[i] != '\r') {
                     line.push_back(buf[i]);
@@ -106,7 +106,9 @@ std::unique_ptr<Host> make_host() {
     return nullptr;
 }
 
-AndroidHost::AndroidHost(android_app* state) : state_(state) {
+AndroidHost::AndroidHost(android_app* state, const char* launchExtraKey,
+                         const char* fallback)
+    : state_(state), launchKey_(launchExtraKey), launchFallback_(fallback) {
     // First thing, before any of the app's own code can print: everything
     // player_view.cc and the engine report is otherwise thrown away here.
     redirect_stdio_to_logcat();
@@ -343,7 +345,9 @@ void AndroidHost::maybeSeedMusicRoot() {
 // What this activity was launched WITH. Empty on both desktops (see host.hh);
 // here it is the intent's "scan_root" extra, stated and not interpreted.
 std::string AndroidHost::launchArgument() const {
-    return read_scan_root_extra(state_);
+    if (!launchKey_) return {};
+    return read_string_extra(state_, launchKey_,
+                             launchFallback_ ? launchFallback_ : "");
 }
 
 // ── Touch ────────────────────────────────────────────────────────────────────

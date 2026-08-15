@@ -5,10 +5,10 @@
 // (Complete mode's fullscreen, via xdg_toplevel's set_fullscreen()).
 #include "host.hh"
 #include "app_paths.hh"
-#include "player_view.hh"
 #include "wayland_platform.hh"
 #include "wayland_display.hh"
 #include "wayland_window.hh"
+#include "keys.hh"      // vk_canvas: the portable key:: space
 #include "renderer.hh"
 
 #include <sys/timerfd.h>
@@ -20,6 +20,7 @@
 #include <cmath>
 #include <chrono>
 #include <mutex>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -104,8 +105,12 @@ public:
         // or reposition themselves — see host.hh's class comment.
     }
 
-    void snapToEdge(int) override {
+    void snapToEdge(SnapEdge) override {
         // No-op: Wayland clients cannot set their own window position.
+    }
+
+    void registerHotkey(int id, int keyCode) override {
+        hotkeys_.emplace_back(id, keyCode);
     }
 
     void invalidate() override {
@@ -251,20 +256,16 @@ public:
         if (e.keyCode == key::Alt) { altHeld_ = e.down; return; }
         if (!e.down) return;
 
-        // Alt+F/J/C/U/G/H/L edge-snap/mode-toggle: Windows delivers these as
-        // system-wide RegisterHotKey WM_HOTKEY messages; Wayland has no
-        // cross-compositor equivalent, so this is a focused-window-only
-        // check instead — a deliberate, documented behavior narrowing (see
-        // host.hh's class comment), not a silent drop.
+        // Alt+<key>: Windows delivers these as system-wide RegisterHotKey
+        // WM_HOTKEY messages; Wayland has no cross-compositor equivalent, so
+        // this is a focused-window-only check against whatever the app
+        // registered — a deliberate, documented narrowing (see host.hh), not a
+        // silent drop. The table is the APP's; this file knows no key by name.
         if (altHeld_) {
-            switch (e.keyCode) {
-            case 'F': owner_->onHotkey(kHotkeySnapLeft);    return;
-            case 'J': owner_->onHotkey(kHotkeySnapRight);   return;
-            case 'C': owner_->onHotkey(kHotkeySnapBottom);  return;
-            case 'U': owner_->onHotkey(kHotkeySnapTop);     return;
-            case 'G': owner_->onHotkey(kHotkeySnapCenterG); return;
-            case 'H': owner_->onHotkey(kHotkeySnapCenterH); return;
-            case 'L': owner_->onHotkey(kHotkeyToggleOrientation);  return;
+            for (const auto& hk : hotkeys_) {
+                if (hk.second != e.keyCode) continue;
+                owner_->onHotkey(hk.first);
+                return;
             }
         }
         owner_->onKeyDownPortable(e.keyCode);
@@ -278,6 +279,9 @@ private:
     struct Event { int id; intptr_t p1, p2; };
 
     int timerId_ = 0;
+
+    // (app hotkey id, key) pairs, Alt implied. A vector because there are seven.
+    std::vector<std::pair<int,int>> hotkeys_;
 
     void dispatchAppEvent(const Event& e) { owner_->onAppEvent(e.id, e.p1, e.p2); }
 
@@ -309,7 +313,7 @@ std::unique_ptr<Host> make_host() {
 }
 
 // ── Linux bootstrap (was main.cpp's WinMain) ────────────────────────────────
-int matrix_player_main();  // gui_main.cc — portable env/self-test/PlayerWindow entry
+#include "app_main.hh"  // app_shell_main(), which the APP defines
 
 namespace {
 
@@ -335,7 +339,7 @@ void openLogFile() {
     // thing main() does, which is why stateDir() has to be safe to call before
     // anything else exists: it creates the directory itself and falls back to
     // the exe's directory rather than failing.
-    std::string logPath = app_paths::stateDir() + "matrix_player.log";
+    std::string logPath = app_paths::stateDir() + APP_SHELL_LOG_NAME ".log";
     freopen(logPath.c_str(), "w", stdout);
     // stderr must share stdout's DESCRIPTOR, not merely its path. Opening the
     // file twice gives the two streams independent offsets: stdout starts at 0
@@ -356,5 +360,5 @@ int main() {
     signal(SIGSEGV, crashHandler);
     signal(SIGABRT, crashHandler);
 
-    return matrix_player_main();
+    return app_shell_main();
 }

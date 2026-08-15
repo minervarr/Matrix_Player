@@ -5,7 +5,6 @@
 // ../host.hh).
 #include "host.hh"
 #include "app_paths.hh"
-#include "player_view.hh"
 #include "win32_platform.hh"
 #include "renderer.hh"
 
@@ -17,15 +16,16 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 #pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "dbghelp.lib")
 
-int matrix_player_main();  // gui_main.cc — portable env/self-test/PlayerWindow entry
+#include "app_main.hh"  // app_shell_main(), which the APP defines
 
 namespace {
 
-const wchar_t* kMainClass = L"MatrixPlayerMain";
+const wchar_t* kMainClass = APP_SHELL_WINDOW_CLASS;
 
 // Borderless: no title bar/icon/min-max-close buttons at all. The window is a
 // fixed size the app sets itself (true fullscreen), so there's no
@@ -88,19 +88,10 @@ public:
         SetWindowLongPtrW(hwnd_, GWLP_USERDATA, (LONG_PTR)this);
         lastMonitor_ = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
 
-        // Edge-snap hotkeys — the window-move mechanism now that there's no
-        // title bar to drag: Alt+F/J snap to the left/right edge (horizontal
-        // monitor use), Alt+C/U snap to the bottom/top edge (vertical monitor
-        // use), Alt+G/H re-center. MOD_NOREPEAT so holding the keys doesn't
-        // spam WM_HOTKEY.
-        RegisterHotKey(hwnd_, kHotkeySnapLeft,    MOD_ALT | MOD_NOREPEAT, 'F');
-        RegisterHotKey(hwnd_, kHotkeySnapRight,   MOD_ALT | MOD_NOREPEAT, 'J');
-        RegisterHotKey(hwnd_, kHotkeySnapBottom,  MOD_ALT | MOD_NOREPEAT, 'C');
-        RegisterHotKey(hwnd_, kHotkeySnapTop,     MOD_ALT | MOD_NOREPEAT, 'U');
-        RegisterHotKey(hwnd_, kHotkeySnapCenterG, MOD_ALT | MOD_NOREPEAT, 'G');
-        RegisterHotKey(hwnd_, kHotkeySnapCenterH, MOD_ALT | MOD_NOREPEAT, 'H');
-        // Alt+L toggles Horizontal/Vertical layout — keyboard only.
-        RegisterHotKey(hwnd_, kHotkeyToggleOrientation,  MOD_ALT | MOD_NOREPEAT, 'L');
+        // No hotkey is registered here any more. Which key means what is the
+        // app's business, and it says so through registerHotkey() once this
+        // returns — the window has to exist first, which is why that is the
+        // documented order.
 
         vkSurface_ = std::make_unique<Win32SurfaceProvider>(hwnd_);
         return true;
@@ -154,7 +145,15 @@ public:
         owner_->onHostResized();
     }
 
-    void snapToEdge(int hotkeyId) override {
+    // MOD_NOREPEAT so holding the keys does not spam WM_HOTKEY. System-wide,
+    // which is the capability Wayland has no equivalent for.
+    void registerHotkey(int id, int keyCode) override {
+        if (!hwnd_) return;
+        if (RegisterHotKey(hwnd_, id, MOD_ALT | MOD_NOREPEAT, (UINT)keyCode))
+            hotkeyIds_.push_back(id);
+    }
+
+    void snapToEdge(SnapEdge edge) override {
         RECT wr{};
         GetWindowRect(hwnd_, &wr);
         int w = wr.right - wr.left, h = wr.bottom - wr.top;
@@ -166,25 +165,24 @@ public:
         int monH = mi.rcWork.bottom - mi.rcWork.top;
 
         int x, y;
-        switch (hotkeyId) {
-        case kHotkeySnapLeft:
+        switch (edge) {
+        case SnapEdge::Left:
             x = mi.rcWork.left;
             y = mi.rcWork.top + std::max(0, (monH - h) / 2);
             break;
-        case kHotkeySnapRight:
+        case SnapEdge::Right:
             x = mi.rcWork.right - w;
             y = mi.rcWork.top + std::max(0, (monH - h) / 2);
             break;
-        case kHotkeySnapBottom:
+        case SnapEdge::Bottom:
             x = mi.rcWork.left + std::max(0, (monW - w) / 2);
             y = mi.rcWork.bottom - h;
             break;
-        case kHotkeySnapTop:
+        case SnapEdge::Top:
             x = mi.rcWork.left + std::max(0, (monW - w) / 2);
             y = mi.rcWork.top;
             break;
-        case kHotkeySnapCenterG:
-        case kHotkeySnapCenterH:
+        case SnapEdge::Center:
             x = mi.rcWork.left + std::max(0, (monW - w) / 2);
             y = mi.rcWork.top + std::max(0, (monH - h) / 2);
             break;
@@ -342,7 +340,7 @@ private:
             return 0;
 
         case WM_COMMAND:
-            return 0;  // legacy WM_COMMAND path no longer used (see AppEvent::RequestPlay in player_view.hh)
+            return 0;  // legacy WM_COMMAND path no longer used
 
         case WM_MOUSEMOVE:
             owner_->onMouseMove(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
@@ -404,13 +402,8 @@ private:
             return 0;
 
         case WM_DESTROY:
-            UnregisterHotKey(hwnd_, kHotkeySnapLeft);
-            UnregisterHotKey(hwnd_, kHotkeySnapRight);
-            UnregisterHotKey(hwnd_, kHotkeySnapBottom);
-            UnregisterHotKey(hwnd_, kHotkeySnapTop);
-            UnregisterHotKey(hwnd_, kHotkeySnapCenterG);
-            UnregisterHotKey(hwnd_, kHotkeySnapCenterH);
-            UnregisterHotKey(hwnd_, kHotkeyToggleOrientation);
+            for (int id : hotkeyIds_) UnregisterHotKey(hwnd_, id);
+            hotkeyIds_.clear();
 
             owner_->shutdown();
 
@@ -426,6 +419,9 @@ private:
     }
 
     AppView* owner_ = nullptr;
+
+    // Every id registerHotkey() actually got, so teardown can undo exactly it.
+    std::vector<int> hotkeyIds_;
     // Where the button went down, for onDragEnd() — see WM_LBUTTONDOWN/UP.
     int       dragStartX_ = 0, dragStartY_ = 0;
     bool      dragValid_  = false;
@@ -490,7 +486,7 @@ void openLogFile() {
     // app_paths::stateDir() (not the exe's own directory) so a read-only
     // install still gets a log — see app_paths.hh. Identical to the old path
     // unless MATRIX_STATE_HOME was defined at build time.
-    std::wstring logPath = utf8ToWide(app_paths::stateDir()) + L"matrix_player.log";
+    std::wstring logPath = utf8ToWide(app_paths::stateDir()) + APP_SHELL_LOG_NAME_W L".log";
     FILE* outFp = nullptr; _wfreopen_s(&outFp, logPath.c_str(), L"w", stdout);
     FILE* errFp = nullptr; _wfreopen_s(&errFp, logPath.c_str(), L"a", stderr);
     setvbuf(stdout, nullptr, _IONBF, 0);
@@ -511,7 +507,7 @@ LONG WINAPI crashHandler(EXCEPTION_POINTERS* info) {
 
     // Beside the log, for the same reason — the exe's directory may be
     // read-only, and a crash dump that cannot be written is no dump at all.
-    std::wstring dumpPath = utf8ToWide(app_paths::stateDir()) + L"matrix_player_crash.dmp";
+    std::wstring dumpPath = utf8ToWide(app_paths::stateDir()) + APP_SHELL_LOG_NAME_W L"_crash.dmp";
 
     HANDLE hFile = CreateFileW(dumpPath.c_str(), GENERIC_WRITE, 0, nullptr,
                                 CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -542,7 +538,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     timeBeginPeriod(1);
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
-    int rc = matrix_player_main();
+    int rc = app_shell_main();
 
     CoUninitialize();
     timeEndPeriod(1);

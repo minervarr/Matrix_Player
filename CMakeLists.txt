@@ -265,52 +265,46 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(WITH_LSR_BINDINGS OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/soxr)
 
-# ---------- min_text_size (build-time UI text-size floor generator) ----------
-# Computes the minimum device-pixel size each baked font can render at before
-# its stroke geometry drops below what antialiased rendering can represent
-# (see framework/vk_canvas/.../tools/min_text_size/min_text_size.cc), and
-# emits a header the app statically asserts its UI text sizes against.
-# Built via ExternalProject_Add (own isolated CMake tree) for the same reason
-# as libjpeg-turbo above: its CMakeLists independently builds FreeType +
-# msdfgen, which would collide by target name if add_subdirectory()'d
-# directly (vk_canvas_core, linked below, already builds its own copies of
-# both for the MSDF text engine).
-set(MIN_TEXT_SIZE_INSTALL_DIR ${CMAKE_BINARY_DIR}/min-text-size-install)
-if(WIN32)
-    set(MIN_TEXT_SIZE_BIN_NAME min_text_size.exe)
-else()
-    set(MIN_TEXT_SIZE_BIN_NAME min_text_size)
+# ---------- app_shell (the application shell: Host + where files live) ------
+# The Host/AppView seam and its three implementations, plus app_paths,
+# ui_metrics and ui_orientation. Lifted out of gui/ so a second application can
+# LINK it instead of copying it — see framework/app_shell/CLAUDE.md.
+#
+# Must come before core/ and gui/: both include its headers.
+#
+# The three names below are what this application tells its shell, and all
+# three are chosen to preserve exactly what Matrix Player already had — the
+# same matrix_player.log, the same "MatrixPlayerMain" window class, the same
+# $HOME/<name>/ split — so lifting the code changed nothing on disk.
+# MATRIX_STATE_HOME is declared here rather than in gui/CMakeLists.txt because
+# app_paths.cc now belongs to app_shell, which CMake reads first.
+set(MATRIX_STATE_HOME "" CACHE STRING
+    "Directory name under $HOME for the DB/log/atlas cache (e.g. .matrix_player). Empty = write beside the executable.")
+set(APP_SHELL_APP_NAME  "matrix_player"    CACHE STRING "" FORCE)
+set(APP_SHELL_WIN_CLASS "MatrixPlayerMain" CACHE STRING "" FORCE)
+if(MATRIX_STATE_HOME)
+    set(APP_SHELL_STATE_HOME "${MATRIX_STATE_HOME}" CACHE STRING "" FORCE)
 endif()
-ExternalProject_Add(min_text_size_ext
-    SOURCE_DIR ${CMAKE_SOURCE_DIR}/framework/vk_canvas/first_party/vulkan_font_engine/tools/min_text_size
-    CMAKE_ARGS
-        -G${CMAKE_GENERATOR}
-        -DCMAKE_BUILD_TYPE=Release
-        -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
-        -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
-        -DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}
-        -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}
-    INSTALL_COMMAND ${CMAKE_COMMAND} -E copy
-        <BINARY_DIR>/${MIN_TEXT_SIZE_BIN_NAME}
-        ${MIN_TEXT_SIZE_INSTALL_DIR}/${MIN_TEXT_SIZE_BIN_NAME}
-    BUILD_BYPRODUCTS ${MIN_TEXT_SIZE_INSTALL_DIR}/${MIN_TEXT_SIZE_BIN_NAME})
+add_subdirectory(framework/app_shell app_shell_build)
 
-set(UI_MIN_TEXT_SIZE_HEADER ${CMAKE_BINARY_DIR}/generated/ui_min_text_size.gen.h)
-# Must list exactly the faces gui/src/ui_fonts.hh loads: the emitted floor is
-# the WORST case across them, and a face left out here could render below it.
-set(UI_FONT_FILES
+# ---------- min_text_size (build-time UI text-size floor generator) ----------
+# The recipe now belongs to app_shell (its ui_metrics.hh is what includes the
+# generated header); this call is the part that is genuinely OURS — the list of
+# faces, which must be exactly the ones gui/src/ui_fonts.hh loads, because the
+# emitted floor is the WORST case across them and a face left out here could
+# render below it.
+include(AppShellMinTextSize)
+app_shell_generate_min_text_size(
     ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-Regular.otf
     ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-Bold.otf
     ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-Italic.otf
     ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCMMono10-Regular.otf)
-add_custom_command(
-    OUTPUT ${UI_MIN_TEXT_SIZE_HEADER}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated
-    COMMAND ${MIN_TEXT_SIZE_INSTALL_DIR}/${MIN_TEXT_SIZE_BIN_NAME}
-        --emit-header ${UI_MIN_TEXT_SIZE_HEADER} 0.5 512 ${UI_FONT_FILES}
-    DEPENDS min_text_size_ext ${UI_FONT_FILES}
-    COMMENT "Computing minimum readable UI text size from font geometry")
-add_custom_target(generate_ui_min_text_size DEPENDS ${UI_MIN_TEXT_SIZE_HEADER})
+
+# app_shell's ui_metrics.cc INCLUDES the header that call just declared, so it
+# has to wait for it. Stated here rather than inside app_shell's own
+# CMakeLists.txt because the target does not exist yet when CMake reads that
+# file — the consumer owns the font list, so the consumer owns the ordering.
+add_dependencies(app_shell generate_ui_min_text_size)
 
 # ---------- shaders (compile next to the exe) ----------
 # vk_canvas's FileAssetReader reads <exe dir>/assets/shaders/, same convention

@@ -4,7 +4,7 @@
 #include <exception>
 #include <memory>
 
-#include "android_host.hh"
+#include "android_host.hh"  // app_shell: the third Host
 #include "player_view.hh"
 
 #define LOG_TAG "MatrixMain"
@@ -36,7 +36,11 @@ void android_main(android_app* state) {
         PlayerWindow win;
 
         LOGI("phase 2/5: create() -- host init, Vulkan, DB, fonts");
-        if (!win.create(std::make_unique<AndroidHost>(state))) {
+        // "scan_root" is the intent extra this app is launched with, and the
+        // fallback is where a phone keeps music. app_shell knows neither — it
+        // reads whatever key it is handed. See android_host.hh.
+        if (!win.create(std::make_unique<AndroidHost>(
+                state, "scan_root", "/storage/emulated/0/Music"))) {
             // create() logs its own reason first (Host::showErrorMessage is a
             // logcat line here); this only says which stage refused.
             LOGE("phase 2/5 FAILED: create() returned false -- the activity "

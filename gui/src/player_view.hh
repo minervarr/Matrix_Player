@@ -341,7 +341,6 @@ private:
 
     // Layout orientation — see ui_orientation.hh.
     void toggleOrientation();
-    void snapToEdge(int hotkeyId);  // Alt+F/J/C/U/G/H — thin wrapper over host_->snapToEdge()
 
     // Vulkan rendering (vk_canvas). Constructed in create() once the host
     // window exists; drawFrame() is called from run() only while a frame is

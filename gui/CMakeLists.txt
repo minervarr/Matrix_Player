@@ -19,16 +19,16 @@
 # Deliberately not an XDG lookup — see the comment in src/app_paths.hh.
 # Read-only data (fonts/, assets/shaders/, eq_profiles.json) is NOT affected
 # and stays beside the executable in every configuration.
-set(MATRIX_STATE_HOME "" CACHE STRING
-    "Directory name under $HOME for the DB/log/atlas cache (e.g. .matrix_player). Empty = write beside the executable.")
+# MATRIX_STATE_HOME is declared and forwarded in the ROOT CMakeLists.txt now:
+# app_paths.cc lives in app_shell, which CMake reads before this file, so the
+# forwarding has to happen before add_subdirectory(framework/app_shell).
 
+# app_paths.cc, ui_metrics.cc, ui_orientation.cc and both desktop hosts are
+# NOT here any more: they moved to framework/app_shell, which this target links.
 set(MATRIX_PLAYER_PORTABLE_SOURCES
     src/gui_main.cc
-    src/app_paths.cc
     src/player_view.cc
     src/art_view.cc
-    src/ui_metrics.cc
-    src/ui_orientation.cc
     src/rail_layout.cc
     src/bar_a.cc
     src/ui_icons.cc
@@ -39,7 +39,6 @@ if(WIN32)
     add_executable(matrix_player WIN32
         ${MATRIX_PLAYER_PORTABLE_SOURCES}
         src/wasapi_output.cc
-        src/os/windows_host.cc
         src/app.rc
         ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/windows/win32_platform.cc)
 
@@ -69,6 +68,8 @@ if(WIN32)
     add_dependencies(matrix_player compile_shared_shaders compile_vk_canvas_shaders generate_ui_min_text_size)
 
     target_link_libraries(matrix_player PRIVATE
+        app_shell
+        app_shell_win32
         matrix_core
         ae_usb
         winusb
@@ -114,7 +115,6 @@ else()
     add_executable(matrix_player
         ${MATRIX_PLAYER_PORTABLE_SOURCES}
         ${MATRIX_LINUX_AUDIO_SOURCES}
-        src/os/linux_host.cc
         ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/linux/wayland_platform.cc)
 
     if(TARGET ae_alsa)
@@ -149,6 +149,8 @@ else()
 
     find_package(Threads REQUIRED)
     target_link_libraries(matrix_player PRIVATE
+        app_shell
+        app_shell_wayland
         matrix_core
         ae_usb
         ${MATRIX_LINUX_AUDIO_LIBS}
@@ -160,15 +162,11 @@ else()
         Threads::Threads)
 endif()
 
-# Applied to matrix_player ONLY. icon_preview and matrix_ui_capture are
-# Debug-only dev tools that must keep writing beside their own binary —
-# matrix_ui_capture's determinism depends on reading the matrix_player.db
-# sitting next to it, and both deliberately share the player's atlas cache
-# in a build tree.
-if(MATRIX_STATE_HOME)
-    target_compile_definitions(matrix_player PRIVATE
-        MATRIX_STATE_HOME="${MATRIX_STATE_HOME}")
-endif()
+# The state-home define is applied on the app_shell target now (app_paths.cc
+# moved there), which means icon_preview and matrix_ui_capture would inherit it
+# too — they used to be excluded so they kept writing beside their own binary.
+# In practice nothing changes: both are Debug-only and MATRIX_STATE_HOME is only
+# ever passed for a packaged Release. Worth knowing if that ever stops holding.
 
 # Copy EQ profiles JSON next to the executable
 add_custom_command(TARGET matrix_player POST_BUILD
@@ -250,34 +248,21 @@ add_custom_command(TARGET matrix_player POST_BUILD
 # Vulkan), so the include directory alone is enough — no vk_canvas_core link.
 # ---------------------------------------------------------------------------
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    add_executable(ui_metrics_test src/ui_metrics_test.cc src/ui_metrics.cc)
-    target_include_directories(ui_metrics_test PRIVATE
-        src
-        ${CMAKE_BINARY_DIR}/generated
-        ${CMAKE_SOURCE_DIR}/framework/vk_canvas/core)
-    add_dependencies(ui_metrics_test generate_ui_min_text_size)
-    if(NOT WIN32)
-        target_compile_options(ui_metrics_test PRIVATE -Wall)
-    endif()
-
-    # ui_orientation_test links the REAL src/ui_orientation.cc rather than
-    # restating its arithmetic. ui_orientation.hh includes NOTHING at all — no
-    # Canvas, no Host, no theme — which is what keeps this a pure-logic test and
-    # what lets the Android build consume the same file untouched.
-    add_executable(ui_orientation_test src/ui_orientation_test.cc src/ui_orientation.cc)
-    target_include_directories(ui_orientation_test PRIVATE src)
-    if(NOT WIN32)
-        target_compile_options(ui_orientation_test PRIVATE -Wall)
-    endif()
+    # ui_metrics_test and ui_orientation_test moved WITH their code, to
+    # framework/app_shell/tests/ — they test app_shell's modules, so they
+    # belong to app_shell. Run them from build/<tree>/app_shell_build/.
 
     # rail_layout_test links the REAL src/rail_layout.cc. Bar A's geometry is
     # the part of the orientation work most likely to break in silence -- a
     # wrong anchor in one of the eight states (2 orientations x bit-perfect x
     # search open) does not crash, it just looks wrong somewhere nobody looked
     # -- so it is arithmetic over a rectangle, tested without a Canvas.
+    # ui_orientation.cc comes from app_shell now, still COMPILED rather than
+    # linked: this stays a pure-logic test with no library behind it.
     add_executable(rail_layout_test src/rail_layout_test.cc src/rail_layout.cc
-                                    src/ui_orientation.cc)
-    target_include_directories(rail_layout_test PRIVATE src)
+                                    ${CMAKE_SOURCE_DIR}/framework/app_shell/ui_orientation.cc)
+    target_include_directories(rail_layout_test PRIVATE
+        src ${CMAKE_SOURCE_DIR}/framework/app_shell)
     if(NOT WIN32)
         target_compile_options(rail_layout_test PRIVATE -Wall)
     endif()
@@ -288,7 +273,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # beyond src/: ui_icons.hh forward-declares Canvas/Color instead of
     # including canvas.hh, precisely so this stays a pure-logic test.
     add_executable(ui_icons_test src/ui_icons_test.cc src/ui_icons.cc)
-    target_include_directories(ui_icons_test PRIVATE src)
+    target_include_directories(ui_icons_test PRIVATE src ${CMAKE_SOURCE_DIR}/framework/app_shell)
     if(NOT WIN32)
         target_compile_options(ui_icons_test PRIVATE -Wall)
     endif()
@@ -299,7 +284,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # its repeat every hundred (111th, not 111st): wrong, it reads as a typo
     # rather than as a bug, which is exactly how such things survive.
     add_executable(ui_text_test src/ui_text_test.cc)
-    target_include_directories(ui_text_test PRIVATE src)
+    target_include_directories(ui_text_test PRIVATE src ${CMAKE_SOURCE_DIR}/framework/app_shell)
     if(NOT WIN32)
         target_compile_options(ui_text_test PRIVATE -Wall)
     endif()
@@ -313,18 +298,18 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     if(NOT WIN32)
         add_executable(icon_preview
             ${CMAKE_SOURCE_DIR}/tools/icon_preview/main.cc
-            src/app_paths.cc
             src/ui_icons.cc
-            src/ui_icons_draw.cc
-            src/ui_metrics.cc)
+            src/ui_icons_draw.cc)
         target_include_directories(icon_preview PRIVATE
             src
+            ${CMAKE_SOURCE_DIR}/framework/app_shell
             ${CMAKE_BINARY_DIR}/generated
             ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/linux)
         target_compile_options(icon_preview PRIVATE -Wall)
         add_dependencies(icon_preview
             compile_shared_shaders compile_vk_canvas_shaders generate_ui_min_text_size)
         target_link_libraries(icon_preview PRIVATE
+            app_shell
             vk_canvas_core
             vk_canvas_wayland)
     endif()
@@ -337,9 +322,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # It compiles the app's own sources a second time with MATRIX_UI_CAPTURE
     # defined (which is what exposes PlayerWindow::captureGoTo/captureFrame) —
     # NOT a link against matrix_player, which is an executable owning main().
-    # The two swaps versus that source list: gui_main.cc and os/linux_host.cc
-    # are out (both define an entry point; the tool has its own), and the
-    # tool's main.cc is in.
+    # The two swaps versus that source list: gui_main.cc is out and the tool's
+    # main.cc is in (both define an entry point). app_shell_wayland is NOT
+    # linked either, for the same reason — its wayland_host.cc owns main().
+    # app_shell itself (app_paths/ui_metrics/ui_orientation) IS linked.
     #
     # Linux-only for now, same reason icon_preview is: it needs the Wayland
     # backend's FileAssetReader. A Windows equivalent would swap that for
@@ -347,11 +333,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     if(NOT WIN32)
         add_executable(matrix_ui_capture
             ${CMAKE_SOURCE_DIR}/tools/ui_capture/main.cc
-            src/app_paths.cc
             src/player_view.cc
             src/art_view.cc
-            src/ui_metrics.cc
-            src/ui_orientation.cc
             src/bar_a.cc
             src/rail_layout.cc
             src/ui_icons.cc
@@ -384,6 +367,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 
         find_package(Threads REQUIRED)
         target_link_libraries(matrix_ui_capture PRIVATE
+            app_shell
             matrix_core
             ae_usb
             ${MATRIX_LINUX_AUDIO_LIBS}

@@ -1,6 +1,6 @@
 #include "app_paths_android.hh"
 
-#include "../../gui/src/app_paths.hh"  // unmodified — same declared signatures
+#include "app_paths.hh"  // unmodified — same declared signatures
 
 namespace app_paths {
 

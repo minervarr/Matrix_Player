@@ -15,6 +15,10 @@
 struct SurfaceProvider;
 struct AssetReader;
 
+// Which edge of its monitor a window is asked to sit against. Center is both
+// axes at once, which is why it is a fifth value rather than a pair of flags.
+enum class SnapEdge { Left, Right, Top, Bottom, Center };
+
 // Pointer images the UI distinguishes. Kept to what a hit-test can honestly
 // answer — "this is clickable", "you can type here" — and deliberately
 // separate from vk_canvas's own CursorShape so the portable seam doesn't
@@ -147,8 +151,27 @@ public:
     // "which monitor am I on, reposition to fit" capability.
     virtual void adaptToCurrentMonitor() = 0;
 
-    // Alt+F/J/C/U/G/H edge-snap. No-op on Linux (see class comment).
-    virtual void snapToEdge(int hotkeyId) = 0;
+    // Move the window to an edge of its monitor. No-op on Linux (see the class
+    // comment) — a Wayland client cannot position itself.
+    //
+    // It used to take the APP's hotkey id and switch on it, which meant the
+    // Win32 host held a table mapping one music player's Alt+F/J/C/U/G/H to
+    // window geometry. An edge is what a window system deals in; which key
+    // asks for it is the app's business.
+    virtual void snapToEdge(SnapEdge edge) = 0;
+
+    // Ask for Alt+<keyCode> to come back as AppView::onHotkey(id). The id is
+    // the app's own, carried and never read — the same contract as timers and
+    // app events.
+    //
+    // Windows makes these SYSTEM-WIDE (RegisterHotKey), so they fire with the
+    // app in the background. Wayland has no cross-compositor equivalent and
+    // checks the focused window's own key events instead: a deliberate,
+    // documented narrowing rather than a silent drop. Android has no keyboard
+    // to speak of and does nothing.
+    //
+    // Call it after Host::init() — Win32 needs the window to exist.
+    virtual void registerHotkey(int id, int keyCode) {}
 
     virtual void invalidate() = 0;  // schedule a repaint
 

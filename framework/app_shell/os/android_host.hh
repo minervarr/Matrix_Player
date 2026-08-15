@@ -33,7 +33,15 @@
 // the IME is separate work.
 class AndroidHost : public Host {
 public:
-    explicit AndroidHost(android_app* state);
+    // `launchExtraKey` names the intent extra launchArgument() should return
+    // — "scan_root" for a music player, something else for something else, and
+    // nullptr for an app that is not launched with an argument at all. It is a
+    // constructor parameter rather than a constant here because naming it was
+    // the LAST piece of one application's vocabulary left inside this host.
+    // `fallback` is what to return when the extra is absent or empty.
+    explicit AndroidHost(android_app* state,
+                         const char* launchExtraKey = nullptr,
+                         const char* fallback       = nullptr);
     ~AndroidHost() override;
 
     // ── Host ────────────────────────────────────────────────────────────────
@@ -57,7 +65,7 @@ public:
     // bars are hidden rather than avoided, so they contribute nothing here.
     SafeInsets safeInsets() const override;
     void adaptToCurrentMonitor() override {}   // one screen, and we do not place ourselves
-    void snapToEdge(int) override {}           // no window position to set
+    void snapToEdge(SnapEdge) override {}      // no window position to set
     void invalidate() override {}              // run()'s dirty flag already covers it
     void setCursor(CursorShape) override {}    // a finger has no shape to change
     void setKeepAwake(bool on) override;
@@ -108,7 +116,9 @@ private:
     void maybeSeedMusicRoot();
 
     android_app*  state_ = nullptr;
-    AppView* owner_ = nullptr;
+    AppView*    owner_          = nullptr;
+    const char* launchKey_      = nullptr;
+    const char* launchFallback_ = nullptr;
     int      timerId_ = 0;
 
     std::unique_ptr<AndroidSurfaceProvider> surface_;

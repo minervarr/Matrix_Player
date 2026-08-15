@@ -7,7 +7,7 @@ icons), and MSDF text. Almost everything is drawn in one place,
 `PlayerWindow::drawFrame()` (`gui/src/player_view.cc:793`), with the fullscreen
 album-art window in `gui/src/art_view.cc` and the shared settings-panel widgets
 in `gui/src/panels/settings_panels.cc`, the scale/type model in
-`gui/src/ui_metrics.hh` (+ the reusable
+`framework/app_shell/ui_metrics.hh` (+ the reusable
 `framework/vk_canvas/core/widgets.*`).
 
 `file:line` references throughout point at the source of truth. When you change
@@ -137,7 +137,7 @@ demos — app code must not draw from it. (Removed dead tokens: `CLR_SEEKBAR_*`
 ## 3. Typography scale
 
 **Model.** One factor, one ratio, one floor — all in
-`gui/src/ui_metrics.hh`:
+`framework/app_shell/ui_metrics.hh`:
 
 ```
 uiScale  = UiScale{ referenceHeight = 1080, floorScale = 1.0 }.factor(H)
@@ -160,7 +160,7 @@ reference — every one of which sat *below* the floor at that reference — so 
 smallest role clamped alone and squashed the scale: fully flat below ~711px, and
 still compressed to ~13% between the bottom four roles at 1080p.
 
-**Roles** (`gui/src/ui_metrics.hh`; px shown at H = 1080, where uiScale = 1.0):
+**Roles** (`framework/app_shell/ui_metrics.hh`; px shown at H = 1080, where uiScale = 1.0):
 
 | Role (`metrics_.text.*`) | px @1080 | n | Used for |
 |---|---|---|---|
@@ -176,7 +176,7 @@ because that ladder is ordered; at the old inverted values they were
 indistinguishable.
 
 Computed once per `recalcLayout()` (`player_view.cc:1489`). Verified by
-`gui/src/ui_metrics_test.cc`, which pins the exact values and asserts the
+`framework/app_shell/tests/ui_metrics_test.cc`, which pins the exact values and asserts the
 ratio invariant holds at every height — the property the old system violated.
 
 **Font styles** (`FontStyle`: Roman / Bold / Math / Italic):

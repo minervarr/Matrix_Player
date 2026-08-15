@@ -128,23 +128,33 @@ set(WITH_OPENMP       OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 add_subdirectory(${REPO_ROOT}/third_party/soxr ${CMAKE_BINARY_DIR}/soxr)
 
+# app_shell: the Host seam, the third Host, and the Android JNI plumbing that
+# used to live in src/ here (android_host, launch_intent, safe_area,
+# storage_permission, app_paths_android — all of it generic). ALL that is left
+# of this app's own Android code is src/main.cc, six lines of which construct
+# the desktop PlayerWindow and run it.
+# Same name the desktop passes, so the logcat tag stays "matrix_player" — see
+# framework/app_shell/app_main.hh.
+set(APP_SHELL_APP_NAME "matrix_player" CACHE STRING "" FORCE)
+set(APP_SHELL_NATIVE_APP_GLUE_DIR ${NATIVE_APP_GLUE} CACHE PATH "" FORCE)
+add_subdirectory(${REPO_ROOT}/framework/app_shell ${CMAKE_BINARY_DIR}/app_shell)
+
 # gui/src: the WHOLE app, not a selection of portable pieces. player_view.cc
 # includes no OS header — its only platform coupling is the Host interface
-# (implemented here by src/android_host.cc), AudioOutput, and art_view.hh,
-# which has an Android branch that declines to open a second window.
+# (app_shell's), AudioOutput, and art_view.hh, which has an Android branch that
+# declines to open a second window.
 #
 # What is deliberately NOT listed:
 #   gui_main.cc            — the desktop entry point; src/main.cc is ours
-#   os/linux_host.cc,
-#   os/windows_host.cc     — the other two Host implementations
 #   os/alsa_output.cc,
 #   os/jack_output.cc,
 #   wasapi_output.cc       — the other platforms' audio backends
 #   art_view.cc            — the second-window implementation; the Android
 #                            branch of its header is inline and has no .cc
-#   app_paths.cc           — src/app_paths_android.cc answers the same two
-#                            functions, with the APK/internalDataPath split
 #   *_test.cc              — desktop, Debug-only, run directly
+#
+# The three Hosts, app_paths and ui_metrics/ui_orientation are all in app_shell
+# now and arrive by linking it, not by being listed here.
 #
 # libjpeg-turbo is absent on purpose: its own CMakeLists.txt refuses
 # add_subdirectory (it FATAL_ERRORs unless top-level), and img_decode_kit
@@ -155,18 +165,11 @@ set(MATRIX_GUI_SRC ${REPO_ROOT}/gui/src)
 
 add_library(matrix_player_android SHARED
     src/main.cc
-    src/android_host.cc
-    src/launch_intent.cc
-    src/safe_area.cc
-    src/storage_permission.cc
-    src/app_paths_android.cc
     ${VK_CANVAS_ANDROID_PLATFORM}/android_platform.cc
     ${MATRIX_GUI_SRC}/player_view.cc
     ${MATRIX_GUI_SRC}/panels/settings_panels.cc
     ${MATRIX_GUI_SRC}/bar_a.cc
     ${MATRIX_GUI_SRC}/rail_layout.cc
-    ${MATRIX_GUI_SRC}/ui_orientation.cc
-    ${MATRIX_GUI_SRC}/ui_metrics.cc
     ${MATRIX_GUI_SRC}/ui_icons.cc
     ${MATRIX_GUI_SRC}/ui_icons_draw.cc
     ${MATRIX_GUI_SRC}/os/aaudio_output.cc
@@ -182,6 +185,8 @@ target_include_directories(matrix_player_android PRIVATE
     ${UI_MIN_TEXT_SIZE_DIR})
 
 target_link_libraries(matrix_player_android
+    app_shell
+    app_shell_android
     android log
     # No ae_mediacodec: this engine decodes FLAC and MP3 with its own vendored
     # libFLAC/libmpg123 on every platform, on purpose — some phones ship no

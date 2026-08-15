@@ -198,6 +198,20 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
     // asked of the OS here, which is the point.
     if (!host_->init(this)) return false;
 
+    // The window-move mechanism, now that there is no title bar to drag:
+    // Alt+F/J snap to the left/right edge (a horizontal monitor), Alt+C/U to
+    // the bottom/top (a vertical one), Alt+G/H re-centre, Alt+L flips the
+    // layout. Registered HERE rather than inside a host because which key
+    // means what is the app's business — the host is told, and on Windows it
+    // needs the window to exist first, which is why this follows init().
+    host_->registerHotkey(kHotkeySnapLeft,          'F');
+    host_->registerHotkey(kHotkeySnapRight,         'J');
+    host_->registerHotkey(kHotkeySnapBottom,        'C');
+    host_->registerHotkey(kHotkeySnapTop,           'U');
+    host_->registerHotkey(kHotkeySnapCenterG,       'G');
+    host_->registerHotkey(kHotkeySnapCenterH,       'H');
+    host_->registerHotkey(kHotkeyToggleOrientation, 'L');
+
     // What this platform can and cannot do, said out loud once — CLAUDE.md,
     // "Optional capabilities", rule 4. Costs a line and turns "it surprised me
     // on the phone" into something read before the code is written.
@@ -2640,11 +2654,6 @@ void PlayerWindow::adaptToCurrentMonitor() {
     host_->adaptToCurrentMonitor();
 }
 
-// Alt+F/J/C/U/G/H — the window-move mechanism in place of title-bar dragging
-// on Windows (there is no title bar). No-op on Linux; see the comment above.
-void PlayerWindow::snapToEdge(int hotkeyId) {
-    host_->snapToEdge(hotkeyId);
-}
 
 // ── Art cache (Vulkan textures) ──────────────────────────────────────────────
 
@@ -7372,8 +7381,18 @@ void PlayerWindow::onScanDone() {
 // actually go away).
 
 void PlayerWindow::onHotkey(int hotkeyId) {
-    if (hotkeyId == kHotkeyToggleOrientation) toggleOrientation();
-    else                               snapToEdge(hotkeyId);
+    if (hotkeyId == kHotkeyToggleOrientation) { toggleOrientation(); return; }
+    // The host deals in EDGES; which key asks for one is ours to say.
+    switch (hotkeyId) {
+    case kHotkeySnapLeft:    host_->snapToEdge(SnapEdge::Left);   break;
+    case kHotkeySnapRight:   host_->snapToEdge(SnapEdge::Right);  break;
+    case kHotkeySnapBottom:  host_->snapToEdge(SnapEdge::Bottom); break;
+    case kHotkeySnapTop:     host_->snapToEdge(SnapEdge::Top);    break;
+    // Alt+G and Alt+H both centre — two ids, one action.
+    case kHotkeySnapCenterG:
+    case kHotkeySnapCenterH: host_->snapToEdge(SnapEdge::Center); break;
+    default: break;
+    }
 }
 
 void PlayerWindow::onCharPortable(uint32_t codepoint) {

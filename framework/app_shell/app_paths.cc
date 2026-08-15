@@ -40,7 +40,7 @@ std::string discoverExeDir() {
 #endif
 }
 
-#ifdef MATRIX_STATE_HOME
+#ifdef APP_SHELL_STATE_HOME
 // The user's home directory, or empty if the environment does not say.
 std::string homeDir() {
 #ifdef _WIN32
@@ -68,7 +68,7 @@ std::string discoverStateDir(const std::string& fallback) {
 
     std::string dir = home;
     if (dir.back() != '/' && dir.back() != '\\') dir += '/';
-    dir += MATRIX_STATE_HOME;
+    dir += APP_SHELL_STATE_HOME;
     dir += '/';
 
     std::error_code ec;
@@ -76,7 +76,7 @@ std::string discoverStateDir(const std::string& fallback) {
     if (!usableForWriting(dir)) return fallback;
     return dir;
 }
-#endif  // MATRIX_STATE_HOME
+#endif  // APP_SHELL_STATE_HOME
 
 }  // namespace
 
@@ -88,7 +88,7 @@ const std::string& exeDir() {
 }
 
 const std::string& stateDir() {
-#ifdef MATRIX_STATE_HOME
+#ifdef APP_SHELL_STATE_HOME
     static const std::string dir = discoverStateDir(exeDir());
 #else
     static const std::string dir = exeDir();
