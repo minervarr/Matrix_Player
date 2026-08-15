@@ -247,7 +247,9 @@ private:
     // chrome is a promise the UI doesn't keep.
     CursorShape cursorForPoint(int x, int y) const;
     void        applyCursorFor(int x, int y);
+    void        applyCursor();             // re-derive from lastMouseX_/Y_
     CursorShape lastCursor_ = CursorShape::Arrow;
+    int         lastMouseX_ = 0, lastMouseY_ = 0;
     bool        keepAwake_  = false;   // mirrors the art window, see run()
 
     void beginTrackStats(const Track& t, StartCause cause);

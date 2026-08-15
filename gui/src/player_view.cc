@@ -3422,10 +3422,12 @@ CursorShape PlayerWindow::cursorForPoint(int x, int y) const {
         return CursorShape::Hand;
 
     // Inside a scene the whole content area is one click target (it closes),
-    // so the whole content area gets the hand — and for the art scene that
-    // area is the entire window.
+    // so the whole content area gets the hand. The ART scene is different: it
+    // took the whole window as a viewing surface, and a hand floating over a
+    // picture tells the listener nothing they don't already know — the pointer
+    // is hidden instead, the same policy ArtWindow applies to its window.
     if (!settingsOpen_ && overlay_ == ContentOverlay::AlbumArt)
-        return CursorShape::Hand;
+        return CursorShape::Hidden;
     if (!settingsOpen_ && overlay_ != ContentOverlay::None && ptInRect(rcGrid_, x, y))
         return CursorShape::Hand;
 
@@ -3445,7 +3447,18 @@ CursorShape PlayerWindow::cursorForPoint(int x, int y) const {
 }
 
 void PlayerWindow::applyCursorFor(int x, int y) {
-    CursorShape want = cursorForPoint(x, y);
+    lastMouseX_ = x;
+    lastMouseY_ = y;
+    applyCursor();
+}
+
+// The one place the pointer is set, used both by mouse moves (via
+// applyCursorFor) and by the overlay open/close handlers — opening the art
+// scene must hide the pointer without waiting for a move, and closing it must
+// bring back whatever the point underneath asks for. cursorForPoint() is the
+// only place the cursor is decided.
+void PlayerWindow::applyCursor() {
+    CursorShape want = cursorForPoint(lastMouseX_, lastMouseY_);
     if (want == lastCursor_) return;    // both hosts collapse repeats too
     lastCursor_ = want;
     host_->setCursor(want);
@@ -6840,6 +6853,7 @@ void PlayerWindow::openArtOverlay(const std::string& path) {
     if (path.empty()) return;
     overlayArtPath_ = path;
     overlay_        = ContentOverlay::AlbumArt;
+    applyCursor();                  // hide the pointer now, not on the next move
     invalidate();
 }
 
@@ -6886,6 +6900,7 @@ void PlayerWindow::closeOverlay() {
     // rebuild, so it goes rather than lingering per closed scene.
     releaseOverlayArtTexture();
     hoverScClose_ = false;
+    applyCursor();                  // bring the pointer back where it sits
     invalidate();
 }
 
