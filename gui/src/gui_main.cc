@@ -13,6 +13,7 @@
 #include <thread>
 #include <atomic>
 #include <chrono>
+#include <cstring>   // strcmp, for the --iso-test flag
 #include <vector>
 #ifndef _WIN32
 #include <unistd.h>   // readlink, for the build stamp's /proc/self/exe lookup
@@ -82,10 +83,18 @@ static void logBuildStamp() {
     fflush(stdout);
 }
 
-int app_shell_main() {
+int app_shell_main(int argc, char** argv) {
     logBuildStamp();
 
-    if (getenv("MATRIX_ISO_TEST")) {
+    // MATRIX_ISO_TEST predates app_shell handing the command line through, and
+    // an environment variable was the only way to reach this from a bootstrap
+    // whose main() took no arguments. `--iso-test` is the same switch said
+    // properly; the variable keeps working so nothing that already invokes it
+    // has to change.
+    bool isoTest = getenv("MATRIX_ISO_TEST") != nullptr;
+    for (int i = 1; i < argc && !isoTest; ++i)
+        isoTest = strcmp(argv[i], "--iso-test") == 0;
+    if (isoTest) {
         return runIsoSelfTest();
     }
 
