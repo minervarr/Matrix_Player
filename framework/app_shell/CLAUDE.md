@@ -16,20 +16,38 @@ This gets you a program.
 An app that builds on it writes:
 
 ```cpp
-class MyApp : public AppView { /* the on*() callbacks it cares about */ };
+class MyApp : public AppView {
+public:
+    bool create() {
+        host_ = make_host();               // or an injected one
+        return host_ && host_->init(this);
+    }
+    void run() {                           // the loop is the APP's, see below
+        while (running_) {
+            host_->pump(/*haveWork=*/dirty_);
+            if (host_->quitRequested()) break;
+            if (dirty_) { draw(); dirty_ = false; }
+        }
+    }
+    void onHostResized() override { dirty_ = true; }
+    void shutdown()      override { running_ = false; }
+    std::unique_ptr<Host> host_;
+    bool running_ = true, dirty_ = true;
+};
 
-int app_shell_main() {
-    MyApp app;
-    if (!app.create(make_host())) return 1;   // or an injected Host
-    app.run();
-    return 0;
-}
+int app_shell_main() { MyApp app; return app.create() ? (app.run(), 0) : 1; }
 ```
 
 …and gets `main()`, `WinMain()`, the Wayland and Win32 event loops, the crash
 handler, the log file, and the Android `Host` for free. Android needs one extra
 file — an `android_main()` that constructs the app and an `AndroidHost` — and
 that file is six lines long.
+
+**`create()` and `run()` are the APP's, not this library's.** app_shell owns the
+platform BOOTSTRAP and hands control over; it does not own the frame loop,
+because what counts as "work to do" is the app's question — an editor idles at
+zero frames, a game never idles. `docs/app_shell.tex` is the full reference
+manual; read it before extending the seam.
 
 Extracted from Matrix Player, which is still its first and, for now, only
 consumer. **API-shaping decisions should favour the NEXT consumer, not that

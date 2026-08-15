@@ -1,0 +1,1034 @@
+% app_shell --- reference manual
+%
+% Build:  pdflatex app_shell.tex   (twice, for the table of contents)
+% To Markdown:  pandoc app_shell.tex -o app_shell.md --standalone
+%
+% Deliberately plain LaTeX: article class, no custom macros beyond one listing
+% style, so pandoc converts it without losing structure.
+
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=2.6cm]{geometry}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{codebg}{gray}{0.96}
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=none,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  language=C++,
+  captionpos=b,
+  xleftmargin=1em,
+}
+
+\title{\texttt{app\_shell}\\[0.3em]\large The application shell:\\
+one program, three platforms}
+\author{Reference manual}
+\date{}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+%======================================================================
+\section{What this library is}
+
+\texttt{app\_shell} is the layer that turns ``I can draw'' into ``I have a
+program''.
+
+It sits in a family of three first-party libraries with a strict division of
+labour:
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Library & Answers & Gives you \\
+\midrule
+\texttt{audio\_engine} & how does it sound?   & decoders, DSP, USB/ALSA/JACK/WASAPI/AAudio \\
+\texttt{vk\_canvas}    & how does it look?    & Renderer, Canvas, text, Vulkan on three platforms \\
+\texttt{app\_shell}    & how does it \emph{run}? & window, message pump, input, paths, scale \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The distinction between the last two is the point of this document.
+\texttt{vk\_canvas} alone gives you a picture: a surface, a renderer, and
+primitives to draw with. It does not give you a program. Somebody still has to
+create the real window, write the Win32 message loop, write the Wayland event
+loop, write Android's \texttt{ALooper} loop, install a crash handler, open a log
+file, decide where files live, and decide how big the text should be on a screen
+nobody predicted. That is roughly 1\,400 lines of platform code, and it is what
+this library contains.
+
+\subsection{The problem it exists to solve}
+
+Before it existed, an application that wanted desktop \emph{and} Android had to
+copy the previous application's \texttt{gui/} directory. That is not reuse. By
+the third copy the three have diverged, and a fix in one does not reach the
+others.
+
+The specific failure it prevents is worse than duplication, though. The three
+platform backends in the original code each dispatched into the application by
+calling its methods \emph{by name}. Measured across them, they called nineteen
+methods any application would have (\emph{the pointer moved}, \emph{a key went
+down}, \emph{the surface died}) and seven that only a music player could. Five
+of those seven were the same \texttt{switch} statement written out four times
+over --- once per backend, plus once more in a headless screenshot tool. They
+could not drift, being identical; they could only all have to change together,
+which is worse.
+
+\subsection{What it is not}
+
+It is not a UI toolkit. It has no widgets, no layout engine, no theme. It draws
+nothing. Those belong to \texttt{vk\_canvas} and to the application.
+
+It is not an application framework in the inversion-of-control sense: it does
+not own \texttt{main}'s loop and call you back. It owns the platform
+\emph{bootstrap} (\texttt{main}/\texttt{WinMain}) and then hands control to the
+application, which writes its own frame loop over \texttt{Host::pump()}. See
+Section~\ref{sec:loop}.
+
+%======================================================================
+\section{Getting started}
+
+\subsection{The smallest application}
+
+Two files. First, the application itself:
+
+\begin{lstlisting}
+#include "app_main.hh"   // app_shell_main(), which YOU define
+#include "app_view.hh"   // the interface the platform calls
+#include "host.hh"       // the interface you call
+
+class MyApp : public AppView {
+public:
+    bool create() {
+        host_ = make_host();          // the platform's real Host
+        if (!host_) return false;
+        if (!host_->init(this)) return false;
+        host_->showWindow();
+        return true;
+    }
+
+    void run() {
+        while (running_) {
+            host_->pump(/*haveWork=*/dirty_);
+            if (host_->quitRequested()) break;
+            if (dirty_) { draw(); dirty_ = false; }
+        }
+    }
+
+    // --- AppView ---
+    void onHostResized() override { dirty_ = true; /* relayout */ }
+    void shutdown()      override { running_ = false; }
+    void onLButtonDown(int x, int y) override { /* ... */ dirty_ = true; }
+
+private:
+    void draw() { /* vk_canvas: Canvas -> Renderer::draw() */ }
+
+    std::unique_ptr<Host> host_;
+    bool running_ = true;
+    bool dirty_   = true;
+};
+
+int app_shell_main() {
+    MyApp app;
+    if (!app.create()) return 1;
+    app.run();
+    return 0;
+}
+\end{lstlisting}
+
+Note what is \emph{absent}: there is no \texttt{main()}, no \texttt{WinMain()},
+no \texttt{\#ifdef \_WIN32}, and no mention of Wayland, Win32 or Android
+anywhere. \texttt{app\_shell} supplies the entry point for both desktops and
+calls \texttt{app\_shell\_main()} once the platform is ready.
+
+\subsection{And the CMake}
+
+\begin{lstlisting}[language=]
+set(APP_SHELL_APP_NAME  "my_app")        # names my_app.log
+set(APP_SHELL_WIN_CLASS "MyAppMain")     # the Win32 window class
+add_subdirectory(path/to/app_shell app_shell_build)
+
+add_executable(my_app src/my_app.cc)
+target_link_libraries(my_app PRIVATE
+    app_shell
+    $<IF:$<PLATFORM_ID:Windows>,app_shell_win32,app_shell_wayland>
+    vk_canvas_core)
+\end{lstlisting}
+
+That is the whole desktop story. Android costs one more file, described in
+Section~\ref{sec:android}, and it is six lines long.
+
+%======================================================================
+\section{Architecture}
+
+\subsection{The seam has two halves}
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Header & Implemented by & Called by \\
+\midrule
+\texttt{host.hh}     & the platform     & the application \\
+\texttt{app\_view.hh} & the application & the platform \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+That is the entire rule, and it is worth stating so plainly because getting the
+direction of a call wrong is how platform code ends up knowing what an album is.
+
+\texttt{Host} is what the application \emph{asks for}: give me a window, start a
+timer, change the cursor, keep the display awake, wake me from another thread.
+\texttt{AppView} is what the platform \emph{reports}: the pointer moved, a key
+went down, you were resized, your drawing surface just died.
+
+\subsection{Ownership and lifetime}
+
+The application owns the \texttt{Host} (typically a
+\texttt{std::unique\_ptr<Host>} member). The \texttt{Host} holds a non-owning
+\texttt{AppView*} given to it by \texttt{init()}. There is exactly one of each
+per process on every supported platform.
+
+\texttt{make\_host()} is a free function each backend defines. It returns the
+platform's real host on Windows and Linux; \textbf{on Android it returns
+\texttt{nullptr} on purpose}, because an \texttt{AndroidHost} needs the
+\texttt{android\_app*} that only \texttt{android\_main()} is ever handed. There
+the host is \emph{injected} instead. A caller that forgets fails at startup with
+a log line rather than dereferencing null.
+
+\subsection{The frame loop}
+\label{sec:loop}
+
+\texttt{app\_shell} does not provide one. The application writes it, because
+what counts as ``work to do'' is the application's question --- an editor idles
+at zero frames, a game never idles.
+
+The pattern every current consumer uses is render-on-demand:
+
+\begin{lstlisting}
+while (running_) {
+    bool haveWork = renderer_ && pendingFrames_ > 0;
+    host_->pump(haveWork);              // blocks when there is nothing to do
+    if (host_->quitRequested()) break;
+    if (!renderer_) continue;           // re-tested AFTER the pump; see below
+    if (pendingFrames_ > 0) { drawFrame(); --pendingFrames_; }
+}
+\end{lstlisting}
+
+Passing \texttt{haveWork == false} lets \texttt{pump()} block instead of
+busy-spinning, so an idle application costs approximately zero CPU. Timers and
+cross-thread events wake the wait normally.
+
+\subsection{Two rules learned by crashing on a phone}
+
+These are not style advice. Each corresponds to a real crash.
+
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Nothing decided before \texttt{pump()} may be trusted after it.}
+  \texttt{pump()} is where a platform delivers \emph{your surface is gone}. A
+  \texttt{bool canDraw} computed before the pump and used after it segfaults on
+  the first launch that hides the system bars, because hiding them recreates the
+  window. Re-test after the pump, always.
+
+\item \textbf{\texttt{safeInsets()} is the display cutout and never a system
+  bar.} A bar is software: hide it and the screen is genuinely yours, and an
+  inset for a bar that is not on screen leaves a permanent empty strip. A cutout
+  is glass --- it is still there when every bar is hidden, and nothing drawn
+  under it can be read.
+\end{enumerate}
+
+\subsection{Three vocabularies the host carries and never reads}
+
+The mechanism that keeps a message pump from learning an application's domain:
+three identifiers are passed \emph{through} the platform as plain integers.
+
+\begin{description}[leftmargin=1.5em]
+\item[App events] \texttt{postAppEvent(id, p1, p2)} comes back out of
+  \texttt{onAppEvent(id, p1, p2)}, unchanged, on the UI thread. No backend
+  branches on \texttt{id}.
+\item[Timer ids] \texttt{startTimer(id, ms)} comes back as
+  \texttt{onTimer(id)}.
+\item[Hotkey ids] \texttt{registerHotkey(id, keyCode)} comes back as
+  \texttt{onHotkey(id)}.
+\end{description}
+
+All three were once enumerations declared inside \texttt{host.hh}, with names
+like \texttt{TrackChange} and \texttt{SeekUpdate}, and every backend switched on
+them.
+
+The same principle covers \texttt{launchArgument()}: a platform may be started
+already knowing something (Android carries extras on its launch intent). The
+host \emph{states the string} and stops. What it \emph{means} is decided in
+\texttt{AppView::onHostReady()}.
+
+\begin{quote}
+\textbf{The test for anything added to this library:} could a drawing program
+use it? If the answer needs a word from one specific application's domain, it
+belongs in that application.
+\end{quote}
+
+%======================================================================
+\section{Reference: \texttt{Host}}
+
+Everything the application asks of the platform. Pure virtual unless a default
+is shown; a defaulted method is one an honest platform may genuinely have no
+answer for.
+
+\subsection{Lifecycle}
+
+\begin{longtable}{@{}p{0.42\textwidth}p{0.52\textwidth}@{}}
+\toprule
+\textbf{Method} & \textbf{Contract} \\
+\midrule
+\endhead
+\texttt{bool init(AppView* owner)} &
+Creates the native window and binds the owner. Returns false on failure.
+Everything \texttt{pump()} later dispatches goes to this owner. \\
+\addlinespace
+\texttt{void showWindow()} &
+Make the window visible. Separate from \texttt{init()} so an application can
+finish building before anything is on screen. \\
+\addlinespace
+\texttt{void pump(bool haveWork)} &
+One iteration of the platform's message loop. Blocks when \texttt{haveWork} is
+false; returns promptly otherwise. Dispatches into the owner. \\
+\addlinespace
+\texttt{bool quitRequested() const} &
+True once the platform has asked the process to end. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Assets and paths}
+
+\begin{longtable}{@{}p{0.42\textwidth}p{0.52\textwidth}@{}}
+\toprule
+\textbf{Method} & \textbf{Contract} \\
+\midrule
+\endhead
+\texttt{std::string exeDir() const} &
+Directory holding the executable, UTF-8, \emph{with} a trailing separator.
+\textbf{Empty on Android}, which is deliberate --- see below. \\
+\addlinespace
+\texttt{SurfaceProvider\& surfaceProvider()} &
+\texttt{vk\_canvas}'s seam: instance extensions, \texttt{VkSurfaceKHR}, extent. \\
+\addlinespace
+\texttt{AssetReader\& assetReader()} &
+\texttt{vk\_canvas}'s shipped data, rooted at \texttt{<exe>/assets/} --- shaders. \\
+\addlinespace
+\texttt{AssetReader\& dataReader()} &
+The \emph{application's} read-only shipped data (fonts), at paths relative to
+\texttt{exeDir()}. \\
+\bottomrule
+\end{longtable}
+
+\paragraph{Why \texttt{dataReader()} is separate, and why \texttt{exeDir()} is
+empty on Android.} On both desktops these are plain filesystem reads and the two
+readers could have been one. On Android they differ in kind: fonts are not files
+at all, they live inside the APK and come out through \texttt{AAssetManager}.
+Because \texttt{exeDir()} returns \texttt{""} there, the expression
+\texttt{exeDir() + "fonts/NewCM10-Regular.otf"} \emph{is} exactly the asset
+name. That is what lets an application load its typeface with no \texttt{\#ifdef}
+and no knowledge that an APK exists.
+
+Neither reader is for user data. Files the user chose --- documents, music,
+images --- are ordinary absolute paths on every platform.
+
+\subsection{Window and monitor}
+
+\begin{longtable}{@{}p{0.42\textwidth}p{0.52\textwidth}@{}}
+\toprule
+\textbf{Method} & \textbf{Contract} \\
+\midrule
+\endhead
+\texttt{MonitorInfo primaryMonitor() const} &
+\texttt{bounds} is the full monitor rectangle; \texttt{workArea} subtracts
+taskbars. They are equal everywhere except Windows, because no other platform
+here exposes the concept. \\
+\addlinespace
+\texttt{SafeInsets safeInsets() const} \newline \emph{(default: all zeros)} &
+Pixels along each edge the application must not draw in. Zero on both desktops
+--- not a stub, a true answer. Re-read every layout pass; a rotation or a fold
+changes it without a restart. \\
+\addlinespace
+\texttt{void adaptToCurrentMonitor()} &
+Re-fit if the window moved to another monitor. \textbf{Real no-op on Wayland}:
+a client cannot ask which monitor it is on. \\
+\addlinespace
+\texttt{void snapToEdge(SnapEdge edge)} &
+Move the window to \texttt{Left}, \texttt{Right}, \texttt{Top},
+\texttt{Bottom} or \texttt{Center} of its monitor. \textbf{Real no-op on
+Wayland}: a client cannot position itself. \\
+\addlinespace
+\texttt{void invalidate()} &
+Schedule a repaint. \\
+\addlinespace
+\texttt{void setCursor(CursorShape)} &
+\texttt{Arrow}, \texttt{Hand} or \texttt{Text} --- what a hit-test can honestly
+answer. Backends collapse a repeat of the shape already showing, so callers need
+not track it. \\
+\addlinespace
+\texttt{void setKeepAwake(bool)} &
+Hold the display awake. Needs a compositor-side protocol on Wayland
+(\texttt{zwp\_idle\_inhibit\_manager\_v1}); a no-op where that is absent, since
+nothing else can ask. \\
+\addlinespace
+\texttt{void* secondaryWindowHandle()} \newline \emph{(default:
+\texttt{nullptr})} &
+Opaque handle so a \emph{second} top-level window can share the platform's
+connection rather than opening a second one. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Time, threads and input registration}
+
+\begin{longtable}{@{}p{0.42\textwidth}p{0.52\textwidth}@{}}
+\toprule
+\textbf{Method} & \textbf{Contract} \\
+\midrule
+\endhead
+\texttt{void startTimer(int id, int ms)} \newline
+\texttt{void stopTimer(int id)} &
+A repeating timer, reported as \texttt{onTimer(id)}. See the narrowing note
+below. \\
+\addlinespace
+\texttt{void postAppEvent(int id,} \newline \texttt{\ \ intptr\_t p1 = 0,
+intptr\_t p2 = 0)} &
+\textbf{Safe to call from any thread.} The three integers come back out of
+\texttt{onAppEvent()} unread, on the UI thread, inside \texttt{pump()}. This is
+the portable equivalent of posting a private window message to yourself. \\
+\addlinespace
+\texttt{void registerHotkey(} \newline \texttt{\ \ int id, int keyCode)}
+\newline \emph{(default: no-op)} &
+Ask for \texttt{Alt+<keyCode>} to arrive as \texttt{onHotkey(id)}. Call
+\emph{after} \texttt{init()}: Win32 needs the window to exist. \\
+\addlinespace
+\texttt{std::string} \newline \texttt{\ \ launchArgument() const}
+\newline \emph{(default: empty)} &
+What the platform was launched \emph{with}. Empty on both desktops, and empty is
+the honest answer there. \\
+\bottomrule
+\end{longtable}
+
+\paragraph{A documented narrowing.} Only the Win32 backend currently
+distinguishes timer ids, because \texttt{SetTimer} requires a real one. Wayland
+and Android each have a single timer file descriptor and remember the last id
+handed to them rather than honouring it. \textbf{One timer per host is therefore
+the supported contract today.} Supporting several needs a descriptor map in
+those two backends --- a change to make on the day a second timer exists, not
+before.
+
+\subsection{Errors}
+
+\begin{lstlisting}
+void showErrorMessage(const std::string& title, const std::string& msg);
+\end{lstlisting}
+
+\noindent This is the startup-failure fallback for the case where the application cannot
+draw its own error --- Vulkan failed to initialise, a device was not found. It
+is a native message box on Windows and a \texttt{stderr} line on Linux.
+
+It is \emph{not} the way to report ordinary failures. Anything the application
+can still draw, it should draw.
+
+\subsection{Types}
+
+\begin{lstlisting}
+enum class SnapEdge   { Left, Right, Top, Bottom, Center };
+enum class CursorShape { Arrow, Hand, Text };
+
+struct MonitorInfo { LayoutRect bounds; LayoutRect workArea; };
+struct SafeInsets  { int top = 0, bottom = 0, left = 0, right = 0; };
+\end{lstlisting}
+
+\texttt{SnapEdge::Center} is a fifth value rather than a pair of flags because
+centring is both axes at once, and a flag pair would admit states that mean
+nothing.
+
+%======================================================================
+\section{Reference: \texttt{AppView}}
+
+What a platform reports. \textbf{Almost everything has an empty default}, and
+that is a design decision with two reasons: an application that takes no
+keyboard should not have to write empty overrides to say so, and a backend that
+learns to report something new must not break every existing consumer on the day
+it does.
+
+Only two are pure virtual, being the two an application cannot meaningfully
+lack.
+
+\subsection{Required}
+
+\begin{longtable}{@{}p{0.34\textwidth}p{0.60\textwidth}@{}}
+\toprule
+\endhead
+\texttt{void onHostResized()} &
+An explicit size change: relayout, and tell the renderer its surface changed. \\
+\addlinespace
+\texttt{void shutdown()} &
+Teardown before the window and the renderer die. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Window state}
+
+\begin{longtable}{@{}p{0.34\textwidth}p{0.60\textwidth}@{}}
+\toprule
+\endhead
+\texttt{void onHostLayoutInvalidated()} &
+A \emph{routine} resize: relayout, but do not tell the renderer. The
+distinction is real on Wayland, where a \texttt{configure} arrives for reasons
+that are not a new drawable size. \\
+\addlinespace
+\texttt{void onHostExposed()} &
+Became visible or was uncovered. Nothing changed but the frame is stale. \\
+\addlinespace
+\texttt{void adaptToCurrentMonitor()} &
+The window may have moved to a different monitor. Windows only. \\
+\bottomrule
+\end{longtable}
+
+\subsection{The surface can die and come back}
+
+\begin{longtable}{@{}p{0.34\textwidth}p{0.60\textwidth}@{}}
+\toprule
+\endhead
+\texttt{void onSurfaceLost()} &
+Release every GPU object: swapchain, textures, atlases. \\
+\addlinespace
+\texttt{bool onSurfaceRecreated()} \newline \emph{(default: true)} &
+Rebuild them against the host's \emph{new} surface. Returning false means the
+application must not be drawn. \\
+\bottomrule
+\end{longtable}
+
+\textbf{Neither desktop backend ever calls these} --- they are dead code on
+Windows and Linux by construction, because a desktop window is born once and
+dies once. On Android the surface dies \emph{every time} the user leaves the
+application.
+
+The split they enforce is the one that matters:
+
+\begin{quote}
+CPU-side state survives. GPU-side state does not.
+\end{quote}
+
+Getting it wrong is invisible until the second visit to the application, when
+every string on screen is gone and no error was logged anywhere. A stale
+``already uploaded'' flag is the usual culprit.
+
+\subsection{Pointer and keyboard}
+
+\begin{longtable}{@{}p{0.40\textwidth}p{0.54\textwidth}@{}}
+\toprule
+\endhead
+\texttt{void onMouseMove(int x, int y)} & \\
+\texttt{void onMouseLeave()} & \\
+\texttt{void onLButtonDown(int x, int y)} & \\
+\texttt{void onLButtonDblClk(int x, int y)} & \\
+\texttt{void onMouseWheel(int x, int y,} \newline \texttt{\ \ int delta)} &
+\texttt{delta} is in Win32 \texttt{WHEEL\_DELTA} units (120 per notch) on every
+platform, so scroll-step arithmetic is written once. \\
+\addlinespace
+\texttt{void onNavBack()} \newline \texttt{void onNavForward()} &
+The two extra buttons on the side of a mouse
+(\texttt{XBUTTON1}/\texttt{XBUTTON2}, \texttt{BTN\_SIDE}/\texttt{BTN\_EXTRA}). \\
+\addlinespace
+\texttt{void onDragEnd(int dx, int dy)} &
+A drag that has \emph{ended}: the pointer travelled \texttt{dx,dy} with the
+button held and was released. A tap never reaches this. \\
+\addlinespace
+\texttt{void onKeyDownPortable(int keyCode)} &
+In \texttt{vk\_canvas}'s portable \texttt{key::} space, never a platform's own
+keycodes. \\
+\addlinespace
+\texttt{void onCharPortable(uint32\_t cp)} &
+Text entry, one codepoint. \\
+\addlinespace
+\texttt{void onHotkey(int hotkeyId)} &
+A hotkey the application registered. \\
+\bottomrule
+\end{longtable}
+
+\paragraph{Why \texttt{onDragEnd} is reported rather than reconstructed.} Every
+platform already tracks it --- Win32 from \texttt{WM\_LBUTTONDOWN}/\texttt{UP},
+Wayland from \texttt{PointerAction::Down}/\texttt{Up}, Android from its own
+touch slop. Reconstructing it in the application would mean a fourth
+implementation that disagrees with all three. The rule this draws:
+
+\begin{quote}
+The \emph{slop} is a host property. The \emph{meaning} is an application
+property.
+\end{quote}
+
+On a touch screen the host also synthesises hover from the finger's position,
+which is the only honest hover a touch screen has.
+
+\subsection{The carried identifiers}
+
+\begin{longtable}{@{}p{0.40\textwidth}p{0.54\textwidth}@{}}
+\toprule
+\endhead
+\texttt{void onTimer(int timerId)} &
+A timer fired. \\
+\addlinespace
+\texttt{void onAppEvent(int id,} \newline \texttt{\ \ intptr\_t p1, intptr\_t
+p2)} &
+A cross-thread completion posted via \texttt{postAppEvent()}, delivered on the
+UI thread from inside \texttt{pump()}. \\
+\addlinespace
+\texttt{void onHostReady()} &
+The first moment the application is fully constructed \emph{and} the host is
+running: after \texttt{create()} returned, from inside the first
+\texttt{pump()}. \\
+\bottomrule
+\end{longtable}
+
+\paragraph{\texttt{onHostReady()} may fire more than once.} Platforms that
+suspend and resume call it again, so an application doing one-time work there
+must guard it \emph{itself} --- preferably on the state it is about to create
+rather than on a boolean, which is the difference between a guard and a flag
+that can go stale.
+
+Its purpose is the launch argument. A typical implementation:
+
+\begin{lstlisting}
+void MyApp::onHostReady() {
+    if (alreadyConfigured()) return;
+    const std::string arg = host_->launchArgument();
+    if (!arg.empty()) configureFrom(arg);
+}
+\end{lstlisting}
+
+%======================================================================
+\section{Reference: the portable modules}
+
+Four small modules that every application of this shape needs, and that are
+almost always written badly the first time.
+
+\subsection{\texttt{app\_paths} --- where files live}
+
+\begin{lstlisting}
+namespace app_paths {
+    const std::string& exeDir();    // read-only, shipped
+    const std::string& stateDir();  // everything WRITTEN
+}
+\end{lstlisting}
+
+Both are UTF-8 with a trailing separator. The rule is the split:
+
+\begin{description}[leftmargin=1.5em]
+\item[\texttt{exeDir()}] Read-only data shipped beside the binary: fonts,
+  shaders, default configuration. Nothing is ever written here, which is what
+  lets a package install it root-owned.
+\item[\texttt{stateDir()}] Everything the application writes: databases, logs,
+  caches. Created on first call.
+\end{description}
+
+\textbf{They are the same directory by default}, so a build tree and a portable
+archive stay one self-contained folder you can move anywhere. Defining
+\texttt{APP\_SHELL\_STATE\_HOME} at build time moves the writable half to
+\texttt{\$HOME/<that name>/}, which is what a system package needs, because
+\texttt{/opt} is root-owned and a cache is per-user regardless.
+
+Deliberately \emph{not} XDG. A plain dotdir in the \texttt{\textasciitilde/.ssh}
+tradition, depending on no specification.
+
+If the home directory is unknown or the directory cannot be created and written
+to, \texttt{stateDir()} falls back to \texttt{exeDir()} --- a stripped
+environment degrades to the old behaviour instead of failing to start.
+
+On Android neither question means anything: the assets are in the APK and the
+writable directory is handed to the application for free. There a different
+implementation answers the same two functions, and the desktop one is not
+compiled at all. Building both is a duplicate-symbol link error, which is
+exactly the right failure for two implementations of one seam.
+
+\subsection{\texttt{ui\_metrics} --- one scale, five type roles}
+
+\begin{lstlisting}
+struct UiTextSizes { float caption, secondary, body, title, header; };
+
+struct UiMetrics {
+    float       scale;   // 1.0 at or below the reference, proportional above
+    UiTextSizes text;
+    float space(float authored) const;   // pads, gaps, row heights
+    float stroke(float authored) const;  // snapped to whole device pixels
+};
+
+UiMetrics computeUiMetrics(float contentShortSide);
+\end{lstlisting}
+
+Two decisions here are load-bearing.
+
+\paragraph{It takes the window's SHORT SIDE, not its height.} These are the same
+number while every window is wider than tall, and stop being the same the moment
+a vertical layout exists. A $1080\times1920$ monitor would otherwise scale
+$1.78\times$ and a $1080\times2400$ phone $2.22\times$ --- inflating every bar
+and every type role because the screen is \emph{tall}, not because it is
+\emph{big}. What limits how much fits is the short side.
+
+\paragraph{Every role derives from one clamped value.} The smallest role is
+pinned to the fonts' own geometric legibility floor and each larger role is that
+floor times a fixed ratio. Because all five come from one number, the scale
+clamps \emph{uniformly} below the reference height instead of the smallest role
+clamping alone and squashing the hierarchy flat. That flattening is the specific
+defect this module was written to replace: seven independently hand-tuned
+percentages, every one of which sat below the legibility floor at its own
+reference size.
+
+\texttt{stroke()} snaps to whole device pixels, so a one-pixel rule never lands
+blurred across two --- continuous scaling would put it at $1.33$\,px on a 1440p
+screen.
+
+\paragraph{The generated header.} \texttt{ui\_metrics.hh} includes
+\texttt{ui\_min\_text\_size.gen.h}, produced at build time from \emph{the
+consuming application's own fonts}: the emitted floor is the worst case across
+them. It is therefore a per-application number and not a library constant. See
+Section~\ref{sec:mintext}.
+
+\subsection{\texttt{ui\_orientation} --- which way round the window is}
+
+\begin{lstlisting}
+enum class UiOrientation { Horizontal, Vertical };
+
+UiOrientation autoOrientationFor(int windowW, int windowH);
+
+struct UiOrientationState {
+    bool          autoEnabled = true;
+    UiOrientation manual      = UiOrientation::Horizontal;
+    UiOrientation resolve(int windowW, int windowH) const;
+    void toggleManual(int windowW, int windowH);
+};
+\end{lstlisting}
+
+\textbf{Derived from the shape the window already has, never asked of the OS.}
+That single property is why it behaves identically on Wayland (where a client
+cannot size or position itself), on Windows, and on Android (where a device
+rotation arrives as an ordinary resize).
+
+It replaced a pair of ``modes'' that were really window rectangles wearing a
+mode's name, and whose Wayland implementation could only ask the compositor for
+a size and wait for an asynchronous \texttt{configure} to come back --- which is
+why toggling the layout used to feel slow.
+
+A tie ($w = h$) resolves to \texttt{Horizontal} deliberately: something has to
+win. Degenerate sizes --- a Wayland surface configured $0\times0$ before its
+first real configure --- fall out of the same comparison rather than needing a
+guard, so the answer is defined rather than accidental.
+
+\texttt{toggleManual()} seeds \texttt{manual} from what automatic \emph{would}
+have said before flipping it. Without that seeding, the first key press on a
+vertical monitor appears to do nothing.
+
+\subsection{\texttt{layout\_rect} and \texttt{color}}
+
+Two POD types that exist to delete two Windows dependencies:
+
+\begin{lstlisting}
+struct LayoutRect { int left = 0, top = 0, right = 0, bottom = 0; };
+
+using ColorRef = uint32_t;                       // 0x00BBGGRR, as COLORREF was
+constexpr ColorRef RGB(uint8_t r, uint8_t g, uint8_t b);
+constexpr uint8_t  GetRValue(ColorRef c);        // and G, B
+\end{lstlisting}
+
+Both keep Win32's member names and bit layout on purpose, so porting existing
+code touches no call site.
+
+\texttt{color.hh} \texttt{\#undef}s \texttt{RGB}, \texttt{GetRValue},
+\texttt{GetGValue} and \texttt{GetBValue} before declaring its own. Those are
+\texttt{wingdi.h} \emph{textual macros}: if \texttt{<windows.h>} reached the
+translation unit first, they do not shadow the declarations below, they break
+them outright by substitution.
+
+%======================================================================
+\section{Platform notes}
+
+\subsection{Win32 (\texttt{os/win32\_host.cc})}
+
+A real \texttt{HWND} with a classic \texttt{WndProc}. Owns \texttt{WinMain},
+which raises DPI awareness, opens the log, installs a minidump crash handler,
+raises the system timer resolution to 1\,ms, initialises COM, and then calls
+\texttt{app\_shell\_main()}.
+
+It is the only backend that distinguishes timer ids, and the only one where
+\texttt{registerHotkey()} is genuinely \emph{system-wide}: a registered hotkey
+fires with the application in the background. Hotkeys are unregistered on
+teardown, tracked by the ids that registered successfully rather than by a
+fixed list.
+
+\texttt{Host} carries one Windows-only method,
+\texttt{HWND~nativeHandle()~const}, behind \texttt{\#ifdef~\_WIN32}. It exists because mouse-leave detection
+(\texttt{TrackMouseEvent}) needs a real handle and there is no portable
+equivalent. It is not part of the portable surface and nothing portable may call
+it.
+
+\subsection{Wayland (\texttt{os/wayland\_host.cc})}
+
+Built on \texttt{vk\_canvas}'s \texttt{WaylandDisplay}/\texttt{WaylandWindow}. A
+\texttt{timerfd} for the timer and an \texttt{eventfd}-woken queue for
+cross-thread events, both drained from \texttt{pump()}. Owns \texttt{main()},
+which opens the log and installs signal handlers before calling
+\texttt{app\_shell\_main()}.
+
+What Wayland genuinely cannot do, and which is therefore answered honestly
+rather than faked:
+
+\begin{itemize}[leftmargin=*]
+\item \texttt{snapToEdge()} --- a client cannot position itself.
+\item \texttt{adaptToCurrentMonitor()} --- a client cannot ask which monitor it
+  is on.
+\item \texttt{primaryMonitor().workArea} --- no taskbar concept is exposed, so
+  it equals \texttt{bounds}.
+\item \texttt{registerHotkey()} --- no cross-compositor global-hotkey protocol
+  exists, so it becomes a focused-window-only check against the registered
+  table. \textbf{A documented narrowing, not a silent drop.}
+\end{itemize}
+
+These are no-ops with comments, not bugs. The difference matters: a reader who
+finds a silent no-op assumes it is broken.
+
+\paragraph{One logging detail worth keeping.} \texttt{openLogFile()}
+\texttt{dup2}s \texttt{stderr} onto \texttt{stdout}'s descriptor. Opening the
+same path twice gives the two streams independent offsets, and one silently
+erases the other's writes.
+
+\subsection{Android (\texttt{os/android\_host.cc})}
+\label{sec:android}
+
+Modelled directly on the Wayland host: bionic has \texttt{timerfd} and
+\texttt{eventfd}, so the timer and the event queue are the same calls, merely
+registered with \texttt{ALooper\_addFd()} instead of a hand-rolled
+\texttt{poll()}.
+
+The application supplies its own \texttt{android\_main()}:
+
+\begin{lstlisting}
+void android_main(android_app* state) {
+    MyApp app;
+    // "my_arg" is the intent extra launchArgument() should return; the
+    // second string is the fallback when it is absent or empty.
+    if (!app.create(std::make_unique<AndroidHost>(state, "my_arg", "/default")))
+        return;
+    app.run();
+    app.shutdown();
+}
+\end{lstlisting}
+
+\paragraph{Be loud here.} When \texttt{android\_main()} returns, the activity
+finishes --- so every startup failure looks identical from outside: the
+application opens and closes. There is no window left to put an error in and no
+console to print one to. Log the phases.
+
+\paragraph{Standard output goes to \texttt{/dev/null} on Android.}
+\texttt{AndroidHost} therefore \texttt{dup2}s \texttt{stdout} and
+\texttt{stderr} onto a pipe whose reader thread forwards whole lines to logcat
+under the tag \texttt{APP\_SHELL\_APP\_NAME}. Without it, every
+\texttt{printf} in the application and in every library it links is silently
+discarded --- on the one platform with no terminal. Partial lines are held
+rather than flushed, so messages are never torn at a read boundary.
+
+\paragraph{Touch is translated, not pretended.} Under a 24\,px slop the gesture
+is a tap and the press is delivered at \emph{release}, so a finger that slides
+off cancels, the way a button works everywhere. Past the slop the gesture
+becomes wheel deltas for good and the press never happens.
+
+\paragraph{Bundled JNI plumbing.} Four modules travel with this host:
+\texttt{launch\_intent} (read a string extra off the launch intent),
+\texttt{safe\_area} (the display cutout), \texttt{storage\_permission}
+(all-files access, asked at most once), and \texttt{app\_paths\_android}. The permission is asked once per process
+\emph{and} only when the system says it is not already granted; both halves are
+needed, or a user who declines is re-asked on every resume.
+
+\subsection{A fourth host: headless}
+
+Nothing prevents an application from implementing \texttt{Host} itself and
+passing it in. The reference consumer does exactly this for deterministic
+screenshot testing: a host backed by \texttt{VK\_EXT\_headless\_surface} that
+answers ``there is no window'' to everything else, so the entire real
+application --- Vulkan initialisation, database restore, font baking, layout ---
+runs against a surface that presents to nothing.
+
+This is the strongest argument for the seam being drawn in the right place. If
+\texttt{Host} were not a genuine interface, that tool would have to
+re-implement the application, and would stop describing it the moment it moved.
+
+%======================================================================
+\section{Build integration}
+
+\subsection{Targets}
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Target & Contents \\
+\midrule
+\texttt{app\_shell}         & portable: \texttt{app\_paths}, \texttt{ui\_metrics}, \texttt{ui\_orientation}, headers \\
+\texttt{app\_shell\_win32}   & the Win32 host \\
+\texttt{app\_shell\_wayland} & the Wayland host \\
+\texttt{app\_shell\_android} & the Android host and its JNI plumbing \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A consumer links \texttt{app\_shell} plus \emph{exactly one} of the others. Only
+the target for the platform being configured is defined, so linking the wrong
+one is a configure error rather than a link error.
+
+\subsection{Cache variables}
+
+Set them \emph{before} \texttt{add\_subdirectory()}. All have working defaults,
+so the library configures and builds on its own.
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Variable & Default & Effect \\
+\midrule
+\texttt{APP\_SHELL\_APP\_NAME}   & \texttt{app}          & log file base name; Android logcat tag \\
+\texttt{APP\_SHELL\_WIN\_CLASS}  & \texttt{AppShellMain} & Win32 window class \\
+\texttt{APP\_SHELL\_STATE\_HOME} & (empty)               & dir under \texttt{\$HOME} for written files \\
+\texttt{APP\_SHELL\_NATIVE\_APP\_GLUE\_DIR} & --- & required on Android \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\texttt{APP\_SHELL\_NATIVE\_APP\_GLUE\_DIR} has no default and no sensible
+guess: \texttt{native\_app\_glue} ships inside the NDK, so only the consumer
+knows where it is. Omitting it is a \texttt{FATAL\_ERROR} with that sentence in
+it, rather than a confusing missing-header failure five files later.
+
+\subsection{The text-size floor generator}
+\label{sec:mintext}
+
+\begin{lstlisting}[language=]
+include(AppShellMinTextSize)
+app_shell_generate_min_text_size(
+    ${CMAKE_SOURCE_DIR}/assets/fonts/MyFace-Regular.otf
+    ${CMAKE_SOURCE_DIR}/assets/fonts/MyFace-Bold.otf)
+add_dependencies(app_shell generate_ui_min_text_size)
+\end{lstlisting}
+
+This emits \texttt{ui\_min\_text\_size.gen.h} into the build tree's
+\texttt{generated/} directory, which \texttt{ui\_metrics.hh}
+includes. The value is derived from the listed
+faces' own outline geometry: the smallest device-pixel size at which their
+strokes are still above what antialiased rendering can represent.
+
+\textbf{List exactly the faces the application loads.} The emitted floor is the
+worst case across them, so one left out can render below its own floor.
+
+Two constraints:
+
+\begin{itemize}[leftmargin=*]
+\item \textbf{It cannot run under a cross-compiler}, because the tool must
+  execute on the build machine. An Android build copies the header out of a
+  desktop build tree instead, which means a desktop build must have happened
+  first.
+\item The dependency must be stated by the consumer --- \\
+  \texttt{add\_dependencies(app\_shell generate\_ui\_min\_text\_size)} --- \\
+  because the target does not exist yet when CMake reads this library's own
+  \texttt{CMakeLists.txt}. The consumer owns the font list, so the consumer owns
+  the ordering.
+\end{itemize}
+
+%======================================================================
+\section{Testing}
+
+Two assert-based executables, Debug-only, no framework:
+
+\begin{lstlisting}[language=]
+./build/<tree>/app_shell_build/ui_metrics_test
+./build/<tree>/app_shell_build/ui_orientation_test
+\end{lstlisting}
+
+They \emph{compile} the sources rather than linking \texttt{app\_shell}, which
+is the property that keeps them honest: a test can never quietly start depending
+on Vulkan. Test sources \texttt{\#undef NDEBUG} so asserts survive an optimised
+build.
+
+The hosts have no automated tests and are unlikely ever to have useful ones ---
+they are thin adapters over three operating systems. What \emph{is} testable, and
+what the reference consumer does, is the whole application through an injected
+headless host, compared image by image against a known-good set. That catches
+regressions in this library indirectly but very effectively: a change here that
+alters layout by one pixel shows up immediately.
+
+%======================================================================
+\section{Known limitations}
+
+Stated rather than hidden, in rough order of how likely they are to matter.
+
+\begin{enumerate}[leftmargin=*]
+\item \textbf{One timer per host.} Two of the three backends ignore the timer
+  id. See Section~4.4.
+\item \textbf{No IME on Android.} \texttt{onCharPortable()} is never fed there,
+  so a text field can be seen and not typed into.
+\item \textbf{Hotkeys are Alt-only.} \texttt{registerHotkey()} takes a key code
+  and implies Alt. A modifier mask is the obvious extension.
+\item \textbf{No run loop is provided.} Deliberate today --- what counts as work
+  is the application's question --- but a default loop for applications that do
+  not care would be a reasonable addition.
+\item \textbf{No multi-window support.} \texttt{secondaryWindowHandle()} is an
+  escape hatch for an application that wants a second top-level window, not an
+  API for one. There is exactly one \texttt{Host} per process.
+\item \textbf{No clipboard, no drag-and-drop, no file dialogs.} An application
+  that needs them either implements them itself or extends this library.
+\end{enumerate}
+
+%======================================================================
+\section{History, and why the shapes are what they are}
+
+This library was extracted from a working application rather than designed in
+advance, and every unusual decision in it is a scar. Recording them is cheaper
+than rediscovering them.
+
+The extraction was done in two deliberate stages so that any regression would be
+bisectable: first \emph{generalise in place}, changing types and call directions
+while every file stayed where it was; then \emph{move}, changing no logic at all.
+
+Four couplings had to be cut:
+
+\begin{enumerate}[leftmargin=*]
+\item \texttt{Host::init()} took the concrete application class. Now it takes
+  \texttt{AppView*}.
+\item Cross-thread events and timer ids were enumerations declared in
+  \texttt{host.hh}, and every backend switched on them --- the same dispatch
+  written out four times. Both are plain \texttt{int} now, and the switch exists
+  once, in the application.
+\item \texttt{snapToEdge()} took the application's hotkey id, so the Win32 host
+  held a table mapping one application's keys to window geometry. It takes a
+  \texttt{SnapEdge}; hotkeys are registered by the application.
+\item The Android host read a named intent extra and called the application's
+  own domain method with it. It is told the key now, and states the string.
+\end{enumerate}
+
+\paragraph{How the result was verified.} The reference application renders
+twenty distinct UI states through a headless host. Before any change, those
+twenty images were captured as a baseline; after each stage, and again after a
+clean rebuild, they were compared \emph{byte for byte} and were identical. That,
+plus a suite of pure-logic tests and a bit-exactness gate on the audio path, is
+the evidence that lifting this code changed nothing about the program it was
+lifted out of.
+
+\vfill
+\begin{center}
+\rule{0.4\textwidth}{0.4pt}
+\end{center}
+
+\end{document}
