@@ -31,9 +31,16 @@ handler, the log file, and the Android `Host` for free. Android needs one extra
 file — an `android_main()` that constructs the app and an `AndroidHost` — and
 that file is six lines long.
 
-Extracted from Matrix Player (github.com/…/Matrix_Player), which is still its
-first and, for now, only consumer. **API-shaping decisions should favour the
-NEXT consumer, not that one.**
+Extracted from Matrix Player, which is still its first and, for now, only
+consumer. **API-shaping decisions should favour the NEXT consumer, not that
+one** — that is the whole reason this is a separate library rather than a folder
+in `gui/`.
+
+It lives IN that repository as a plain directory, not as a submodule. The split
+that matters is the one in the source (nothing here may know what a track is),
+not one in version control: this is first-party, it changes in step with the app
+that consumes it, and a fourth clone step would buy nothing. A second app either
+copies the folder or points its own `add_subdirectory()` at this one.
 
 ---
 
@@ -184,4 +191,5 @@ Keep them pure.
 
 ## Committing
 
-Use `git_wrapper` at the repo root, never plain `git commit`/`git push`.
+Use `git_wrapper` at the CONSUMING repository's root, never plain `git commit`/
+`git push`. There is no separate repository here to push.

@@ -213,8 +213,14 @@ matrix_player/
                                   Read its own CLAUDE.md first. Targets: app_shell
                                   (portable, links nothing) plus exactly one of
                                   app_shell_win32 / app_shell_wayland /
-                                  app_shell_android. Still an ordinary directory in this
-                                  repository, NOT yet a submodule — see "app_shell" below
+                                  app_shell_android. A PLAIN DIRECTORY in this
+                                  repository and deliberately not a submodule: it is
+                                  first-party, it changes in step with the app that
+                                  uses it, and a fourth clone step buys nothing. A
+                                  second app copies the folder or points its own
+                                  add_subdirectory() at this one. `audio_engine` and
+                                  `vk_canvas` remain submodules because they were
+                                  developed independently and predate this repo
     audio_engine/               — git submodule (github.com/minervarr/audio_engine).
                                   core/ (pure C++) + backends/{usb,alsa,jack,wasapi,flac,mp3,dsd}/
                                   + api/ (C ABI, not used by this app — we link the C++ targets
