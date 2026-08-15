@@ -46,6 +46,15 @@ android {
         }
     }
 
+    signingConfigs {
+        release {
+            storeFile file("../bruno.jks")
+            storePassword "Tetas//2004//"
+            keyAlias "brunoKey"
+            keyPassword "Tetas//2004//"
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
