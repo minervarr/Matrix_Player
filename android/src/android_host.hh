@@ -42,7 +42,7 @@ public:
     // Pumps the looper until Android hands us a window, then builds the
     // surface/asset seams over it. Everything after that — Vulkan, the DB, the
     // fonts, the layout — is PlayerWindow::create()'s ordinary work, unchanged.
-    bool init(PlayerWindow* owner) override;
+    bool init(AppView* owner) override;
 
     SurfaceProvider& surfaceProvider() override { return *surface_; }
     AssetReader&     assetReader()     override { return *assets_; }
@@ -62,9 +62,10 @@ public:
     void setCursor(CursorShape) override {}    // a finger has no shape to change
     void setKeepAwake(bool on) override;
 
-    void postAppEvent(AppEvent id, intptr_t p1 = 0, intptr_t p2 = 0) override;
-    void startTimer(TimerId id, int intervalMs) override;
-    void stopTimer(TimerId id) override;
+    void postAppEvent(int id, intptr_t p1 = 0, intptr_t p2 = 0) override;
+    void startTimer(int id, int intervalMs) override;
+    void stopTimer(int id) override;
+    std::string launchArgument() const override;
 
     void pump(bool haveWork) override;
     bool quitRequested() const override;
@@ -72,7 +73,7 @@ public:
     void showErrorMessage(const std::string& title, const std::string& msg) override;
 
 private:
-    struct Event { AppEvent id; intptr_t p1, p2; };
+    struct Event { int id; intptr_t p1, p2; };
 
     static void    handleAppCmd(android_app* app, int32_t cmd);
     static int32_t handleInputEvent(android_app* app, AInputEvent* event);
@@ -107,7 +108,8 @@ private:
     void maybeSeedMusicRoot();
 
     android_app*  state_ = nullptr;
-    PlayerWindow* owner_ = nullptr;
+    AppView* owner_ = nullptr;
+    int      timerId_ = 0;
 
     std::unique_ptr<AndroidSurfaceProvider> surface_;
     std::unique_ptr<AndroidAssetReader>     assets_;

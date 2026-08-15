@@ -55,7 +55,7 @@ public:
 
     std::string exeDir() const override { return app_paths::exeDir(); }
 
-    bool init(PlayerWindow*) override { return true; }
+    bool init(AppView*) override { return true; }
 
     // Background completions. A real Host wakes its message pump and dispatches
     // these on the UI thread; there is no pump here, so they queue and main()
@@ -63,7 +63,7 @@ public:
     // restored from the DB carry no tracks until the scan's onScanDone()
     // reattaches them (the DB keys albums by folder name and tracks by album
     // name), so a capture taken before that shows every album view empty.
-    void postAppEvent(AppEvent id, intptr_t p1, intptr_t p2) override {
+    void postAppEvent(int id, intptr_t p1, intptr_t p2) override {
         std::lock_guard<std::mutex> lk(mu_);
         queued_.push_back({ id, p1, p2 });
     }
@@ -77,9 +77,13 @@ public:
             std::lock_guard<std::mutex> lk(mu_);
             evs.swap(queued_);
         }
+        // This is the ONE place that does not simply forward to
+        // PlayerWindow::onAppEvent(): a capture session must not start music,
+        // and it wants the finish handler rather than another incremental pass
+        // (p1 is forced to 0 for that reason).
         bool scanned = false;
         for (const Ev& e : evs) {
-            switch (e.id) {
+            switch ((AppEvent)e.id) {
             case AppEvent::ScanDone:    p.onScanDone(); scanned = true;             break;
             case AppEvent::ArtDecoded:  p.onArtDecoded();                           break;
             case AppEvent::TrackChange: p.applyTrackMetadata((int)e.p1, (int)e.p2); break;
@@ -108,8 +112,8 @@ public:
     void invalidate() override {}
     void setCursor(CursorShape) override {}
     void setKeepAwake(bool) override {}
-    void startTimer(TimerId, int) override {}
-    void stopTimer(TimerId) override {}
+    void startTimer(int, int) override {}
+    void stopTimer(int) override {}
     void pump(bool) override {}
     bool quitRequested() const override { return false; }
 
@@ -118,7 +122,7 @@ public:
     }
 
 private:
-    struct Ev { AppEvent id; intptr_t p1, p2; };
+    struct Ev { int id; intptr_t p1, p2; };
 
     int w_, h_;
     HeadlessSurfaceProvider surface_;

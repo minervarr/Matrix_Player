@@ -2707,7 +2707,7 @@ void PlayerWindow::artDecodeWorker() {
             std::lock_guard<std::mutex> lk(artDecodeMu_);
             artDecodeDone_.push_back(std::move(res));
         }
-        host_->postAppEvent(AppEvent::ArtDecoded);
+        host_->postAppEvent((int)AppEvent::ArtDecoded);
     }
 }
 
@@ -5463,7 +5463,7 @@ void PlayerWindow::fpLoadDir(const std::string& dir) {
 void PlayerWindow::commitAddFolder(const std::string& root) {
     db_.addMusicRoot(root);
     watcher_.watchRoot(root, [this](const std::string&) {
-        host_->postAppEvent(AppEvent::ScanDone, 1);
+        host_->postAppEvent((int)AppEvent::ScanDone, 1);
     });
     StreamerDb sdb;
     sdb.open(root);  // no-op if this root has no sibling .streamer db
@@ -6290,7 +6290,7 @@ void PlayerWindow::onPlay(StartCause cause) {
     fflush(stdout);
 
     startGaplessCoordinator(callbackI32, capturedOutSr, capturedDacCh);
-    host_->startTimer(TimerId::SeekUpdate, 250);
+    host_->startTimer((int)TimerId::SeekUpdate, 250);
 
     // Nothing seeks here. Every track starts at zero, including the one that
     // was playing when the app last closed — see create(). onSeek() survives
@@ -6324,7 +6324,7 @@ void PlayerWindow::onStop() {
     nextDecoder_.close();
     active_ = &decoder_;
     nextAlbum_ = nextTrack_ = -1;
-    host_->stopTimer(TimerId::SeekUpdate);
+    host_->stopTimer((int)TimerId::SeekUpdate);
     isPlaying_ = false;
     playedFrames_.store(0);
     displayTrackStartFrame_ = 0;
@@ -6583,7 +6583,7 @@ void PlayerWindow::startGaplessCoordinator(PcmS32Callback cbI32, int outSr, int 
                 // Tell onPlay() this restart is the coordinator advancing, not
                 // a listener pressing play — the two look identical from there.
                 playFromGapless_.store(true);
-                host_->postAppEvent(AppEvent::RequestPlay);
+                host_->postAppEvent((int)AppEvent::RequestPlay);
                 break;
             }
 
@@ -6714,7 +6714,39 @@ void PlayerWindow::onSeek(int posMs) {
     markDirty();
 }
 
-void PlayerWindow::onTimer() {
+// The one place an AppEvent is decoded. Every Host carries the three integers
+// without reading them, so this switch exists exactly once — it used to be
+// written out four times over, once per backend plus once in the headless
+// capture tool, each naming these methods directly.
+void PlayerWindow::onAppEvent(int id, intptr_t p1, intptr_t p2) {
+    switch ((AppEvent)id) {
+    case AppEvent::TrackChange: applyTrackMetadata((int)p1, (int)p2); break;
+    // p1 == 1 asks for the incremental pass rather than the finish handler.
+    case AppEvent::ScanDone:
+        if (p1 == 1) startBackgroundScan(); else onScanDone();
+        break;
+    case AppEvent::ArtDecoded:  onArtDecoded(); break;
+    case AppEvent::RequestPlay: onPlay(); break;
+    }
+}
+
+// The platform may have been launched already knowing where the music is —
+// Android carries it as an intent extra, and there is no file browser on the
+// path to that answer. The host states the string and stops; deciding that a
+// launch argument IS a music root is this app's business, and doing it here is
+// what keeps AndroidHost from calling commitAddFolder() itself.
+//
+// Guarded on the database, not on a flag: this fires again on resume.
+void PlayerWindow::onHostReady() {
+    if (hasMusicRoots()) return;
+    const std::string root = host_->launchArgument();
+    if (root.empty()) return;
+    printf("[Host] seeding music root from launch argument: %s\n", root.c_str());
+    fflush(stdout);
+    commitAddFolder(root);
+}
+
+void PlayerWindow::onTimer(int /*timerId*/) {
     if (!isPlaying_) return;
 
     if (output_ && output_->hasFaulted()) {
@@ -7174,7 +7206,7 @@ void PlayerWindow::setupWatchers() {
     streamerDbs_.clear();
     for (auto& root : db_.loadMusicRoots()) {
         watcher_.watchRoot(root, [host](const std::string&) {
-            host->postAppEvent(AppEvent::ScanDone, 1);
+            host->postAppEvent((int)AppEvent::ScanDone, 1);
         });
         StreamerDb sdb;
         sdb.open(root);  // no-op if this root has no sibling .streamer db
@@ -7265,7 +7297,7 @@ void PlayerWindow::startBackgroundScan() {
             scanResult_ = std::move(allAlbums);
         }
         scanning_.store(false);
-        host_->postAppEvent(AppEvent::ScanDone, 0);
+        host_->postAppEvent((int)AppEvent::ScanDone, 0);
     });
 }
 

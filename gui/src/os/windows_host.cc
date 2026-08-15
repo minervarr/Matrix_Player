@@ -61,7 +61,7 @@ class WindowsHost : public Host {
 public:
     std::string exeDir() const override { return app_paths::exeDir(); }
 
-    bool init(PlayerWindow* owner) override {
+    bool init(AppView* owner) override {
         owner_ = owner;
         hInst_ = GetModuleHandleW(nullptr);
 
@@ -223,14 +223,14 @@ public:
                                    : ES_CONTINUOUS);
     }
 
-    void postAppEvent(AppEvent id, intptr_t p1, intptr_t p2) override {
-        PostMessageW(hwnd_, WM_APP + (int)id, (WPARAM)p1, (LPARAM)p2);
+    void postAppEvent(int id, intptr_t p1, intptr_t p2) override {
+        PostMessageW(hwnd_, WM_APP + id, (WPARAM)p1, (LPARAM)p2);
     }
 
-    void startTimer(TimerId id, int intervalMs) override {
+    void startTimer(int id, int intervalMs) override {
         SetTimer(hwnd_, timerWinId(id), intervalMs, nullptr);
     }
-    void stopTimer(TimerId id) override {
+    void stopTimer(int id) override {
         KillTimer(hwnd_, timerWinId(id));
     }
 
@@ -253,7 +253,9 @@ public:
     HWND nativeHandle() const override { return hwnd_; }
 
 private:
-    static UINT_PTR timerWinId(TimerId id) { return 1 + (UINT_PTR)id; }
+    // +1 because SetTimer treats 0 as "allocate one for me". This is the only
+    // backend that distinguishes timer ids at all.
+    static UINT_PTR timerWinId(int id) { return 1 + (UINT_PTR)id; }
 
     static LRESULT CALLBACK wndProcThunk(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (msg == WM_CREATE) {
@@ -266,17 +268,11 @@ private:
     }
 
     LRESULT handleMsg(UINT msg, WPARAM wp, LPARAM lp) {
-        // WM_APP_* range: dispatch cross-thread completions posted via
-        // postAppEvent() back into owner_'s on*() methods.
+        // WM_APP_* range: cross-thread completions posted via postAppEvent(),
+        // handed back to the app with the id it gave us. What any of them mean
+        // is decided in AppView::onAppEvent() and nowhere here.
         if (msg >= WM_APP && msg < WM_APP + 16) {
-            switch ((AppEvent)(msg - WM_APP)) {
-            case AppEvent::TrackChange: owner_->applyTrackMetadata((int)wp, (int)lp); return 0;
-            case AppEvent::ScanDone:
-                if (wp == 1) owner_->startBackgroundScan(); else owner_->onScanDone();
-                return 0;
-            case AppEvent::ArtDecoded:  owner_->onArtDecoded(); return 0;
-            case AppEvent::RequestPlay: owner_->onPlay(); return 0;
-            }
+            owner_->onAppEvent((int)(msg - WM_APP), (intptr_t)wp, (intptr_t)lp);
             return 0;
         }
 
@@ -342,11 +338,11 @@ private:
         }
 
         case WM_TIMER:
-            if (wp == timerWinId(TimerId::SeekUpdate)) owner_->onTimer();
+            owner_->onTimer((int)(wp - 1));  // undo timerWinId()'s +1
             return 0;
 
         case WM_COMMAND:
-            return 0;  // legacy WM_COMMAND path no longer used (see AppEvent::RequestPlay)
+            return 0;  // legacy WM_COMMAND path no longer used (see AppEvent::RequestPlay in player_view.hh)
 
         case WM_MOUSEMOVE:
             owner_->onMouseMove(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
@@ -429,7 +425,7 @@ private:
         return DefWindowProcW(hwnd_, msg, wp, lp);
     }
 
-    PlayerWindow* owner_ = nullptr;
+    AppView* owner_ = nullptr;
     // Where the button went down, for onDragEnd() — see WM_LBUTTONDOWN/UP.
     int       dragStartX_ = 0, dragStartY_ = 0;
     bool      dragValid_  = false;

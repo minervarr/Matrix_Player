@@ -127,7 +127,7 @@ std::string AndroidHost::exeDir() const {
     return app_paths::exeDir();
 }
 
-bool AndroidHost::init(PlayerWindow* owner) {
+bool AndroidHost::init(AppView* owner) {
     owner_ = owner;
 
     // internalDataPath is a plain field on ANativeActivity — no JNI needed.
@@ -313,11 +313,15 @@ void AndroidHost::ensureStoragePermission() {
     request_all_files_access(state_);
 }
 
-// The desktop learns its music folders from the folder picker. A phone has no
-// picker on this path — the root comes from the launch intent's "scan_root"
-// extra — so this hands that answer to PlayerWindow once and then gets out of
-// the way: the incremental scan, the folder watch and the .streamer sidecar
-// are all commitAddFolder()'s ordinary work, identical to the desktop's.
+// Storage, then a nudge to the app — and NOT a decision.
+//
+// This used to read the intent's "scan_root" extra and call PlayerWindow's own
+// commitAddFolder() with it, which is a host reaching into an application's
+// domain: the one place a message pump knew what music was. Now it does the two
+// things that are genuinely a phone's business — get permission, and be sure
+// the app is actually built — and then says onHostReady(). What a launch
+// argument MEANS is answered in AppView::onHostReady(); the string itself comes
+// out of launchArgument() below.
 void AndroidHost::maybeSeedMusicRoot() {
     // appReady_, not just owner_. owner_ is set at the TOP of init(), while
     // the database it is about to be asked about is opened after init()
@@ -333,13 +337,13 @@ void AndroidHost::maybeSeedMusicRoot() {
         return;
     }
     rootSeeded_ = true;
-    if (owner_->hasMusicRoots()) {
-        LOGI("music roots already in the database; nothing to seed");
-        return;
-    }
-    const std::string root = read_scan_root_extra(state_);
-    LOGI("seeding music root: %s", root.c_str());
-    owner_->commitAddFolder(root);
+    owner_->onHostReady();
+}
+
+// What this activity was launched WITH. Empty on both desktops (see host.hh);
+// here it is the intent's "scan_root" extra, stated and not interpreted.
+std::string AndroidHost::launchArgument() const {
+    return read_scan_root_extra(state_);
 }
 
 // ── Touch ────────────────────────────────────────────────────────────────────
@@ -426,7 +430,7 @@ void AndroidHost::onTouchUp(float x, float y, bool cancelled) {
 
 // ── Cross-thread events and the seek timer ───────────────────────────────────
 
-void AndroidHost::postAppEvent(AppEvent id, intptr_t p1, intptr_t p2) {
+void AndroidHost::postAppEvent(int id, intptr_t p1, intptr_t p2) {
     {
         std::lock_guard<std::mutex> lk(eventsMu_);
         events_.push_back({id, p1, p2});
@@ -455,17 +459,11 @@ void AndroidHost::drainEvents() {
 
 void AndroidHost::dispatchAppEvent(const Event& e) {
     if (!owner_) return;
-    switch (e.id) {
-    case AppEvent::TrackChange: owner_->applyTrackMetadata((int)e.p1, (int)e.p2); break;
-    case AppEvent::ScanDone:
-        if (e.p1 == 1) owner_->startBackgroundScan(); else owner_->onScanDone();
-        break;
-    case AppEvent::ArtDecoded:  owner_->onArtDecoded(); break;
-    case AppEvent::RequestPlay: owner_->onPlay(); break;
-    }
+    owner_->onAppEvent(e.id, e.p1, e.p2);
 }
 
-void AndroidHost::startTimer(TimerId, int intervalMs) {
+void AndroidHost::startTimer(int id, int intervalMs) {
+    timerId_ = id;  // one timer fd; the id is remembered, not honoured
     if (timerFd_ < 0) return;
     itimerspec spec{};
     spec.it_value.tv_sec  = intervalMs / 1000;
@@ -474,7 +472,7 @@ void AndroidHost::startTimer(TimerId, int intervalMs) {
     timerfd_settime(timerFd_, 0, &spec, nullptr);
 }
 
-void AndroidHost::stopTimer(TimerId) {
+void AndroidHost::stopTimer(int) {
     if (timerFd_ < 0) return;
     itimerspec spec{};
     timerfd_settime(timerFd_, 0, &spec, nullptr);
@@ -483,7 +481,7 @@ void AndroidHost::stopTimer(TimerId) {
 void AndroidHost::drainTimer() {
     if (timerFd_ < 0 || !owner_) return;
     uint64_t expirations = 0;
-    if (read(timerFd_, &expirations, sizeof(expirations)) > 0) owner_->onTimer();
+    if (read(timerFd_, &expirations, sizeof(expirations)) > 0) owner_->onTimer(timerId_);
 }
 
 // ── The pump ─────────────────────────────────────────────────────────────────

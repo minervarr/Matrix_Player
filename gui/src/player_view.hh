@@ -76,7 +76,20 @@ static constexpr float kMinWindowContentH = kUiReferenceHeight;
 // name, not an ordinal), but every switch below is written against the set.
 enum class AudioBackend { Usb, Wasapi, Alsa, Jack, AAudio };
 
-class PlayerWindow {
+// ── The app's own host vocabularies ──────────────────────────────────────────
+//
+// Both were declared in host.hh until app_view.hh split the seam. They are
+// this player's words, not a window system's, so they live with the player and
+// travel through Host as plain integers — see the note above postAppEvent().
+
+// Cross-thread completions our background threads (art-decode worker,
+// background scan thread, gapless coordinator) need serviced on the UI thread.
+enum class AppEvent { TrackChange, ScanDone, ArtDecoded, RequestPlay };
+
+// The single repeating timer this app asks for: playback position updates.
+enum class TimerId { SeekUpdate };
+
+class PlayerWindow : public AppView {
 public:
     // `injectedHost` is the dev-tooling seam: pass nothing and create() builds
     // the platform's real Host via make_host(), exactly as before. The headless
@@ -103,18 +116,19 @@ public:
     bool captureFrame(std::vector<uint8_t>& rgba, uint32_t& w, uint32_t& h);
 #endif
 
-    // Host callbacks — public because Host (a separate object, not a
-    // PlayerWindow subclass) dispatches into these directly, the same way
-    // handleMsg used to before it moved into os/windows_host.cc /
-    // os/linux_host.cc. Not part of the app's own conceptual API.
-    void onHostResized();          // an explicit UI-mode/monitor change: notifyResized() + relayout
-    void onHostLayoutInvalidated(); // routine resize notification (no notifyResized(), see .cc)
-    void onHostExposed();          // window newly visible/uncovered — just mark a frame dirty
-    void onKeyDownPortable(int keyCode);      // key::* space (keys.hh) — shared key handling
-    void onCharPortable(uint32_t codepoint);  // search-box text entry
-    void onHotkey(int hotkeyId);              // Alt+F/J/C/U/G/H/L — see hotkey_ids.hh
-    void adaptToCurrentMonitor();             // WM_DISPLAYCHANGE/WM_WINDOWPOSCHANGED re-fit
-    void shutdown();               // teardown before the window/renderer die (was WM_DESTROY)
+    // Host callbacks — the AppView implementation. Public because Host (a
+    // separate object, not a PlayerWindow subclass) dispatches into these
+    // directly, the same way handleMsg used to before it moved into
+    // os/windows_host.cc / os/linux_host.cc. Not part of the app's own
+    // conceptual API. See app_view.hh for what each one promises.
+    void onHostResized() override;          // an explicit UI-mode/monitor change: notifyResized() + relayout
+    void onHostLayoutInvalidated() override; // routine resize notification (no notifyResized(), see .cc)
+    void onHostExposed() override;          // window newly visible/uncovered — just mark a frame dirty
+    void onKeyDownPortable(int keyCode) override;      // key::* space (keys.hh) — shared key handling
+    void onCharPortable(uint32_t codepoint) override;  // search-box text entry
+    void onHotkey(int hotkeyId) override;              // Alt+F/J/C/U/G/H/L — see hotkey_ids.hh
+    void adaptToCurrentMonitor() override;             // WM_DISPLAYCHANGE/WM_WINDOWPOSCHANGED re-fit
+    void shutdown() override;      // teardown before the window/renderer die (was WM_DESTROY)
 
     // ── The drawing surface can come and go ─────────────────────────────────
     //
@@ -130,18 +144,18 @@ public:
     // cells) SURVIVES; what lives on the GPU does not. Getting that wrong is
     // invisible until it isn't — a stale "already uploaded" flag means every
     // string on screen vanishes on the second visit, with no error anywhere.
-    void onSurfaceLost();
+    void onSurfaceLost() override;
     // Rebuilds everything the above released, against the host's NEW surface.
     // Returns false if the Renderer could not be created, in which case the
     // caller must not draw.
-    bool onSurfaceRecreated();
+    bool onSurfaceRecreated() override;
 
     // Mouse — dispatched from Host's input translation.
-    void onMouseMove(int x, int y);
-    void onMouseLeave();
-    void onLButtonDown(int x, int y);
-    void onLButtonDblClk(int x, int y);
-    void onMouseWheel(int x, int y, int delta);
+    void onMouseMove(int x, int y) override;
+    void onMouseLeave() override;
+    void onLButtonDown(int x, int y) override;
+    void onLButtonDblClk(int x, int y) override;
+    void onMouseWheel(int x, int y, int delta) override;
     // A DRAG that has ended: the pointer (or the finger) travelled dx,dy with
     // the button held and has just been released. Reported by the host rather
     // than reconstructed here, because each platform already tracks it — Win32
@@ -153,29 +167,41 @@ public:
     // second screen where a second screen can exist, and does nothing where it
     // cannot — a gesture costs no layout, which is the whole point (see
     // "Optional capabilities" in CLAUDE.md).
-    void onDragEnd(int dx, int dy);
+    void onDragEnd(int dx, int dy) override;
     // The two extra buttons on the side of a mouse (Win32 XBUTTON1/XBUTTON2,
     // evdev BTN_SIDE/BTN_EXTRA). Back is Escape by another name — the same
     // one-step-out that a browser's back button performs; forward re-enters
     // exactly what the last back left. Public for the same reason the rest of
     // this block is: Host dispatches straight into them.
-    void onNavBack();
-    void onNavForward();
+    void onNavBack() override;
+    void onNavForward() override;
 
-    void onTimer();  // periodic playback-position tick, see host_->startTimer()
+    // Periodic playback-position tick, see host_->startTimer(). The id is
+    // TimerId::SeekUpdate and is not read: this app asks for one timer.
+    void onTimer(int timerId) override;
+
+    // The host is up and we are fully built. Seeds the music library from
+    // Host::launchArgument() when the platform arrived already knowing it and
+    // nothing is indexed yet — which today means Android's "scan_root" intent
+    // extra, and on a desktop means nothing at all.
+    //
+    // Guarded here rather than by the host: it fires again after a suspend on
+    // platforms that have one.
+    void onHostReady() override;
+
+    // Dispatches an AppEvent posted from a background thread. The host carried
+    // the three integers and read none of them — see host.hh.
+    void onAppEvent(int id, intptr_t p1, intptr_t p2) override;
 
     // Adds a music root and starts a scan of it — what the folder picker does
-    // when a folder is chosen. Public because a Host may already KNOW the
-    // folder without anyone picking one: Android is launched with a
-    // "scan_root" extra on its intent, and there is no file browser on the
-    // path to that answer. Idempotent at the DB level (addMusicRoot ignores a
-    // duplicate), but the caller should still check hasMusicRoots() rather
-    // than re-adding on every launch.
+    // when a folder is chosen. Public because onHostReady() is not the only
+    // caller; the picker's own commit path lands here too. Idempotent at the DB
+    // level (addMusicRoot ignores a duplicate), but a caller should still check
+    // hasMusicRoots() rather than re-adding on every launch.
     void commitAddFolder(const std::string& root);
     bool hasMusicRoots();
 
-    // Cross-thread completions, delivered via host_->postAppEvent() from a
-    // background thread and dispatched back here on the UI thread by Host.
+    // Cross-thread completions, reached from onAppEvent() above.
     void applyTrackMetadata(int album, int track);
     void onScanDone();
     void onArtDecoded();

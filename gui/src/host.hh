@@ -1,4 +1,5 @@
 #pragma once
+#include "app_view.hh"
 #include "layout_rect.hh"
 #include <string>
 #include <memory>
@@ -13,8 +14,6 @@
 // all, only window/monitor/input/message-pump concerns.
 struct SurfaceProvider;
 struct AssetReader;
-
-class PlayerWindow;
 
 // Pointer images the UI distinguishes. Kept to what a hit-test can honestly
 // answer — "this is clickable", "you can type here" — and deliberately
@@ -45,17 +44,28 @@ struct SafeInsets {
     int top = 0, bottom = 0, left = 0, right = 0;
 };
 
-// Cross-thread notifications PlayerWindow's background threads (art-decode
-// worker, background scan thread, gapless coordinator) need serviced on the
-// UI thread — the portable equivalent of PostMessageW(hwnd_, WM_APP_*, ...).
-// Windows: maps to its own internal WM_APP+N numbering in windows_host.cc.
-// Linux: queued and drained from LinuxHost::pump().
-enum class AppEvent { TrackChange, ScanDone, ArtDecoded, RequestPlay };
-
-// Single repeating timer id PlayerWindow uses (playback position updates).
-// Windows: SetTimer/KillTimer. Linux: a timerfd polled alongside the Wayland
-// display fd in LinuxHost::pump().
-enum class TimerId { SeekUpdate };
+// ── Two vocabularies the host carries and never reads ────────────────────────
+//
+// Cross-thread notifications an app's background threads need serviced on the
+// UI thread — the portable equivalent of PostMessageW(hwnd_, WM_APP_*, ...) —
+// and the ids of the repeating timers it asks for.
+//
+// Both are the APPLICATION's enums, passed through as plain integers. A host
+// queues an event and hands the same three numbers back to
+// AppView::onAppEvent(); it starts a timer and hands the same id back to
+// AppView::onTimer(). Neither ever branches on the value.
+//
+// They used to be enums declared right here — `AppEvent{TrackChange, ScanDone,
+// ArtDecoded, RequestPlay}` and `TimerId{SeekUpdate}` — which is a music
+// player's vocabulary sitting in the one file that is supposed to know nothing
+// about music. Worse, each backend then had to switch on it, so the same
+// dispatch was written out four times over.
+//
+// Windows maps the event id onto its own WM_APP+N range; Linux and Android
+// queue it and drain it from pump(). Windows is also the only backend that
+// currently distinguishes timer ids at all (SetTimer needs a real id); the
+// other two have one timer fd and ignore the value, which is a narrowing to fix
+// on the day a second timer exists, not before.
 
 // Owns the real OS window handle and drives every window/monitor/input/
 // message-pump concern PlayerWindow never touches directly — see
@@ -89,7 +99,7 @@ public:
     // of the host's business. That removal is also what killed applyUiMode(),
     // whose Wayland implementation could only ask the compositor for a
     // fullscreen and wait for an asynchronous configure to come back.
-    virtual bool init(PlayerWindow* owner) = 0;
+    virtual bool init(AppView* owner) = 0;
 
     virtual SurfaceProvider& surfaceProvider() = 0;
     virtual AssetReader&     assetReader()     = 0;
@@ -153,12 +163,23 @@ public:
     // nothing else can ask.
     virtual void setKeepAwake(bool on) = 0;
 
-    // Cross-thread wakeup: safe to call from any thread. Dispatches into the
-    // matching owner->on*() method from the UI thread, inside pump().
-    virtual void postAppEvent(AppEvent id, intptr_t p1 = 0, intptr_t p2 = 0) = 0;
+    // Cross-thread wakeup: safe to call from any thread. The three integers
+    // come back out of AppView::onAppEvent() unread, on the UI thread, inside
+    // pump().
+    virtual void postAppEvent(int id, intptr_t p1 = 0, intptr_t p2 = 0) = 0;
 
-    virtual void startTimer(TimerId id, int intervalMs) = 0;
-    virtual void stopTimer(TimerId id) = 0;
+    virtual void startTimer(int id, int intervalMs) = 0;
+    virtual void stopTimer(int id) = 0;
+
+    // What the platform was launched WITH, if anything — Android reads it off
+    // the activity's intent. Empty on both desktops, and empty is the honest
+    // answer there rather than a stub: a desktop app is started by a user who
+    // is about to tell it what to do.
+    //
+    // The host states the fact and stops. What it MEANS is the app's business,
+    // decided in AppView::onHostReady(); this is the seam that replaced
+    // AndroidHost calling the music player's own commitAddFolder().
+    virtual std::string launchArgument() const { return {}; }
 
     // One iteration of the platform's message/event pump. Blocks up to
     // ~timeoutMs if haveWork is false, else processes what's ready and

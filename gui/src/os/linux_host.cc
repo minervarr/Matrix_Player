@@ -43,7 +43,7 @@ public:
 
     std::string exeDir() const override { return app_paths::exeDir(); }
 
-    bool init(PlayerWindow* owner) override {
+    bool init(AppView* owner) override {
         owner_ = owner;
         if (!display_->valid()) {
             fprintf(stderr, "[LinuxHost] Failed to connect to Wayland display\n");
@@ -132,7 +132,7 @@ public:
         display_->set_idle_inhibited(window_->surface(), on);
     }
 
-    void postAppEvent(AppEvent id, intptr_t p1, intptr_t p2) override {
+    void postAppEvent(int id, intptr_t p1, intptr_t p2) override {
         {
             std::lock_guard<std::mutex> lk(eventsMu_);
             events_.push_back({id, p1, p2});
@@ -140,8 +140,10 @@ public:
         display_->waker().wake();
     }
 
-    void startTimer(TimerId, int intervalMs) override {
-        // Only one timer id exists today (SeekUpdate) — see host.hh.
+    void startTimer(int id, int intervalMs) override {
+        // One timer fd, so the id is remembered rather than honoured: whatever
+        // the app armed is what fires. A second timer would need a fd map here.
+        timerId_ = id;
         itimerspec spec{};
         spec.it_value.tv_sec  = intervalMs / 1000;
         spec.it_value.tv_nsec = (intervalMs % 1000) * 1000000L;
@@ -149,7 +151,7 @@ public:
         timerfd_settime(seekTimerFd_, 0, &spec, nullptr);
     }
 
-    void stopTimer(TimerId) override {
+    void stopTimer(int) override {
         itimerspec spec{};
         timerfd_settime(seekTimerFd_, 0, &spec, nullptr);
     }
@@ -168,7 +170,7 @@ public:
         // Drain the seek-update timerfd (armed by startTimer()).
         uint64_t expirations = 0;
         if (read(seekTimerFd_, &expirations, sizeof(expirations)) > 0)
-            owner_->onTimer();
+            owner_->onTimer(timerId_);
 
         // Drain cross-thread app events posted via postAppEvent().
         std::vector<Event> pending;
@@ -273,20 +275,13 @@ public:
     }
 
 private:
-    struct Event { AppEvent id; intptr_t p1, p2; };
+    struct Event { int id; intptr_t p1, p2; };
 
-    void dispatchAppEvent(const Event& e) {
-        switch (e.id) {
-        case AppEvent::TrackChange: owner_->applyTrackMetadata((int)e.p1, (int)e.p2); break;
-        case AppEvent::ScanDone:
-            if (e.p1 == 1) owner_->startBackgroundScan(); else owner_->onScanDone();
-            break;
-        case AppEvent::ArtDecoded:  owner_->onArtDecoded(); break;
-        case AppEvent::RequestPlay: owner_->onPlay(); break;
-        }
-    }
+    int timerId_ = 0;
 
-    PlayerWindow* owner_ = nullptr;
+    void dispatchAppEvent(const Event& e) { owner_->onAppEvent(e.id, e.p1, e.p2); }
+
+    AppView* owner_ = nullptr;
     std::unique_ptr<WaylandDisplay> display_;
     std::unique_ptr<WaylandWindow> window_;
     std::unique_ptr<WaylandSurfaceProvider> surfaceProvider_;
