@@ -6948,12 +6948,17 @@ void PlayerWindow::drawSignalChain(Canvas& canvas, const LayoutRect& area) {
 
 void PlayerWindow::drawArtOverlay(Canvas& canvas, const LayoutRect& area) {
     Rect a = toRect(area);
-    // NO opaque fill here, and that is not an omission. The renderer emits
-    // every background image BEFORE every vector rect, so a black rect asked
-    // for first still comes out ON TOP of the backdrop below and painted the
-    // whole thing out — which is precisely what happened the first time. The
-    // render pass already clears to black, so the only black that has to be
-    // drawn is the "no artwork" case, which draws it itself.
+    // Black. Plain, opaque, the whole window — a picture on a wall, and the
+    // wall is not decorated. An attempt at "designing" the leftover (the same
+    // artwork enlarged behind, dimmed) was built and thrown away: whatever the
+    // dimming, it is a second image behind the first, and the sleeve stops
+    // being the only thing on screen. That is the entire point of this view.
+    //
+    // Safe as an ordinary vector rect ONLY because nothing else is drawn
+    // underneath — the art goes out on the FOREGROUND image layer, which
+    // composites above this (renderer.cc's record order). A BACKGROUND image
+    // would come out under it and be painted away.
+    canvas.rect(a.x, a.y, a.w, a.h, toColor(RGB(0, 0, 0)));
 
     // No padding at all: as large as the window can hold it. The picture is
     // NOT cropped to the screen's shape — a sleeve is a square and cropping it
@@ -6975,44 +6980,9 @@ void PlayerWindow::drawArtOverlay(Canvas& canvas, const LayoutRect& area) {
         float dx = std::floor(a.x + (a.w - dw) * 0.5f);
         float dy = std::floor(a.y + (a.h - dh) * 0.5f);
 
-        // ── What is left over is DESIGNED, not left black ────────────────
-        // The same artwork, enlarged to cover the whole window and cropped in
-        // UV space, then dimmed almost to black. The picture keeps every
-        // pixel it has and the leftover carries its colour instead of being a
-        // dead band.
-        //
-        // It works because of the renderer's record order, and only because
-        // of it: BACKGROUND images, then the vector layer, then FOREGROUND
-        // images. So the backdrop goes out with image(), the veil is an
-        // ordinary rect over it, and the real art goes out with imageFg()
-        // above both. Any other order and the veil would dim the art too.
-        //
-        // The backdrop is the one place in this app where a GPU upscale is
-        // WANTED: it softens the enlargement, which is exactly what a
-        // backdrop should look like. The art itself never touches that path.
-        if (dw < a.w - 1.0f || dh < a.h - 1.0f) {
-            const float cs   = std::max(a.w / (float)overlayArtTexW_,
-                                        a.h / (float)overlayArtTexH_);
-            const float visW = std::min((float)overlayArtTexW_, a.w / cs);
-            const float visH = std::min((float)overlayArtTexH_, a.h / cs);
-            const float u0 = (overlayArtTexW_ - visW) * 0.5f / overlayArtTexW_;
-            const float v0 = (overlayArtTexH_ - visH) * 0.5f / overlayArtTexH_;
-            canvas.image(overlayArtTex_, a.x, a.y, a.w, a.h,
-                         u0, v0, 1.0f - u0, 1.0f - v0);
-            // Heavy on purpose. This is a wall, not a second picture: bright
-            // enough to read as the record's own colour, dark enough that the
-            // eye never leaves the sleeve.
-            // 0.88 is measured, not chosen: at 0.74 the backdrop reads as a
-            // SECOND picture and the eye keeps leaving the sleeve, which is
-            // the one thing a wall must not do. At 0.88 the colour survives
-            // and the detail does not.
-            canvas.rect(a.x, a.y, a.w, a.h, toColor(RGB(0, 0, 0), 0.88f));
-        }
-
         canvas.imageFg(overlayArtTex_, dx, dy, dw, dh);
         rcOverlayImage_ = { (int)dx, (int)dy, (int)(dx + dw), (int)(dy + dh) };
     } else {
-        canvas.rect(a.x, a.y, a.w, a.h, toColor(RGB(0, 0, 0)));
         canvas.textCentered("No artwork", a.x + a.w * 0.5f, a.y + a.h * 0.5f,
                             metrics_.text.body, toColor(CLR_TEXT_DIM));
         rcOverlayImage_ = {};
