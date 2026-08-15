@@ -6948,18 +6948,20 @@ void PlayerWindow::drawSignalChain(Canvas& canvas, const LayoutRect& area) {
 
 void PlayerWindow::drawArtOverlay(Canvas& canvas, const LayoutRect& area) {
     Rect a = toRect(area);
-    // Black, not CLR_BG_MAIN: this is a picture on a wall. It is an ordinary
-    // vector rect and it is safe here precisely because nothing of the grid
-    // was drawn underneath — the art itself goes out on the FOREGROUND image
-    // layer, which composites above this (see renderer.cc's record order).
-    canvas.rect(a.x, a.y, a.w, a.h, toColor(RGB(0, 0, 0)));
+    // NO opaque fill here, and that is not an omission. The renderer emits
+    // every background image BEFORE every vector rect, so a black rect asked
+    // for first still comes out ON TOP of the backdrop below and painted the
+    // whole thing out — which is precisely what happened the first time. The
+    // render pass already clears to black, so the only black that has to be
+    // drawn is the "no artwork" case, which draws it itself.
 
-    // No padding worth the name: a picture on a black wall wants the wall, and
-    // the art keeps its aspect ratio anyway, so the letterbox IS the margin.
-    const float pad = metrics_.space(SP_SM);
-
-    const int boxW = (int)std::max(1.0f, a.w - pad * 2.0f);
-    const int boxH = (int)std::max(1.0f, a.h - pad * 2.0f);
+    // No padding at all: as large as the window can hold it. The picture is
+    // NOT cropped to the screen's shape — a sleeve is a square and cropping it
+    // to a phone would throw away most of the artwork, which is the opposite
+    // of what a fullscreen view is for. It fills one axis completely and the
+    // other keeps whatever the aspect ratio leaves over.
+    const int boxW = (int)std::max(1.0f, a.w);
+    const int boxH = (int)std::max(1.0f, a.h);
     ensureOverlayArtTexture(boxW, boxH);
 
     if (overlayArtTex_ != kInvalidTexture && overlayArtTexW_ > 0 && overlayArtTexH_ > 0) {
@@ -6971,10 +6973,46 @@ void PlayerWindow::drawArtOverlay(Canvas& canvas, const LayoutRect& area) {
         float s = std::min(boxW / (float)overlayArtTexW_, boxH / (float)overlayArtTexH_);
         float dw = std::floor(overlayArtTexW_ * s), dh = std::floor(overlayArtTexH_ * s);
         float dx = std::floor(a.x + (a.w - dw) * 0.5f);
-        float dy = std::floor(a.y + pad + (boxH - dh) * 0.5f);
+        float dy = std::floor(a.y + (a.h - dh) * 0.5f);
+
+        // ── What is left over is DESIGNED, not left black ────────────────
+        // The same artwork, enlarged to cover the whole window and cropped in
+        // UV space, then dimmed almost to black. The picture keeps every
+        // pixel it has and the leftover carries its colour instead of being a
+        // dead band.
+        //
+        // It works because of the renderer's record order, and only because
+        // of it: BACKGROUND images, then the vector layer, then FOREGROUND
+        // images. So the backdrop goes out with image(), the veil is an
+        // ordinary rect over it, and the real art goes out with imageFg()
+        // above both. Any other order and the veil would dim the art too.
+        //
+        // The backdrop is the one place in this app where a GPU upscale is
+        // WANTED: it softens the enlargement, which is exactly what a
+        // backdrop should look like. The art itself never touches that path.
+        if (dw < a.w - 1.0f || dh < a.h - 1.0f) {
+            const float cs   = std::max(a.w / (float)overlayArtTexW_,
+                                        a.h / (float)overlayArtTexH_);
+            const float visW = std::min((float)overlayArtTexW_, a.w / cs);
+            const float visH = std::min((float)overlayArtTexH_, a.h / cs);
+            const float u0 = (overlayArtTexW_ - visW) * 0.5f / overlayArtTexW_;
+            const float v0 = (overlayArtTexH_ - visH) * 0.5f / overlayArtTexH_;
+            canvas.image(overlayArtTex_, a.x, a.y, a.w, a.h,
+                         u0, v0, 1.0f - u0, 1.0f - v0);
+            // Heavy on purpose. This is a wall, not a second picture: bright
+            // enough to read as the record's own colour, dark enough that the
+            // eye never leaves the sleeve.
+            // 0.88 is measured, not chosen: at 0.74 the backdrop reads as a
+            // SECOND picture and the eye keeps leaving the sleeve, which is
+            // the one thing a wall must not do. At 0.88 the colour survives
+            // and the detail does not.
+            canvas.rect(a.x, a.y, a.w, a.h, toColor(RGB(0, 0, 0), 0.88f));
+        }
+
         canvas.imageFg(overlayArtTex_, dx, dy, dw, dh);
         rcOverlayImage_ = { (int)dx, (int)dy, (int)(dx + dw), (int)(dy + dh) };
     } else {
+        canvas.rect(a.x, a.y, a.w, a.h, toColor(RGB(0, 0, 0)));
         canvas.textCentered("No artwork", a.x + a.w * 0.5f, a.y + a.h * 0.5f,
                             metrics_.text.body, toColor(CLR_TEXT_DIM));
         rcOverlayImage_ = {};
