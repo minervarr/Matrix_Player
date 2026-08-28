@@ -68,6 +68,19 @@ lists the rest under `OTHER VERSIONS` (`MORE REMIXES` on a remix page, where
       `.dsf`/`.dff`. The test library is 518 files, all FLAC, so nothing is
       hidden today; this is the gap between what the UI can say and what the
       scanner can find.
+      - **MP3 half, scoped** (the DSD half needs its own design): add `.mp3`
+        to the walk (`library.cpp:488`), write `quickParseMP3()` — ID3v1 /
+        ID3v2.3-4 header for tags, duration from bitrate or frame count — and
+        give the scanner's three two-branch call sites a third branch
+        (`library.cpp:503`, `538`, `577`). Not a one-line extension on
+        purpose: with no ID3 quick-parse an indexed MP3 would list as its
+        filename with no duration, and the metadata pre-parser has exactly two
+        branches today (`quickParseFLAC` / `quickParseWAV`). The decoder side
+        needs nothing: `make_decoder` already magic-sniffs ID3 and the
+        Layer-III frame header, so a real MP3 handed to it plays — an MP3
+        misnamed `.flac` is both how MP3 playback is verified today and how
+        this scanning gap was discovered. Prerequisite for the `topGenres()` /
+        year half: see "ID3 tag reading" below.
 
 ## Names, languages and metadata
 
@@ -206,7 +219,10 @@ Next, in the order it would be picked up:
         has to say so rather than disguise it.
 - [ ] **ID3 tag reading**, so MP3s carry genre and year. Today only Vorbis
       comments are parsed, which leaves every MP3 out of `topGenres()` and out
-      of any year-based view.
+      of any year-based view. Shared work with the scanner's `quickParseMP3()`
+      — see "MP3 and DSD are not indexed at all" above: one ID3 reader serves
+      both the duration/tags the scan needs and the genre/year the analytics
+      need.
 - [ ] **Explicit signal** (love / rating). Everything recorded so far is
       implicit; a playlist generator built only on play counts cannot tell
       "on heavy rotation" from "actually a favourite".
