@@ -46,6 +46,14 @@ android {
         }
     }
 
+    buildFeatures {
+        // The AOAS client contract (aidl/io/nava/aoas/*.aidl — verbatim copies
+        // of the server repo's aidl/ files) compiles to the Java stubs
+        // AoasClient.java binds through. Without this the build silently
+        // ships no binder interface and the AOAS backend cannot exist.
+        aidl true
+    }
+
     signingConfigs {
         release {
             storeFile file("../bruno.jks")

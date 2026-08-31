@@ -173,9 +173,10 @@ add_library(matrix_player_android SHARED
     ${MATRIX_GUI_SRC}/ui_icons.cc
     ${MATRIX_GUI_SRC}/ui_icons_draw.cc
     ${MATRIX_GUI_SRC}/os/aaudio_output.cc
+    ${MATRIX_GUI_SRC}/os/aoas_output.cc
     ${NATIVE_APP_GLUE}/android_native_app_glue.c)
 
-target_compile_definitions(matrix_player_android PRIVATE MATRIX_HAVE_AAUDIO)
+target_compile_definitions(matrix_player_android PRIVATE MATRIX_HAVE_AAUDIO MATRIX_HAVE_AOAS)
 
 target_include_directories(matrix_player_android PRIVATE
     ${NATIVE_APP_GLUE}

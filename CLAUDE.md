@@ -1316,6 +1316,72 @@ the stream is **always 16-bit**, so `strictBitperfect` on a deeper source is
 refused outright and `deviceMaxBits` is stated as 16 — which is what makes the
 signal-chain readout say "truncated" instead of claiming bit-perfect.
 
+### The AOAS relay backend (`AudioBackend::Aoas`, `gui/src/os/aoas_output.hh/.cc`)
+
+Matrix Player on the phone can be a **client of AOAS** (the sibling project
+`AndroidOneAudioServer_AOAS`): a background service that owns the USB
+permission grant and the live isochronous stream to one DAC and never closes
+either — so switching apps never re-grants a dialog and never re-locks the
+DAC's clock. This backend acquires ownership, maps the shared-memory ring
+AOAS creates, and writes wire-format PCM into it; AOAS copies those exact
+bytes to the endpoint. Zero DSP, zero resampling — bit-perfect by
+construction. Read `docs/superpowers/specs/2026-08-28-aoas-client-backend.md`
+and AOAS's own `CLAUDE.md` before changing anything here; what follows is
+only what a reader of THIS repo must not undo:
+
+1. **The server refuses a second `acquire()` outright — even from the current
+   owner.** So EVERY format change and every `flush()` goes
+   `release()` → `acquire()`. That is affordable because an identical format
+   leaves the isochronous stream untouched (the silent handover the AIDL doc
+   promises): `flush()` — what `onSeek` and a manual Next call — IS that
+   self-handover. A different format re-locks the clock, accepted rather than
+   hidden, the same as direct USB.
+2. **The producer may not move `readPos`.** `ShmRing`'s indices have owners:
+   this side owns `writePos`, AOAS owns `readPos`. There is no client-side
+   discard — that is why rule 1's release-and-reacquire is the only flush.
+   `ShmRing::clear()`/`read()` are never called from here.
+3. **`munmap` under a concurrent ring write is a SIGSEGV**, and `onSeek`'s
+   `flush()` can race the decode thread. Every entry that touches the ring
+   takes a `RingTouch` (an atomic counter); `releaseOwned()` drains it —
+   bounded at 50 ms — before unmapping, and would rather LEAK one mapping
+   than unmap under a memcpy. Write paths also fail fast once `owned_` is
+   false, so the blocking writes never park the decode thread behind a dead
+   ring for the full timeout.
+4. **The Java half is one file and holds no audio decisions.**
+   `android/app/src/main/java/io/nava/matrixplayer/AoasClient.java` binds the
+   service, hands the ring fd to native synchronously inside `acquire()`, and
+   forwards `onOwnershipLost`. It exists because `IAoas` is an AIDL contract
+   generated with the **Java** backend (the NDK ships only libbinder_ndk's C
+   headers — AOAS's CLAUDE.md, open question 1). It needs
+   `System.loadLibrary` in a static block even though the .so is already
+   mapped (NativeActivity `dlopen()`s it from native code, which never
+   registers it with the JVM), and native finds the class through the
+   activity's **classloader**, never `FindClass()` — a native thread's
+   default loader is the system one and cannot see app classes.
+5. **The contract files are verbatim copies of AOAS's, and must stay so:**
+   `third_party/aoas/shm_ring.hh` (from AOAS `native/`) and
+   `android/app/src/main/aidl/io/nava/aoas/*.aidl` (from AOAS `aidl/`, which
+   that repo keeps at its root precisely so clients can compile against it).
+   `ShmRing::attach` verifies magic/version at runtime, but keep them in sync
+   by hand when AOAS's contract changes.
+6. **Binding requires the signature-level permission `io.nava.aoas.BIND_AOAS`:
+   both APKs must be signed with the same key.** Two debug builds on one
+   machine share `~/.android/debug.keystore`, so debug+debug binds; a release
+   build signed with `bruno.jks` will not bind a debug-signed AOAS. The
+   manifest's `<queries>` for `io.nava.aoas` is Android 11+ package
+   visibility — without it, `bindService` fails as if the service did not
+   exist.
+7. **`getActiveDeviceKey()` returns `"aoas"`** — the DAC behind the relay is
+   not addressable by VID:PID through `IAoas` (only `deviceInfo()`, a string),
+   so AutoEQ gets one slot per output, the same model as `"alsa"`/`"jack"`.
+   If AOAS ever exposes descriptors, the key should become VID:PID: the EQ
+   profile follows the DAC's drivers, not the relay.
+
+`AoasClient` is the FIRST client AOAS has ever had; AOAS itself needed no
+changes. Still unverified on hardware (AOAS's own CLAUDE.md lists the same
+gaps): the ring relay end to end, ownership handover, and the
+silent-handover claim.
+
 ### What is still missing on the phone, and is not hidden
 
 - **No keyboard.** `onCharPortable()` is never fed, so the guided-search box can

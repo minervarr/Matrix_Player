@@ -6,6 +6,7 @@
 
 #include "android_host.hh"  // app_shell: the third Host
 #include "player_view.hh"
+#include "os/aoas_output.hh"  // AOAS relay backend: hands over the android_app for JNI
 
 #define LOG_TAG "MatrixMain"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -32,6 +33,9 @@
 //     adb logcat -s MatrixMain:V AndroidHost:V matrix_player:V
 void android_main(android_app* state) {
     LOGI("phase 1/5: entry -- constructing PlayerWindow");
+    // The AOAS relay backend's JNI upcalls need the activity (its classloader
+    // and its bindService). Available from the first line of android_main.
+    matrixAoasSetApp(state);
     try {
         PlayerWindow win;
 

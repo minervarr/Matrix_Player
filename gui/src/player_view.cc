@@ -115,6 +115,7 @@ static const char* backendDisplayName(AudioBackend b) {
     case AudioBackend::Alsa:   return "ALSA";
     case AudioBackend::Jack:   return "JACK";
     case AudioBackend::AAudio: return "AAudio";
+    case AudioBackend::Aoas:   return "AOAS (shared USB)";
     }
     return "?";
 }
@@ -480,6 +481,9 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
 #ifdef MATRIX_HAVE_AAUDIO
         if (backend == "aaudio") audioBackend_ = AudioBackend::AAudio;
 #endif
+#ifdef MATRIX_HAVE_AOAS
+        if (backend == "aoas") audioBackend_ = AudioBackend::Aoas;
+#endif
 #endif
     }
 #ifdef _WIN32
@@ -560,6 +564,12 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
     else if (audioBackend_ == AudioBackend::AAudio) {
         output_ = std::make_unique<AAudioOutput>();
         printf("[Audio] AAudio backend selected\n");
+    }
+#endif
+#ifdef MATRIX_HAVE_AOAS
+    else if (audioBackend_ == AudioBackend::Aoas) {
+        output_ = std::make_unique<AoasOutput>();
+        printf("[Audio] AOAS relay backend selected (shared USB via the AOAS service)\n");
     }
 #endif
 #endif
@@ -4367,6 +4377,12 @@ void PlayerWindow::onAudioSettings() {
     }
     asExclusive_ = (db_.loadSetting("wasapi_mode") == "exclusive");
 #else
+#ifdef MATRIX_HAVE_AOAS
+    // Second on Android, right after USB Direct: both are bit-perfect paths
+    // to the same DAC — one via this process's own driver, one via the AOAS
+    // relay that keeps the isochronous stream open across app switches.
+    asBackendOptions_.push_back(AudioBackend::Aoas);
+#endif
 #ifdef MATRIX_HAVE_ALSA
     asBackendOptions_.push_back(AudioBackend::Alsa);
     asAlsaDevices_ = AlsaOutput::enumerateDevices();
@@ -4595,6 +4611,27 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         y += metrics_.space(SP_MD) + metrics_.text.body;
     }
 #endif
+#ifdef MATRIX_HAVE_AOAS
+    else if (sel == AudioBackend::Aoas) {
+        // No device list, same reason as AAudio: the DAC belongs to the AOAS
+        // service, and the empty rect matters (it is what the hit-test reads,
+        // so a stale list rect would keep dead rows clickable).
+        asDeviceListArea_ = {};
+        asDeviceListRows_.clear();
+        canvas.textStyled("Playback goes through the AOAS service, which owns the USB",
+                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        y += metrics_.text.body * 1.4f;
+        canvas.textStyled("permission and the DAC's isochronous stream \xE2\x80\x94 bit-exact,",
+                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        y += metrics_.text.body * 1.4f;
+        canvas.textStyled("and silent across app switches. AOAS must be installed and",
+                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        y += metrics_.text.body * 1.4f;
+        canvas.textStyled("signed with the same key as this app. There is no device to pick here.",
+                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        y += metrics_.space(SP_MD) + metrics_.text.body;
+    }
+#endif
 #endif
 
     int by = (int)(content.bottom - (btnH + pad));   // btnH declared above — the list is sized against it
@@ -4689,6 +4726,12 @@ void PlayerWindow::applyAudioSettingsPanel() {
     else if (sel == AudioBackend::AAudio) {
         db_.saveSetting("audio_backend", "aaudio");
         output_ = std::make_unique<AAudioOutput>();
+    }
+#endif
+#ifdef MATRIX_HAVE_AOAS
+    else if (sel == AudioBackend::Aoas) {
+        db_.saveSetting("audio_backend", "aoas");
+        output_ = std::make_unique<AoasOutput>();
     }
 #endif
 #endif
@@ -5571,6 +5614,13 @@ std::string PlayerWindow::getActiveDeviceKey() {
     }
     case AudioBackend::Alsa: return "alsa";
     case AudioBackend::Jack: return "jack";
+    // The DAC behind the relay is not addressable by VID:PID through IAoas
+    // (only deviceInfo(), a human-readable string), so this is one slot per
+    // output, the same model "alsa"/"jack" use. AutoEQ assignments are keyed
+    // by OUTPUT; if AOAS ever exposes descriptors through the contract, this
+    // key should become VID:PID, because the EQ profile follows the DAC's
+    // drivers, not the relay.
+    case AudioBackend::Aoas: return "aoas";
     // No device id in the key. AAudio picks the route itself and changes it
     // under us when headphones are plugged in, so there is exactly one
     // AutoEQ slot for "this phone's output" — which is also the honest
@@ -5594,6 +5644,7 @@ std::string PlayerWindow::audioBackendLabel() const {
     case AudioBackend::Alsa:   return "ALSA";
     case AudioBackend::Jack:   return "JACK";
     case AudioBackend::AAudio: return "AAudio";
+    case AudioBackend::Aoas:   return "AOAS";
     case AudioBackend::Usb:
     default:                   return "USB";
     }
@@ -6026,6 +6077,16 @@ void PlayerWindow::onPlay(StartCause cause) {
         // phone — it reports "truncated to 16-bit device" instead of claiming
         // bit-perfect, which is the whole job of that readout.
         deviceMaxBits = 16;
+    }
+#endif
+#ifdef MATRIX_HAVE_AOAS
+    else if (audioBackend_ == AudioBackend::Aoas) {
+        // The relay negotiated this exact depth — the server never converts,
+        // and acquireOwned() verified the match against activeFormat().
+        // Stating the negotiated truth (rather than the default 32) is what
+        // keeps the readout honest for a 24-bit relay stream.
+        deviceMaxBits = output_->getConfiguredBits();
+        if (deviceMaxBits <= 0) deviceMaxBits = 32;
     }
 #endif
     printf("[Audio] device max bit depth: %d\n", deviceMaxBits);

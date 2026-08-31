@@ -32,6 +32,9 @@
 #ifdef MATRIX_HAVE_AAUDIO
 #include "os/aaudio_output.hh"
 #endif
+#ifdef MATRIX_HAVE_AOAS
+#include "os/aoas_output.hh"
+#endif
 #endif
 #include "core/eq_profiles.h"
 #include "core/eq_manager.h"
@@ -71,10 +74,13 @@ static constexpr float kMinWindowContentH = kUiReferenceHeight;
 // Output backend selection (Audio Settings panel / db "audio_backend" key).
 // Usb is primary/bit-perfect on both platforms; Wasapi is Windows' secondary
 // backend, Alsa/Jack are Linux's — mirroring WASAPI's role there (see
-// CLAUDE.md's design-decisions table).
+// CLAUDE.md's design-decisions table). Aoas is Android's bit-perfect relay
+// backend: the phone as a CLIENT of the AOAS service, which owns the USB
+// permission and the live isochronous stream and never closes either — see
+// gui/src/os/aoas_output.hh and docs/superpowers/specs/2026-08-28-aoas-client-backend.md.
 // Append-only: this value is persisted indirectly (db "audio_backend" stores a
 // name, not an ordinal), but every switch below is written against the set.
-enum class AudioBackend { Usb, Wasapi, Alsa, Jack, AAudio };
+enum class AudioBackend { Usb, Wasapi, Alsa, Jack, AAudio, Aoas };
 
 // ── The app's own host vocabularies ──────────────────────────────────────────
 //

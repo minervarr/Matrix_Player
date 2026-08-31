@@ -8,6 +8,18 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
+    <!-- AOAS client. The service demands the signature-level permission
+         io.nava.aoas.BIND_AOAS, which Android grants at install time only when
+         BOTH APKs are signed with the same key (two debug builds on one machine
+         share the debug keystore; a release build signed with bruno.jks will
+         not bind a debug-signed AOAS). The <queries> declaration is Android 11+
+         package visibility: without it, bindService fails as if the service did
+         not exist. -->
+    <uses-permission android:name="io.nava.aoas.BIND_AOAS" />
+    <queries>
+        <package android:name="io.nava.aoas" />
+    </queries>
+
     <application android:label="Matrix Player">
         <activity
             android:name="android.app.NativeActivity"
