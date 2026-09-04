@@ -497,9 +497,33 @@ void Db::addMusicRoot(const std::string& path) {
 
 void Db::removeMusicRoot(const std::string& path) {
     if (!impl_->db) return;
+
+    // The separator this appends has to be the one the paths were STORED with,
+    // and those come from std::filesystem — '/' everywhere except Windows. It
+    // used to append '\\' unconditionally, so on Linux and Android the pattern
+    // read "/storage/emulated/0/Music\%", matched nothing, and removing a root
+    // deleted its music_roots row while orphaning every one of its track rows
+    // in `tracks` — invisible until something wondered why the library still
+    // held songs from a folder that had been removed.
+#ifdef _WIN32
+    const char kSep = '\\';
+#else
+    const char kSep = '/';
+#endif
     std::string prefix = path;
-    if (!prefix.empty() && prefix.back() != '\\') prefix += '\\';
-    std::string pattern = prefix + "%";
+    if (!prefix.empty() && prefix.back() != kSep) prefix += kSep;
+
+    // LIKE reads '%' and '_' in the PATTERN as wildcards, and '_' is ordinary
+    // in a directory name. Without escaping, removing "/music_a" would also
+    // delete every track under "/musicXa" — a wider delete than asked for, in
+    // the one operation where that cannot be undone.
+    std::string pattern;
+    pattern.reserve(prefix.size() + 8);
+    for (char c : prefix) {
+        if (c == '%' || c == '_' || c == '\\') pattern += '\\';
+        pattern += c;
+    }
+    pattern += '%';
 
     sqlite3_exec(impl_->db, "BEGIN;", nullptr, nullptr, nullptr);
 
@@ -511,7 +535,7 @@ void Db::removeMusicRoot(const std::string& path) {
     sqlite3_finalize(stmt);
 
     sqlite3_prepare_v2(impl_->db,
-        "DELETE FROM tracks WHERE file_path LIKE ?;", -1, &stmt, nullptr);
+        "DELETE FROM tracks WHERE file_path LIKE ? ESCAPE '\\';", -1, &stmt, nullptr);
     sqlite3_bind_text(stmt, 1, pattern.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_step(stmt);
     sqlite3_finalize(stmt);

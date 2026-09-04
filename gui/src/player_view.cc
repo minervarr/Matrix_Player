@@ -8592,8 +8592,16 @@ void PlayerWindow::startBackgroundScan() {
     Host* host = host_.get();
 
     scanThread_ = std::thread([this, host]() {
+        const auto scanBegan = std::chrono::steady_clock::now();
+
         auto roots = db_.loadMusicRoots();
-        auto cache = db_.loadFileCache();
+
+        // Every track the database already knows, keyed by path. This is what
+        // lets the scan below open only the files that actually changed — the
+        // rows carry the same metadata a re-parse would produce, because the
+        // scan is the only thing that ever wrote them.
+        std::map<std::string, Track> cache;
+        for (auto& t : db_.loadTracks()) cache[t.filePath] = std::move(t);
 
         std::vector<Album> allAlbums;
         int totalScanned = 0, totalSkipped = 0, totalRemoved = 0;
@@ -8603,8 +8611,7 @@ void PlayerWindow::startBackgroundScan() {
             totalScanned += result.filesScanned;
             totalSkipped += result.filesSkipped;
 
-            auto full = scanLibraryParallel(root);
-            for (auto& a : full) {
+            for (auto& a : result.albums) {
                 Album* ex = nullptr;
                 for (auto& ea : allAlbums)
                     if (ea.name == a.name && ea.artist == a.artist) { ex = &ea; break; }
@@ -8621,8 +8628,13 @@ void PlayerWindow::startBackgroundScan() {
 
         purgeStaleFiles(allAlbums, totalRemoved);
 
-        printf("[Scan] Done: %d scanned, %d skipped, %d removed\n",
-               totalScanned, totalSkipped, totalRemoved);
+        // The duration is the point of the line, not decoration: this is the
+        // one number that says whether a change to the scan helped, and until
+        // it existed there was nothing to compare a phone against.
+        const auto scanMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - scanBegan).count();
+        printf("[Scan] Done: %d scanned, %d skipped, %d removed in %lld ms\n",
+               totalScanned, totalSkipped, totalRemoved, (long long)scanMs);
 
         {
             std::lock_guard<std::mutex> lk(scanMu_);

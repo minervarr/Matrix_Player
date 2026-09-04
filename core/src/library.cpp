@@ -493,73 +493,22 @@ static void forEachAudioFile(const fs::path& root, Fn&& fn) {
 
 // ── Full scan (original interface, kept for compatibility) ───────────────────
 
-std::vector<Album> scanLibrary(const std::string& rootPath) {
-    const fs::path root = fs::u8path(rootPath);
-    if (!fs::exists(root)) return {};
+// One file to parse. The extension is a bool rather than a second std::string
+// per file — it only ever answers "FLAC or WAV", and the walk has already
+// narrowed it to those two.
+struct PendingParse { std::string path; bool flac; };
 
-    std::map<std::string, std::vector<Track>> byFolder;
-    forEachAudioFile(root, [&](const fs::path& path, const std::string& ext) {
-        const std::string folder   = path.parent_path().u8string();
-        const std::string filePath = path.u8string();
-        byFolder[folder].push_back(ext == ".flac" ? quickParseFLAC(filePath)
-                                                  : quickParseWAV(filePath));
-    });
+// Parses `files` across every core and returns the tracks in no particular
+// order (the caller regroups by folder anyway).
+//
+// Shared by both scans on purpose. It used to exist only inside
+// scanLibraryParallel, so the incremental scan parsed its changed files one at
+// a time on the scan thread — which mattered most in exactly the case it was
+// built for, a handful of new albums dropped into a large library.
+static std::vector<Track> parseTracksParallel(const std::vector<PendingParse>& files) {
+    std::vector<Track> out;
+    if (files.empty()) return out;
 
-    return buildAlbums(byFolder, rootPath);
-}
-
-// ── Incremental scan ─────────────────────────────────────────────────────────
-
-IncrementalScanResult scanLibraryIncremental(
-    const std::string& rootPath,
-    const std::map<std::string, FileCache>& existing)
-{
-    IncrementalScanResult result;
-    const fs::path root = fs::u8path(rootPath);
-    if (!fs::exists(root)) return result;
-
-    std::map<std::string, std::vector<Track>> byFolder;
-
-    forEachAudioFile(root, [&](const fs::path& path, const std::string& ext) {
-        const std::string filePath = path.u8string();
-
-        // Check if file is unchanged
-        const auto it = existing.find(filePath);
-        if (it != existing.end()) {
-            int64_t sz = 0, mt = 0;
-            statSizeAndMtime(filePath, sz, mt);
-            if (sz == it->second.fileSize && mt == it->second.fileMtime) {
-                result.filesSkipped++;
-                return;
-            }
-        }
-
-        result.filesScanned++;
-        const std::string folder = path.parent_path().u8string();
-        byFolder[folder].push_back(ext == ".flac" ? quickParseFLAC(filePath)
-                                                  : quickParseWAV(filePath));
-    });
-
-    result.albums = buildAlbums(byFolder, rootPath);
-    return result;
-}
-
-// ── Parallel scan ────────────────────────────────────────────────────────────
-
-std::vector<Album> scanLibraryParallel(const std::string& rootPath) {
-    const fs::path root = fs::u8path(rootPath);
-    if (!fs::exists(root)) return {};
-
-    // Collect all audio file paths first. The extension is kept as a bool
-    // rather than a second std::string per file — it only ever answers "FLAC
-    // or WAV", and the walk has already narrowed it to those two.
-    struct Entry { std::string path; bool flac; };
-    std::vector<Entry> files;
-    forEachAudioFile(root, [&](const fs::path& path, const std::string& ext) {
-        files.push_back({path.u8string(), ext == ".flac"});
-    });
-
-    // Parse in parallel using hardware concurrency
     unsigned numThreads = std::thread::hardware_concurrency();
     if (numThreads == 0) numThreads = 4;
 
@@ -581,14 +530,109 @@ std::vector<Album> scanLibraryParallel(const std::string& rootPath) {
         }));
     }
 
-    // Gather results and group by folder
-    std::map<std::string, std::vector<Track>> byFolder;
+    out.reserve(files.size());
     for (auto& f : futures) {
         auto tracks = f.get();
-        for (auto& t : tracks) {
-            std::string folder = fs::u8path(t.filePath).parent_path().u8string();
-            byFolder[folder].push_back(std::move(t));
+        for (auto& t : tracks) out.push_back(std::move(t));
+    }
+    return out;
+}
+
+std::vector<Album> scanLibrary(const std::string& rootPath) {
+    const fs::path root = fs::u8path(rootPath);
+    if (!fs::exists(root)) return {};
+
+    std::map<std::string, std::vector<Track>> byFolder;
+    forEachAudioFile(root, [&](const fs::path& path, const std::string& ext) {
+        const std::string folder   = path.parent_path().u8string();
+        const std::string filePath = path.u8string();
+        byFolder[folder].push_back(ext == ".flac" ? quickParseFLAC(filePath)
+                                                  : quickParseWAV(filePath));
+    });
+
+    return buildAlbums(byFolder, rootPath);
+}
+
+// ── Incremental scan ─────────────────────────────────────────────────────────
+
+// Returns the WHOLE library under `rootPath`, having opened only the files
+// whose size or mtime no longer match what `cached` says.
+//
+// The "whole" is the part that changed. This used to emit only the albums it
+// had re-parsed, which is a partial view of the library and therefore unusable
+// on its own — so the caller ran a full scanLibraryParallel() straight
+// afterwards and threw the incremental result away, which meant every launch
+// walked each root TWICE and re-opened and re-parsed every file regardless.
+// The skip counter went up and nothing was saved by it.
+//
+// An unchanged file now contributes the Track the database already holds. That
+// is the entire point: the metadata in a file that has not been touched cannot
+// have changed either, and re-deriving it costs one open, one seek and a
+// metadata-block parse per track — over Android's FUSE mount, the dominant
+// cost of a scan.
+IncrementalScanResult scanLibraryIncremental(
+    const std::string& rootPath,
+    const std::map<std::string, Track>& cached)
+{
+    IncrementalScanResult result;
+    const fs::path root = fs::u8path(rootPath);
+    if (!fs::exists(root)) return result;
+
+    // Split the walk into "reuse" and "re-parse" before parsing anything, so
+    // the re-parse can go wide. A first scan (empty cache) lands entirely in
+    // the second list, which makes this the full parallel scan as well.
+    std::vector<Track> reused;
+    std::vector<PendingParse> pending;
+
+    forEachAudioFile(root, [&](const fs::path& path, const std::string& ext) {
+        const std::string filePath = path.u8string();
+
+        const auto it = cached.find(filePath);
+        if (it != cached.end()) {
+            int64_t sz = 0, mt = 0;
+            statSizeAndMtime(filePath, sz, mt);
+            if (sz == it->second.fileSize && mt == it->second.fileMtime) {
+                result.filesSkipped++;
+                reused.push_back(it->second);
+                return;
+            }
         }
+
+        result.filesScanned++;
+        pending.push_back({filePath, ext == ".flac"});
+    });
+
+    std::map<std::string, std::vector<Track>> byFolder;
+    for (auto& t : reused) {
+        std::string folder = fs::u8path(t.filePath).parent_path().u8string();
+        byFolder[folder].push_back(std::move(t));
+    }
+
+    for (auto& t : parseTracksParallel(pending)) {
+        std::string folder = fs::u8path(t.filePath).parent_path().u8string();
+        byFolder[folder].push_back(std::move(t));
+    }
+
+    result.albums = buildAlbums(byFolder, rootPath);
+    return result;
+}
+
+// ── Parallel scan ────────────────────────────────────────────────────────────
+
+std::vector<Album> scanLibraryParallel(const std::string& rootPath) {
+    const fs::path root = fs::u8path(rootPath);
+    if (!fs::exists(root)) return {};
+
+    // Collect all audio file paths first, then fan the parsing out.
+    std::vector<PendingParse> files;
+    forEachAudioFile(root, [&](const fs::path& path, const std::string& ext) {
+        files.push_back({path.u8string(), ext == ".flac"});
+    });
+
+    std::map<std::string, std::vector<Track>> byFolder;
+    for (auto& t : parseTracksParallel(files)) {
+        std::string folder = fs::u8path(t.filePath).parent_path().u8string();
+        byFolder[folder].push_back(std::move(t));
     }
 
     return buildAlbums(byFolder, rootPath);

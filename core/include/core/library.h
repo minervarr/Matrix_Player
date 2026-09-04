@@ -89,10 +89,27 @@ struct FileCache {
     int64_t fileMtime = 0;
 };
 
+// The WHOLE library under rootPath, having opened only the files whose size or
+// mtime disagree with `cached` (keyed by absolute file path — what
+// Db::loadTracks() already holds). An unchanged file contributes its cached
+// Track unmodified: metadata inside a file nobody touched cannot have changed,
+// and re-deriving it costs an open, a seek and a metadata parse per track.
+//
+// It returns the FULL library rather than only the part it re-parsed, and that
+// is load-bearing. When it returned only the changed albums, the one caller had
+// no choice but to run a full scanLibraryParallel() straight afterwards and
+// discard this result — so every launch walked each root twice and re-parsed
+// every file, and the "skipped" count it printed had saved nothing at all.
+//
+// An empty `cached` therefore IS the full scan, in parallel, which is why
+// scanLibraryParallel() below is now only for a deliberate rebuild.
 IncrementalScanResult scanLibraryIncremental(
     const std::string& rootPath,
-    const std::map<std::string, FileCache>& existing);
+    const std::map<std::string, Track>& cached);
 
+// Full rescan: parse every file, trust nothing already stored. For the
+// deliberate "rebuild the library" path, not for ordinary startup — pass an
+// empty map to scanLibraryIncremental() for that and get the same work done.
 std::vector<Album> scanLibraryParallel(const std::string& rootPath);
 
 std::string resolveArtPath(const std::string& folderPath);
