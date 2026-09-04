@@ -1,5 +1,6 @@
 #include "player_view.hh"
 #include "app_paths.hh"
+#include "arc/fs/paths.hh"   // the storage layout: where home/config/state live
 #include "ui_text.hh"
 #include "log_util.h"
 #include "ui_fonts.hh"
@@ -100,13 +101,16 @@ static void appendUtf8(std::string& out, uint32_t codepoint) {
 }
 
 // Portable home directory, for the folder-picker panel's initial location.
+//
+// Through arc::fs so the answer is right on a phone. It used to read $HOME
+// directly, which on Android is "/" or unset — so the picker opened at the
+// filesystem root and the listener had to walk down through /apex, /vendor and
+// /system to reach anything of theirs. arc::fs::layout() answers with shared
+// storage's own home directory there, and with $HOME / %USERPROFILE% on the
+// two desktops, which is what this always meant.
 static std::string userHomeDir() {
-#ifdef _WIN32
-    const char* h = getenv("USERPROFILE");
-#else
-    const char* h = getenv("HOME");
-#endif
-    return h ? std::string(h) : std::string("/");
+    const std::string home = arc::fs::layout(APP_SHELL_LOG_NAME).home;
+    return home.empty() ? std::string("/") : home;
 }
 
 static const char* backendDisplayName(AudioBackend b) {
