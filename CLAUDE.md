@@ -247,6 +247,31 @@ matrix_player/
                                   `add_subdirectory()` it. Committed and pushed with
                                   its OWN `git_wrapper`, from inside the submodule,
                                   before the parent repo's own push — see its CLAUDE.md
+    archive_engine/             — git submodule (github.com/minervarr/archive_engine).
+                                  Only arc_fs is built here: the STORAGE vocabulary.
+                                  arc::fs::Layout separates the listener's files
+                                  (home/config/data) from the machine's
+                                  (state/cache) — on Android the first group is
+                                  shared storage, a FUSE mount since Android 11
+                                  where every metadata operation is a round trip
+                                  through a userspace daemon, and the second is
+                                  the app's private directory, real ext4. The
+                                  database belongs in the second, and the split
+                                  is in the TYPE so it cannot be got wrong per
+                                  caller. arc::fs::walk() is the scan's
+                                  enumeration and CANNOT THROW (see the scanner
+                                  note below); arc::fs::MediaIndex is the seam
+                                  Android's MediaStore installs itself into, and
+                                  ancestorsUpTo() is streamerSearchPath()'s walk,
+                                  moved out because it is not about music. Its
+                                  other three modules (net/tag/archive) are for
+                                  the downloader stack and are FORCE'd OFF in
+                                  both this repo's root CMakeLists.txt and
+                                  android/CMakeLists.txt — arc_archive in
+                                  particular downloads libarchive at configure
+                                  time. Read its own CLAUDE.md. NOTE the target
+                                  prefix: this library was ae_* until it collided
+                                  with audio_engine below, which is why it is arc_*
     audio_engine/               — git submodule (github.com/minervarr/audio_engine).
                                   core/ (pure C++) + backends/{usb,alsa,jack,wasapi,flac,mp3,dsd}/
                                   + api/ (C ABI, not used by this app — we link the C++ targets
@@ -461,7 +486,7 @@ exactly how it went unnoticed until an MP3 misnamed `.flac` surfaced it on a
 phone. The generated `config.h` for both linux and android IS committed; only
 the sources are fetched.
 
-**Tests**: there is no ctest/gtest framework, but there are nine assert-based
+**Tests**: there is no ctest/gtest framework, but there are ten assert-based
 pure-logic test executables, built **Debug-only** (see the bottom of
 `gui/CMakeLists.txt` and of `core/CMakeLists.txt`) and run directly. Convention
 matches `framework/vk_canvas/core/tests/*.cc`: plain `assert()`, `#undef NDEBUG`
@@ -479,7 +504,17 @@ scripts/linux/build.sh --debug
 ./build/linux_debug/core/stats_test        # listening log, aggregate queries, schema migration
 ./build/linux_debug/core/facets_test       # guided search: suggestions, counts, empty reasons
 ./build/linux_debug/core/streamer_db_test  # where the foreign .streamer/library.db is looked for
+./build/linux_debug/core/scan_source_test  # the media index and the walk must agree
 ```
+
+`scan_source_test` is the one that would otherwise need a phone. The scan takes
+its file list either from the platform's media catalogue (Android's MediaStore)
+or from a directory walk, and the whole design rests on those being
+interchangeable — the walk is what the index falls back to whenever it has
+nothing useful to say. `arc::fs::MediaIndex` takes its backend as an INSTALLED
+POINTER rather than a compile-time `#ifdef` precisely so a fake one can be
+installed here and the Android path exercised on the desktop, over real WAV
+files. Do not turn that seam into an `#ifdef`; the test dies with it.
 
 Keep them pure. `ui_icons.cc` is deliberately split from `ui_icons_draw.cc`
 precisely so the test links the real placement code without dragging in
@@ -530,6 +565,55 @@ audio/DSP changes by building and listening; validate GUI changes by building
 and running `matrix_player`, then exercising the affected panel directly.
 
 ---
+
+## The library scan (`core/src/library.cpp`)
+
+Five things here are load-bearing and easy to undo by accident.
+
+1. **`scanLibraryIncremental()` returns the WHOLE library, not the part it
+   re-parsed.** It used to return only the changed albums, which is a partial
+   view and unusable on its own — so `startBackgroundScan()` had no choice but
+   to run a full `scanLibraryParallel()` straight after and discard the result.
+   Every launch walked each root twice and re-opened every file. The counter it
+   printed was the lie: on 2318 files with nothing changed it reported *2318
+   skipped* and parsed 2318. An unchanged file now contributes the `Track` the
+   database already holds, because metadata in a file nobody touched cannot have
+   changed either. An empty cache therefore IS the full parallel scan;
+   `scanLibraryParallel()` is only for a deliberate rebuild.
+
+2. **The stat is taken ONCE, by the walk, and passed to the parsers.** They used
+   to stat each file again to fill `fileSize`/`fileMtime`. Beyond the wasted
+   syscall, the two answers had to agree exactly — a walk-derived mtime compared
+   against a parser-derived one would never match, and the whole library would
+   re-parse on every launch, looking exactly like the cache simply not working.
+
+3. **`Track::fileMtime` is an opaque token, and its DOMAIN depends on the
+   source.** The walk fills it with `std::filesystem` ticks; the media index
+   fills it with unix seconds. They are not interchangeable, and that is safe
+   only because a device uses one source or the other. A device that has the
+   index and then loses it (a revoked storage grant) mismatches every token and
+   re-parses once — one slow scan, then stable, which is the right trade. Do not
+   "fix" this by converting between them; there is no portable conversion in
+   C++17 and the comparison never crosses devices.
+
+4. **The enumeration goes through `arc::fs::walk()`, which cannot throw.** The
+   `std::filesystem` iterator it replaced throws on an unreadable directory —
+   from the constructor and from `operator++` — and the caller is a detached
+   scan thread with no `try`/`catch` above it. A permission change or a card
+   pulled mid-scan took the process down. It also reports, rather than silently
+   swallowing, directories it could not read: a scan that quietly skipped part
+   of the library gets blamed on the library.
+
+5. **The media index has THREE outcomes, not two, and they are different
+   values.** An error means the query was refused (usually: no storage grant
+   yet). An empty success means the index knows nothing under this root (a
+   `.nomedia` folder, files copied over MTP moments ago). Both fall back to the
+   walk — but collapsing them, or collapsing either into "no music", is how a
+   working library renders as an empty screen. The walk is the floor the whole
+   design rests on; an unindexed folder must be slower, never invisible.
+
+See `docs/superpowers/specs/2026-09-04-storage-framework-design.md` for the
+measurements and for why FUSE, not SAF, is what costs on Android.
 
 ## Listening analytics (`core/src/db_stats.cpp`, `core/include/core/stats.h`)
 
@@ -664,16 +748,19 @@ Two mechanisms in `db.cpp`, with a strict division of labour:
   nothing parses ID3 yet. `topGenres()` excludes empty genres rather than
   bucketing them as "Unknown", which would otherwise top the chart meaning
   nothing.
-- **The scanner indexes `.flac` and `.wav` and nothing else**
-  (`core/src/library.cpp:488`), so a correctly named `.mp3` is never
-  discovered — the same shape as the `.dsf`/`.dff` gap in the TODOs. The
-  DECODER handles MP3 (verified on a phone: libmpg123 opens it and reports its
-  rate), and the only reason an MP3 can reach it today is being misnamed
-  `.flac`, which is how this was found. Fixing the extension list alone is not
-  enough: `scanLibraryParallel` picks its metadata parser with
+- **The scanner indexes `.flac` and `.wav` and nothing else**, so a correctly
+  named `.mp3` is never discovered — the same shape as the `.dsf`/`.dff` gap in
+  the TODOs. The DECODER handles MP3 (verified on a phone: libmpg123 opens it
+  and reports its rate), and the only reason an MP3 can reach it today is being
+  misnamed `.flac`, which is how this was found. Fixing the extension list
+  alone is not enough: `parseTracksParallel()` picks its metadata parser with
   `files[j].flac ? quickParseFLAC : quickParseWAV`, and there is no ID3 reader
   for a third branch to call — an indexed MP3 would list as its filename with
-  no duration.
+  no duration. The filter is now in TWO places that must agree:
+  `forEachAudioFile()` for the walk, and `indexCandidates()` for the media
+  index, which must also drop rows MediaStore lists but the parsers cannot read
+  (a `cover.jpg` would otherwise become a silent one-track album — asserted in
+  `scan_source_test`).
 - `topAlbums`/`topArtists`/`topGenres` need the join to `tracks`, so a track
   deleted from the library drops out of *those* rankings. Its plays survive
   everywhere else, including `topTracks` — that is the one place a deletion
@@ -1309,7 +1396,8 @@ to the device, looking at music belongs to the app.**
 | Audio stack | Bypassed entirely for the primary path | No WASAPI/PulseAudio mixer — raw USB isochronous to DAC |
 | Linux secondary outputs | ALSA + JACK2 (never pipewire-jack) | Mirrors WASAPI's role: a fallback when no DAC is plugged in, or for testing without hardware |
 | Album art (fullscreen) | An in-app SCENE on every platform; `ArtWindow` is the opt-in *Second screen* | A phone has no second top-level window, so a second window cannot be the primary answer. Dual-monitor is still served — art on one screen, controls on the other — it is just no longer the only way |
-| Submodules | `app_shell`, `audio_engine`, `vk_canvas`, `soxr`, `libjpeg-turbo` | dr_flac + sqlite3 vendored directly (single-header / amalgamation, no submodule needed) |
+| Submodules | `app_shell`, `archive_engine`, `audio_engine`, `vk_canvas`, `soxr`, `libjpeg-turbo` | dr_flac + sqlite3 vendored directly (single-header / amalgamation, no submodule needed) |
+| Storage | `archive_engine`'s `arc_fs` on all three platforms | One vocabulary for paths, enumeration and the platform's media catalogue. The database goes in machine-private storage (real ext4 on Android, not the FUSE-backed shared volume); the listener's files go under a visible `home/`. Not about music, so not in `core/` — the same reasoning that moved the Host seam into `app_shell` |
 | Build | CMake + Ninja | Clang (MSYS2 UCRT64, targeting `x86_64-w64-windows-gnu`) on Windows, GCC/Clang on Linux — no MSVC, no Visual Studio, no `.sln`/Makefiles |
 | `core/` | Zero OS headers (one PIMPL'd exception: FolderWatcher) | Portable app logic reusable without dragging in either platform's headers |
 
