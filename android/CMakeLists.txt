@@ -15,6 +15,19 @@ set(NATIVE_APP_GLUE ${ANDROID_NDK}/sources/android/native_app_glue)
 # nothing extra builds here.
 add_subdirectory(${REPO_ROOT}/framework/audio_engine ${CMAKE_BINARY_DIR}/audio_engine)
 
+# archive_engine: arc_fs, the storage vocabulary matrix_core's scan is written
+# against (core/src/library.cpp includes arc/fs/walk.hh). Same three FORCE'd
+# options the desktop root CMakeLists.txt sets — this file does not go through
+# that one, so the flags are repeated here rather than inherited. arc_archive in
+# particular must stay OFF: it downloads libarchive at configure time, which
+# would happen once per ABI.
+set(ARC_BUILD_ARCHIVE OFF CACHE BOOL "" FORCE)
+set(ARC_BUILD_NET     OFF CACHE BOOL "" FORCE)
+set(ARC_BUILD_TAG     OFF CACHE BOOL "" FORCE)
+set(ARC_BUILD_FS      ON  CACHE BOOL "" FORCE)
+add_subdirectory(${REPO_ROOT}/framework/archive_engine/core
+                 ${CMAKE_BINARY_DIR}/archive_engine)
+
 # sqlite3 (vendored amalgamation, third_party/) — matrix_core links this by
 # name (core/CMakeLists.txt:26), same target root CMakeLists.txt defines for
 # the desktop build (CMakeLists.txt:250). Desktop reaches it by add_subdirectory
