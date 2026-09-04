@@ -24,7 +24,9 @@ target_include_directories(matrix_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/soxr/src)
 
-target_link_libraries(matrix_core PUBLIC ae_core sqlite3)
+# arc_fs is PUBLIC because core/include/core/streamer_db.h's search-path helper
+# is arc::fs::ancestorsUpTo() — the header names it, so a consumer needs it too.
+target_link_libraries(matrix_core PUBLIC ae_core sqlite3 arc_fs)
 
 # Decode goes through audio_engine's backends (see src/decoder.cpp). Each is
 # optional at the engine's end — libFLAC is a submodule and libmpg123 is a
@@ -120,7 +122,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # test itself opens nothing.
     add_executable(streamer_db_test tests/streamer_db_test.cc src/streamer_db.cpp)
     target_include_directories(streamer_db_test PRIVATE include ${CMAKE_SOURCE_DIR}/third_party)
-    target_link_libraries(streamer_db_test PRIVATE sqlite3)
+    # arc_fs supplies the ancestor walk streamerSearchPath() now delegates to.
+    # It links nothing but the standard library, so this stays the narrow,
+    # fixture-free target it was.
+    target_link_libraries(streamer_db_test PRIVATE sqlite3 arc_fs)
     if(MSVC)
         target_compile_options(streamer_db_test PRIVATE /W3 /utf-8)
     else()

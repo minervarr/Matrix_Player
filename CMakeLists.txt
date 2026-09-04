@@ -227,6 +227,21 @@ set_target_properties(turbojpeg-static PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES ${TURBOJPEG_INSTALL_DIR}/include)
 add_dependencies(turbojpeg-static libjpeg_turbo_ext)
 
+# ---------- archive_engine (framework/, firstparty submodule) ----------
+# Only arc_fs is wanted here — the storage vocabulary (paths/walk/volume/
+# media_index). Its other three modules are for the downloader stack: arc_net
+# and arc_tag are OFF by default already, and arc_archive is ON by default and
+# DOWNLOADS libarchive at configure time, which this app has no use for.
+#
+# arc_fs links nothing but the standard library, so there is nothing for this
+# file to supply. Note the target prefix: this library used to be ae_*, the
+# same as audio_engine below, which is exactly why it was renamed.
+set(ARC_BUILD_ARCHIVE OFF CACHE BOOL "" FORCE)
+set(ARC_BUILD_NET     OFF CACHE BOOL "" FORCE)
+set(ARC_BUILD_TAG     OFF CACHE BOOL "" FORCE)
+set(ARC_BUILD_FS      ON  CACHE BOOL "" FORCE)
+add_subdirectory(framework/archive_engine/core archive_engine_build)
+
 # ---------- audio_engine (framework/, firstparty submodule) ----------
 # Defines ae_core (INTERFACE), ae_usb (STATIC, cross-platform), and on Linux
 # ae_alsa/ae_jack automatically when ALSA headers / jack2 pkg-config are found.

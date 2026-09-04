@@ -17,6 +17,9 @@
 // opinion about.
 #include <FLAC/metadata.h>
 #include "dr_wav.h"
+// The storage vocabulary: a walk that cannot throw, and the stat that comes
+// with it. See framework/archive_engine.
+#include "arc/fs/walk.hh"
 
 namespace fs = std::filesystem;
 
@@ -344,45 +347,13 @@ static void applyVorbisComment(VorbisCtx* ctx, const char* entry, unsigned lengt
                                ctx->year = parseYearTag(val);
 }
 
-// Windows keeps the exact FILETIME-tick value (100ns since 1601) it always
-// has; Linux uses filesystem::last_write_time's native clock tick count.
-// Neither is ever compared across platforms — only against a cache value
-// this same machine wrote on a prior scan — so the differing epoch/units
-// are safe.
-static void statSizeAndMtime(const std::string& path, int64_t& outSize, int64_t& outMtime) {
-#ifdef _WIN32
-    int wl = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
-    std::wstring wpath(wl, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath.data(), wl);
-    if (!wpath.empty() && wpath.back() == L'\0') wpath.pop_back();
-
-    WIN32_FILE_ATTRIBUTE_DATA fad;
-    if (GetFileAttributesExW(wpath.c_str(), GetFileExInfoStandard, &fad)) {
-        LARGE_INTEGER sz;
-        sz.HighPart = fad.nFileSizeHigh;
-        sz.LowPart  = fad.nFileSizeLow;
-        outSize     = sz.QuadPart;
-        LARGE_INTEGER mt;
-        mt.HighPart = fad.ftLastWriteTime.dwHighDateTime;
-        mt.LowPart  = fad.ftLastWriteTime.dwLowDateTime;
-        outMtime    = mt.QuadPart;
-    }
-#else
-    std::error_code ec;
-    fs::path p = fs::u8path(path);
-    auto sz = fs::file_size(p, ec);
-    outSize = ec ? 0 : static_cast<int64_t>(sz);
-    auto ftime = fs::last_write_time(p, ec);
-    outMtime = ec ? 0 : ftime.time_since_epoch().count();
-#endif
-}
-
-static Track quickParseWAV(const std::string& path) {
+static Track quickParseWAV(const std::string& path, int64_t size, int64_t mtime) {
     Track t;
     t.filePath = path;
     t.title = fs::path(fs::u8path(path)).stem().u8string();
 
-    statSizeAndMtime(path, t.fileSize, t.fileMtime);
+    t.fileSize  = size;
+    t.fileMtime = mtime;
 
     drwav wav;
 #ifdef _WIN32
@@ -405,12 +376,13 @@ static Track quickParseWAV(const std::string& path) {
     return t;
 }
 
-static Track quickParseFLAC(const std::string& path) {
+static Track quickParseFLAC(const std::string& path, int64_t size, int64_t mtime) {
     Track t;
     t.filePath = path;
     t.title = fs::path(fs::u8path(path)).stem().u8string();
 
-    statSizeAndMtime(path, t.fileSize, t.fileMtime);
+    t.fileSize  = size;
+    t.fileMtime = mtime;
 
     VorbisCtx ctx;
     // One pass over the metadata blocks for both STREAMINFO and the tags —
@@ -463,31 +435,50 @@ static Track quickParseFLAC(const std::string& path) {
 
 // ── Directory walk ───────────────────────────────────────────────────────────
 
-// The shared shape of all three scans below: walk `root`, skip hidden
-// directories, and hand every .flac/.wav file to `fn` as (path, lowercased
-// extension). This loop was copy-pasted verbatim three times; the hidden-
-// directory rule in particular is the kind that goes wrong by drifting in one
-// copy only.
+// The shared shape of every scan below: walk `root`, skip hidden directories,
+// and hand every .flac/.wav file to `fn` with the size and mtime the walk
+// already learned.
 //
-// It also stops asking the same question twice — the original built the
-// filename string twice per directory entry just to test its first character.
+// It goes through arc::fs::walk() rather than std::filesystem directly, and
+// that is not a cosmetic swap. The two-argument recursive_directory_iterator
+// this used to build THROWS on an unreadable directory — both at construction
+// and from operator++ — and the caller is a detached scan thread with no
+// try/catch anywhere above it. A permission change, a card pulled mid-scan or
+// a folder deleted underneath it took the whole process down. arc::fs::walk
+// counts such a directory and steps over it.
+//
+// Passing size and mtime through is the other half. The walk already stat'ed
+// every entry, and the parsers used to stat each file a SECOND time to fill
+// Track::fileSize/fileMtime. Beyond the wasted syscall, the two answers had to
+// agree exactly or the incremental scan would compare a walk-derived mtime
+// against a parser-derived one, never match, and re-parse the whole library on
+// every launch — a silent regression that looks like the cache simply not
+// working. One source, one value.
 template <typename Fn>
-static void forEachAudioFile(const fs::path& root, Fn&& fn) {
-    auto dit = fs::recursive_directory_iterator(
-        root, fs::directory_options::skip_permission_denied);
-    for (auto end = fs::recursive_directory_iterator(); dit != end; ++dit) {
-        const auto& entry = *dit;
-        if (entry.is_directory()) {
-            const std::string name = entry.path().filename().u8string();
-            if (!name.empty() && name[0] == '.')
-                dit.disable_recursion_pending();  // e.g. a sibling .streamer/
-            continue;
-        }
-        if (!entry.is_regular_file()) continue;
-        std::string ext = entry.path().extension().u8string();
+static void forEachAudioFile(const std::string& root, Fn&& fn) {
+    arc::fs::WalkOptions opts;
+    opts.wantFileStats = true;   // the incremental compare is the whole point
+    opts.skipHiddenDirs = true;  // e.g. a sibling .streamer/
+    opts.reportDirs = false;
+
+    auto result = arc::fs::walk(root, opts, [&](const arc::fs::Entry& e) {
+        std::string ext = fs::u8path(e.path).extension().u8string();
         lowerAscii(ext);
-        if (ext != ".flac" && ext != ".wav") continue;
-        fn(entry.path(), ext);
+        if (ext == ".flac" || ext == ".wav")
+            fn(e.path, ext == ".flac", e.size, e.mtime);
+        return arc::fs::WalkAction::Continue;
+    });
+
+    if (!result.ok()) {
+        printf("[Scan][ERROR] %s\n", result.error().message.c_str());
+        fflush(stdout);
+    } else if (result.value().errors > 0) {
+        // Not fatal, and not silent either: a scan that quietly skipped part of
+        // the library is the kind of wrong that gets blamed on the library.
+        printf("[Scan] %llu director%s could not be read under %s\n",
+               (unsigned long long)result.value().errors,
+               result.value().errors == 1 ? "y" : "ies", root.c_str());
+        fflush(stdout);
     }
 }
 
@@ -496,7 +487,12 @@ static void forEachAudioFile(const fs::path& root, Fn&& fn) {
 // One file to parse. The extension is a bool rather than a second std::string
 // per file — it only ever answers "FLAC or WAV", and the walk has already
 // narrowed it to those two.
-struct PendingParse { std::string path; bool flac; };
+struct PendingParse {
+    std::string path;
+    bool flac;
+    int64_t size;    // from the walk — never re-stat'ed, see forEachAudioFile
+    int64_t mtime;
+};
 
 // Parses `files` across every core and returns the tracks in no particular
 // order (the caller regroups by folder anyway).
@@ -524,8 +520,11 @@ static std::vector<Track> parseTracksParallel(const std::vector<PendingParse>& f
             std::vector<Track> tracks;
             tracks.reserve(end - start);
             for (size_t j = start; j < end; j++)
-                tracks.push_back(files[j].flac ? quickParseFLAC(files[j].path)
-                                               : quickParseWAV(files[j].path));
+                tracks.push_back(files[j].flac
+                                     ? quickParseFLAC(files[j].path, files[j].size,
+                                                      files[j].mtime)
+                                     : quickParseWAV(files[j].path, files[j].size,
+                                                     files[j].mtime));
             return tracks;
         }));
     }
@@ -543,11 +542,11 @@ std::vector<Album> scanLibrary(const std::string& rootPath) {
     if (!fs::exists(root)) return {};
 
     std::map<std::string, std::vector<Track>> byFolder;
-    forEachAudioFile(root, [&](const fs::path& path, const std::string& ext) {
-        const std::string folder   = path.parent_path().u8string();
-        const std::string filePath = path.u8string();
-        byFolder[folder].push_back(ext == ".flac" ? quickParseFLAC(filePath)
-                                                  : quickParseWAV(filePath));
+    forEachAudioFile(rootPath, [&](const std::string& filePath, bool flac,
+                                   int64_t size, int64_t mtime) {
+        const std::string folder = fs::u8path(filePath).parent_path().u8string();
+        byFolder[folder].push_back(flac ? quickParseFLAC(filePath, size, mtime)
+                                        : quickParseWAV(filePath, size, mtime));
     });
 
     return buildAlbums(byFolder, rootPath);
@@ -584,22 +583,20 @@ IncrementalScanResult scanLibraryIncremental(
     std::vector<Track> reused;
     std::vector<PendingParse> pending;
 
-    forEachAudioFile(root, [&](const fs::path& path, const std::string& ext) {
-        const std::string filePath = path.u8string();
-
+    forEachAudioFile(rootPath, [&](const std::string& filePath, bool flac,
+                                   int64_t size, int64_t mtime) {
+        // The walk already stat'ed this entry, so the "has it changed?" test
+        // costs nothing beyond a map lookup. It used to stat a second time here.
         const auto it = cached.find(filePath);
-        if (it != cached.end()) {
-            int64_t sz = 0, mt = 0;
-            statSizeAndMtime(filePath, sz, mt);
-            if (sz == it->second.fileSize && mt == it->second.fileMtime) {
-                result.filesSkipped++;
-                reused.push_back(it->second);
-                return;
-            }
+        if (it != cached.end() && size == it->second.fileSize &&
+            mtime == it->second.fileMtime) {
+            result.filesSkipped++;
+            reused.push_back(it->second);
+            return;
         }
 
         result.filesScanned++;
-        pending.push_back({filePath, ext == ".flac"});
+        pending.push_back({filePath, flac, size, mtime});
     });
 
     std::map<std::string, std::vector<Track>> byFolder;
@@ -625,8 +622,9 @@ std::vector<Album> scanLibraryParallel(const std::string& rootPath) {
 
     // Collect all audio file paths first, then fan the parsing out.
     std::vector<PendingParse> files;
-    forEachAudioFile(root, [&](const fs::path& path, const std::string& ext) {
-        files.push_back({path.u8string(), ext == ".flac"});
+    forEachAudioFile(rootPath, [&](const std::string& path, bool flac,
+                                   int64_t size, int64_t mtime) {
+        files.push_back({path, flac, size, mtime});
     });
 
     std::map<std::string, std::vector<Track>> byFolder;

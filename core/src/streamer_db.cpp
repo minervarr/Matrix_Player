@@ -1,4 +1,5 @@
 #include "core/streamer_db.h"
+#include "arc/fs/paths.hh"
 #include "sqlite3.h"
 #include <filesystem>
 #include <fstream>
@@ -41,40 +42,17 @@ static fs::path normalizeDir(const fs::path& p) {
 
 std::vector<std::string> streamerSearchPath(const std::string& albumDir,
                                             const std::string& rootBound) {
-    std::vector<std::string> out;
-    if (albumDir.empty()) return out;
-
-    const fs::path album = normalizeDir(fs::u8path(albumDir));
-    out.push_back(album.u8string());
-    if (rootBound.empty()) return out;
-
-    const fs::path bound = normalizeDir(fs::u8path(rootBound));
-
-    // Walk up to the bound. The loop is driven by parent_path() rather than
-    // by a level count so it terminates on its own fixed point ("/" is its
-    // own parent), and the bound test below is what normally ends it.
-    fs::path dir = album;
-    bool reachedBound = (dir == bound);
-    while (!reachedBound) {
-        fs::path parent = dir.parent_path();
-        if (parent.empty() || parent == dir) {
-            // Ran out of path without ever meeting the bound: rootBound is
-            // not an ancestor of albumDir. Refuse the whole walk rather than
-            // return a chain that climbs to the filesystem root.
-            return { album.u8string() };
-        }
-        dir = parent;
-        out.push_back(dir.u8string());
-        reachedBound = (dir == bound);
-    }
-
-    // One PAST the bound — the "root is <download_dir>/<country>" layout the
-    // previous two-probe open() covered. Skipped when the bound is already
-    // the filesystem root and has nowhere above it.
-    fs::path above = dir.parent_path();
-    if (!above.empty() && above != dir) out.push_back(above.u8string());
-
-    return out;
+    // The walk itself is arc::fs::ancestorsUpTo() — nearest-first up to the
+    // bound and one past it, refusing to climb when the bound is not an
+    // ancestor. It moved to archive_engine because it is not about this
+    // downloader or about music: "find a companion tree without assuming how
+    // deep it sits" is the same question for any app with a sidecar, and it is
+    // pure path arithmetic that opens nothing.
+    //
+    // This name and signature stay because they say what the walk is FOR here,
+    // and core/tests/streamer_db_test.cc asserts the three real layouts through
+    // it.
+    return arc::fs::ancestorsUpTo(albumDir, rootBound);
 }
 
 bool StreamerDb::openAt(const std::string& dir) {
