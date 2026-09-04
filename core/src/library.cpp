@@ -20,6 +20,7 @@
 // The storage vocabulary: a walk that cannot throw, and the stat that comes
 // with it. See framework/archive_engine.
 #include "arc/fs/walk.hh"
+#include "arc/fs/media_index.hh"
 
 namespace fs = std::filesystem;
 
@@ -552,6 +553,93 @@ std::vector<Album> scanLibrary(const std::string& rootPath) {
     return buildAlbums(byFolder, rootPath);
 }
 
+// Groups everything gathered by an incremental scan into albums. Shared by the
+// two candidate sources below so they cannot drift in how they assemble a
+// result — only in how they decide what to open.
+static IncrementalScanResult finishScan(const std::string& rootPath,
+                                        IncrementalScanResult& result,
+                                        std::vector<Track>& reused,
+                                        std::vector<PendingParse>& pending) {
+    std::map<std::string, std::vector<Track>> byFolder;
+    for (auto& t : reused) {
+        std::string folder = fs::u8path(t.filePath).parent_path().u8string();
+        byFolder[folder].push_back(std::move(t));
+    }
+    for (auto& t : parseTracksParallel(pending)) {
+        std::string folder = fs::u8path(t.filePath).parent_path().u8string();
+        byFolder[folder].push_back(std::move(t));
+    }
+    result.albums = buildAlbums(byFolder, rootPath);
+    return std::move(result);
+}
+
+// Fills `reused` and `pending` from the platform's media catalogue.
+//
+// Returns false when there is nothing usable to be had — no backend installed
+// (every desktop build), a refused query, or an index that knows of no file
+// under this root — and the caller then walks the tree. Returning false is a
+// normal outcome, not a failure: the walk is the floor this whole design rests
+// on, and it is why an unindexed folder is merely slower rather than invisible.
+//
+// A NOTE ON mtime, which is the subtle part. Track::fileMtime is an opaque
+// change token, compared only against a value the same device wrote earlier —
+// library.h says so. The walk fills it with std::filesystem's tick count and
+// this fills it with MediaStore's unix seconds, and the two are NOT
+// interchangeable. That is safe because a device uses one source or the other,
+// not both. The one case where they meet is a device that had the index and
+// then loses it (the storage grant revoked, say): every token then mismatches
+// and the library is re-parsed once, after which it is stable again. That is
+// the correct outcome, and it costs a single slow scan rather than silence.
+static bool indexCandidates(const std::string& rootPath,
+                            const std::map<std::string, Track>& cached,
+                            IncrementalScanResult& result,
+                            std::vector<Track>& reused,
+                            std::vector<PendingParse>& pending) {
+    if (!arc::fs::MediaIndex::available()) return false;
+
+    auto answer = arc::fs::MediaIndex::query(rootPath);
+    if (!answer.ok()) {
+        printf("[Scan] media index unavailable (%s) -- walking instead\n",
+               answer.error().message.c_str());
+        fflush(stdout);
+        return false;
+    }
+    const std::vector<arc::fs::MediaRecord>& records = answer.value();
+    if (records.empty()) {
+        printf("[Scan] media index knows nothing under %s -- walking instead\n",
+               rootPath.c_str());
+        fflush(stdout);
+        return false;
+    }
+
+    for (const arc::fs::MediaRecord& r : records) {
+        std::string ext = fs::u8path(r.path).extension().u8string();
+        lowerAscii(ext);
+        const bool flac = (ext == ".flac");
+        if (!flac && ext != ".wav") continue;   // the two the parsers handle
+
+        const auto it = cached.find(r.path);
+        if (it != cached.end() && r.size == it->second.fileSize &&
+            r.mtimeUnix == it->second.fileMtime) {
+            result.filesSkipped++;
+            reused.push_back(it->second);
+            continue;
+        }
+
+        // The index gave the tags for free; what it cannot give is sample rate,
+        // channel count and bit depth, and this app colours a release by them.
+        // So the file is still opened — but only this one, and only because it
+        // is new or changed.
+        result.filesScanned++;
+        pending.push_back({r.path, flac, r.size, r.mtimeUnix});
+    }
+
+    printf("[Scan] media index: %zu rows under %s\n", records.size(),
+           rootPath.c_str());
+    fflush(stdout);
+    return true;
+}
+
 // ── Incremental scan ─────────────────────────────────────────────────────────
 
 // Returns the WHOLE library under `rootPath`, having opened only the files
@@ -583,6 +671,21 @@ IncrementalScanResult scanLibraryIncremental(
     std::vector<Track> reused;
     std::vector<PendingParse> pending;
 
+    // Ask the platform's own catalogue first, where there is one. On Android
+    // that is MediaStore: one query for the whole library instead of a readdir
+    // and a stat per entry through FUSE. It answers with the tags too, which is
+    // why a file it knows about and the cache does not still costs only the
+    // open needed for sample rate and bit depth — no media index reports those.
+    //
+    // Anything other than a populated answer falls through to the walk below:
+    // no backend (every desktop), a refused query (the storage grant not in
+    // hand yet), or an empty result (a root the system scanner never indexed —
+    // a .nomedia file, or files copied over MTP moments ago). The walk is
+    // always the floor, and is what makes those three cases survivable rather
+    // than each needing its own recovery.
+    if (indexCandidates(rootPath, cached, result, reused, pending))
+        return finishScan(rootPath, result, reused, pending);
+
     forEachAudioFile(rootPath, [&](const std::string& filePath, bool flac,
                                    int64_t size, int64_t mtime) {
         // The walk already stat'ed this entry, so the "has it changed?" test
@@ -599,19 +702,7 @@ IncrementalScanResult scanLibraryIncremental(
         pending.push_back({filePath, flac, size, mtime});
     });
 
-    std::map<std::string, std::vector<Track>> byFolder;
-    for (auto& t : reused) {
-        std::string folder = fs::u8path(t.filePath).parent_path().u8string();
-        byFolder[folder].push_back(std::move(t));
-    }
-
-    for (auto& t : parseTracksParallel(pending)) {
-        std::string folder = fs::u8path(t.filePath).parent_path().u8string();
-        byFolder[folder].push_back(std::move(t));
-    }
-
-    result.albums = buildAlbums(byFolder, rootPath);
-    return result;
+    return finishScan(rootPath, result, reused, pending);
 }
 
 // ── Parallel scan ────────────────────────────────────────────────────────────

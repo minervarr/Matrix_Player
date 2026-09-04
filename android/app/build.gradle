@@ -54,6 +54,31 @@ android {
         aidl true
     }
 
+    sourceSets {
+        main {
+            // archive_engine ships a Java half for the one thing its native
+            // code cannot reach on its own: MediaStore, which has no NDK API.
+            // It is compiled from the submodule rather than copied, so the two
+            // halves of arc::fs::MediaIndex cannot drift — media_index_jni.cpp
+            // looks the class up by name and checks every method signature,
+            // and a copy that fell behind would fail that check at runtime
+            // instead of at build time.
+            //
+            // A source directory rather than an AAR because that is how every
+            // other first-party dependency arrives here: as sources, built into
+            // this app, with no publishing step in between.
+            java.srcDirs += '../../framework/archive_engine/platform/android/src/main/java'
+            // ...but only the storage half. ArchiveEngine.java is the AAR's
+            // libarchive wrapper, and its static block does
+            // System.loadLibrary("archive_engine") — a library this APK does
+            // not contain, because arc_archive is compiled out here. Nothing
+            // calls it, so it would never actually run; a class that throws
+            // UnsatisfiedLinkError the moment anyone touches it is still not
+            // worth shipping.
+            java.exclude '**/ArchiveEngine.java'
+        }
+    }
+
     signingConfigs {
         release {
             storeFile file("../bruno.jks")

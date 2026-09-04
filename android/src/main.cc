@@ -10,6 +10,7 @@
 #include "storage_permission.hh"  // app_shell: has_all_files_access()
 #include "arc/fs/paths.hh"        // archive_engine: the storage layout
 #include "arc/fs/volume.hh"
+#include "media_index_android.hh"  // archive_engine: the MediaStore backend
 #include "player_view.hh"
 #include "os/aoas_output.hh"  // AOAS relay backend: hands over the android_app for JNI
 #include "os/media_session_android.hh"  // foreground service + MediaSession: same
@@ -74,6 +75,21 @@ void android_main(android_app* state) {
         arc::fs::setAllFilesAccess(has_all_files_access(state));
     }
     const arc::fs::Layout paths = arc::fs::layout("matrix_player");
+
+    // ── The system's own catalogue, if it will have us ───────────────────────
+    //
+    // With this installed, the library scan asks MediaStore for every audio
+    // file under a root — one Binder call — instead of walking the tree and
+    // stat'ing each entry through FUSE. Failure here is not a problem: no
+    // backend is installed, arc::fs::MediaIndex::available() stays false, and
+    // core/src/library.cpp walks exactly as it does on the desktop.
+    //
+    // state->activity->clazz is the Activity object, which is what the JNI half
+    // needs — both as the Context for the ContentResolver and for its
+    // classloader, the only one that can see a class packaged in this app.
+    if (!arc::fs::installAndroidMediaIndex(state->activity->vm,
+                                           state->activity->clazz))
+        LOGI("media index: unavailable -- the scan will walk the tree instead");
 
     // Create home/ once shared storage is actually reachable. Creating a NEW
     // top-level directory there needs the all-files grant, so on a first launch

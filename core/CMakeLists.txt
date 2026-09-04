@@ -132,6 +132,26 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         target_compile_options(streamer_db_test PRIVATE -Wall)
     endif()
 
+    # ── scan_source_test ───────────────────────────────────────────────────
+    # The two candidate sources for a scan — the platform's media catalogue and
+    # the directory walk — must produce the same library, because the walk is
+    # the fallback the index drops to whenever it has nothing useful to say.
+    #
+    # This is the check that was going to need a phone. arc::fs::MediaIndex
+    # takes its backend as an INSTALLED pointer rather than a compile-time
+    # #ifdef, so a fake one runs here and the Android path is exercised on the
+    # desktop. It links matrix_core because it drives the real scan over real
+    # WAV files — the sample rate and bit depth it asserts are exactly what no
+    # media index reports, so they can only come from the files themselves.
+    add_executable(scan_source_test tests/scan_source_test.cc)
+    target_link_libraries(scan_source_test PRIVATE matrix_core arc_fs)
+    target_include_directories(scan_source_test PRIVATE include ${CMAKE_SOURCE_DIR}/third_party)
+    if(MSVC)
+        target_compile_options(scan_source_test PRIVATE /W3 /utf-8)
+    else()
+        target_compile_options(scan_source_test PRIVATE -Wall)
+    endif()
+
     # ── matrix_fixture_gen ────────────────────────────────────────────────
     # Writes a small, fixed synthetic music library (real sine-tone WAVs, a
     # real folder layout) to disk so the GUI's Album/EP/Single/Compilation/

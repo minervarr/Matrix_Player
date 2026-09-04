@@ -270,6 +270,12 @@ add_library(matrix_player_android SHARED
     ${MATRIX_GUI_SRC}/os/media_session_android.cc
     ${MATRIX_GUI_SRC}/bt_codec.cc
     ${MATRIX_GUI_SRC}/os/bt_codec_android.cc
+    # archive_engine's Android half: the MediaStore-backed arc::fs::MediaIndex.
+    # It lives in platform/, not core/, because core/ does no JNI — see the rule
+    # at the top of framework/archive_engine/core/CMakeLists.txt. Compiled INTO
+    # this .so rather than arriving as an AAR, the same way every other
+    # first-party source here does.
+    ${REPO_ROOT}/framework/archive_engine/platform/android/media_index_jni.cpp
     ${NATIVE_APP_GLUE}/android_native_app_glue.c)
 
 target_compile_definitions(matrix_player_android PRIVATE MATRIX_HAVE_AAUDIO MATRIX_HAVE_AOAS)
@@ -279,6 +285,7 @@ target_include_directories(matrix_player_android PRIVATE
     ${VK_CANVAS_ANDROID_PLATFORM}
     ${MATRIX_GUI_SRC}
     ${REPO_ROOT}/third_party
+    ${REPO_ROOT}/framework/archive_engine/platform/android
     ${UI_MIN_TEXT_SIZE_DIR})
 
 target_link_libraries(matrix_player_android
