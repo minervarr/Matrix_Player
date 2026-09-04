@@ -27,18 +27,63 @@ StreamerDb& StreamerDb::operator=(StreamerDb&& other) noexcept {
     return *this;
 }
 
-bool StreamerDb::open(const std::string& musicRoot) {
+// Normalized for comparison and for use as a cache key: lexically cleaned,
+// with any trailing separator removed. "/music/", "/music" and "/music/./"
+// are one directory and must produce one key, or the same library opens
+// twice under two names.
+static fs::path normalizeDir(const fs::path& p) {
+    fs::path n = p.lexically_normal();
+    const std::string s = n.u8string();
+    if (s.size() > 1 && (s.back() == '/' || s.back() == '\\'))
+        return fs::u8path(s.substr(0, s.size() - 1));
+    return n;
+}
+
+std::vector<std::string> streamerSearchPath(const std::string& albumDir,
+                                            const std::string& rootBound) {
+    std::vector<std::string> out;
+    if (albumDir.empty()) return out;
+
+    const fs::path album = normalizeDir(fs::u8path(albumDir));
+    out.push_back(album.u8string());
+    if (rootBound.empty()) return out;
+
+    const fs::path bound = normalizeDir(fs::u8path(rootBound));
+
+    // Walk up to the bound. The loop is driven by parent_path() rather than
+    // by a level count so it terminates on its own fixed point ("/" is its
+    // own parent), and the bound test below is what normally ends it.
+    fs::path dir = album;
+    bool reachedBound = (dir == bound);
+    while (!reachedBound) {
+        fs::path parent = dir.parent_path();
+        if (parent.empty() || parent == dir) {
+            // Ran out of path without ever meeting the bound: rootBound is
+            // not an ancestor of albumDir. Refuse the whole walk rather than
+            // return a chain that climbs to the filesystem root.
+            return { album.u8string() };
+        }
+        dir = parent;
+        out.push_back(dir.u8string());
+        reachedBound = (dir == bound);
+    }
+
+    // One PAST the bound — the "root is <download_dir>/<country>" layout the
+    // previous two-probe open() covered. Skipped when the bound is already
+    // the filesystem root and has nowhere above it.
+    fs::path above = dir.parent_path();
+    if (!above.empty() && above != dir) out.push_back(above.u8string());
+
+    return out;
+}
+
+bool StreamerDb::openAt(const std::string& dir) {
     close();
 
-    fs::path root(musicRoot);
     std::error_code ec;
-    fs::path dbPath = root / ".streamer" / "library.db";
-    fs::path assetsRoot = root;
-    if (!fs::exists(dbPath, ec)) {
-        dbPath = root.parent_path() / ".streamer" / "library.db";
-        assetsRoot = root.parent_path();
-        if (!fs::exists(dbPath, ec)) return false;
-    }
+    const fs::path assetsRoot = normalizeDir(fs::u8path(dir));
+    const fs::path dbPath = assetsRoot / ".streamer" / "library.db";
+    if (!fs::exists(dbPath, ec)) return false;
 
     impl_ = new Impl;
     impl_->assetsRoot = assetsRoot;

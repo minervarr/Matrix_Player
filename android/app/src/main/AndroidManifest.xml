@@ -20,11 +20,93 @@
         <package android:name="io.nava.aoas" />
     </queries>
 
-    <application android:label="Matrix Player">
+    <!-- Background playback. Without a foreground service nothing in this
+         process tells Android it is playing anything, so the process goes
+         cached the moment the listener leaves the app and — on target SDK 36 —
+         is then frozen. That is why playback used to stop at the end of the
+         track that was running when the screen went off.
+
+         FOREGROUND_SERVICE_MEDIA_PLAYBACK is the API 34 permission that must
+         match the service's foregroundServiceType below; declaring one without
+         the other is a startForeground() that throws.
+
+         WAKE_LOCK is a PARTIAL lock only, held while playing: the CPU stays up
+         so the decode and gapless threads keep running with the screen off. It
+         never holds the screen on.
+
+         POST_NOTIFICATIONS is a runtime permission from API 33. Denied, the
+         service still runs and playback still survives — only the transport
+         notification is hidden. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- A2DP codec control. Nothing here is about the audio path: the player
+         hands PCM to the OS and the Bluetooth STACK encodes it to
+         SBC/AAC/aptX/LDAC, so this is a property of the route, chosen once and
+         remembered per device.
+
+         BLUETOOTH_CONNECT (API 31+, runtime) is what getName() and the A2DP
+         proxy need. The legacy BLUETOOTH/BLUETOOTH_ADMIN pair covers API 30 and
+         below, where BLUETOOTH_CONNECT does not exist.
+
+         WRITE_SECURE_SETTINGS is signature-level and will NOT be granted at
+         install: it is declared so that `adb shell pm grant` can hand it over
+         on a machine the listener owns, which is the second of the three ways
+         a normal app can reach the codec (the first is a CompanionDeviceManager
+         association, which needs no permission at all). Without either, the
+         codec can still be READ and reported — see gui/src/bt_codec.hh. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+
+    <uses-feature android:name="android.software.companion_device_setup"
+        android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+
+    <!-- The theme is not decoration: without one, the system window behind this
+         app is the platform default (black) for the whole of every cold start
+         and every return from the background. See res/values/styles.xml. -->
+    <application android:label="Matrix Player" android:theme="@style/MatrixPlayerTheme">
+        <!-- launchMode and configChanges are BOTH about one thing: this
+             activity must never be destroyed and rebuilt while music is
+             playing. android_main() owns PlayerWindow, the decode threads and
+             the AAudio stream; when the activity dies android_main() returns
+             and the music stops with it. The foreground service keeps the
+             PROCESS alive, but it cannot keep the activity alive.
+
+             singleTask, not the default "standard": with standard, a second
+             instance can be added to the task, and Android then RESETS the
+             task — finishing the running activity and creating a fresh one.
+             That is exactly what tapping the notification did. The launch
+             intent from the shade is ACTION_MAIN/CATEGORY_LAUNCHER, and
+             Intent.filterEquals() — which decides "same intent as the task
+             root, just bring it forward" — compares setPackage(), which
+             PackageManager.getLaunchIntentForPackage() sets and the launcher's
+             own intent does not. Mismatched, so: new instance, task reset, old
+             activity finished, playback dead. Observed on a moto g06 as two
+             overlapping android_main() threads in one pid, the old one logging
+             "phase 4/5: run() returned" 600 ms into the new one's create().
+             singleTask removes the question: a matching instance is always
+             resumed and handed onNewIntent(), never rebuilt.
+
+             configChanges is the same defence against the system rather than
+             against ourselves. Every quality NOT listed here relaunches the
+             activity, so with only the three original entries a sunset
+             switching the phone to dark mode, a font-size change, a locale
+             change or a density change would each kill playback outright. The
+             app already redraws from scratch on APP_CMD_CONFIG_CHANGED, so
+             absorbing them costs nothing. -->
         <activity
             android:name="android.app.NativeActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density|fontScale|locale|layoutDirection|touchscreen|colorMode"
             android:label="Matrix Player">
             <meta-data
                 android:name="android.app.lib_name"
@@ -34,5 +116,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Same process as the activity, deliberately and by default: keeping
+             this service alive is what keeps the decode and gapless threads
+             running, which is the entire point. A service in its own process
+             would keep ITSELF alive and let the player be frozen anyway.
+
+             Not exported: it is started by this app and nothing else. -->
+        <service
+            android:name=".PlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
     </application>
 </manifest>

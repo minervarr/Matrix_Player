@@ -87,7 +87,21 @@ public:
             case AppEvent::ScanDone:    p.onScanDone(); scanned = true;             break;
             case AppEvent::ArtDecoded:  p.onArtDecoded();                           break;
             case AppEvent::TrackChange: p.applyTrackMetadata((int)e.p1, (int)e.p2); break;
-            case AppEvent::RequestPlay: break;
+            // A capture session must never start, stop or move the music:
+            // it is photographing the app, not driving it. The OS transport
+            // cannot reach this tool anyway (media_session is the null build
+            // here), so these are unreachable as well as unwanted -- named
+            // explicitly so that adding a fifth event is a compile warning
+            // rather than a silently ignored one.
+            case AppEvent::RequestPlay:
+            case AppEvent::RequestStop:
+            case AppEvent::RequestNext:
+            case AppEvent::RequestPrev: break;
+            // Same rule, one step further out: a capture must not touch the
+            // Bluetooth route either. The null bt_codec build never raises
+            // this, so it is named to keep the switch exhaustive rather than
+            // because it can arrive.
+            case AppEvent::BtRouteChanged: break;
             }
         }
         return scanned;
@@ -160,6 +174,7 @@ const char* kStates[] = {
     "41-search-suggest",
     "42-search-chips",
     "43-autoeq-unfurled",
+    "44-transport-ordinal",
 };
 
 } // namespace
@@ -174,6 +189,7 @@ int main(int argc, char** argv) {
     std::string only;
     int frameW = 2560, frameH = 1440;
     bool listOnly = false;
+    int fixture = 0;   // >0: replace the library with N synthetic albums
 
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -184,6 +200,7 @@ int main(int argc, char** argv) {
         if      (a == "--out")   out  = next("--out");
         else if (a == "--only")  only = next("--only");
         else if (a == "--list")  listOnly = true;
+        else if (a == "--fixture") fixture = atoi(next("--fixture"));
         else if (a == "--frame") {
             const char* v = next("--frame");
             if (sscanf(v, "%dx%d", &frameW, &frameH) != 2) {
@@ -192,7 +209,9 @@ int main(int argc, char** argv) {
             }
         } else {
             fprintf(stderr,
-                "usage: %s [--out DIR] [--frame WxH] [--only SUBSTR] [--list]\n", argv[0]);
+                "usage: %s [--out DIR] [--frame WxH] [--only SUBSTR] [--list]\n"
+                "          [--fixture N]   replace the library with N synthetic albums\n",
+                argv[0]);
             return 2;
         }
     }
@@ -224,6 +243,14 @@ int main(int argc, char** argv) {
     // tracklist instead of an empty column.
     for (int i = 0; i < 600 && !host->drain(player); i++)
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // AFTER the scan, never before: onScanDone() replaces albums_ wholesale,
+    // and on a machine with no music roots it finds nothing — which would wipe
+    // the fixture straight back out. See PlayerWindow::captureLoadFixture.
+    if (fixture > 0) {
+        player.captureLoadFixture(fixture);
+        printf("[capture] fixture library: %d albums\n", fixture);
+    }
 
     std::filesystem::create_directories(out);
 

@@ -292,6 +292,10 @@ if(MATRIX_STATE_HOME)
 endif()
 add_subdirectory(framework/app_shell app_shell_build)
 
+# ---------- The faces that actually SHIP ------------------------------------
+# One list, shared with the Android build (which does not read this file).
+include(${CMAKE_SOURCE_DIR}/cmake/MatrixFonts.cmake)
+
 # ---------- min_text_size (build-time UI text-size floor generator) ----------
 # The recipe now belongs to app_shell (its ui_metrics.hh is what includes the
 # generated header); this call is the part that is genuinely OURS — the list of

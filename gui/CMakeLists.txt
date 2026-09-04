@@ -25,6 +25,16 @@
 
 # app_paths.cc, ui_metrics.cc, ui_orientation.cc and both desktop hosts are
 # NOT here any more: they moved to framework/app_shell, which this target links.
+# Which half of bt_codec.hh this build gets. ae_bluetooth exists only when
+# audio_engine found sd-bus and libsbc (see its CMakeLists.txt), so this is the
+# same "only offer what this build actually has" rule the Audio Settings panel
+# applies to ALSA and JACK.
+if(TARGET ae_bluetooth)
+    set(MATRIX_BT_CODEC_SOURCE src/os/bt_codec_linux.cc)
+else()
+    set(MATRIX_BT_CODEC_SOURCE src/os/bt_codec_null.cc)
+endif()
+
 set(MATRIX_PLAYER_PORTABLE_SOURCES
     src/gui_main.cc
     src/player_view.cc
@@ -33,6 +43,14 @@ set(MATRIX_PLAYER_PORTABLE_SOURCES
     src/bar_a.cc
     src/ui_icons.cc
     src/ui_icons_draw.cc
+    # The desktops publish nothing to the OS about what is playing, so the
+    # media_session.hh seam is answered with no-ops here. Android links
+    # os/media_session_android.cc in its place (android/CMakeLists.txt).
+    src/os/media_session_null.cc
+    # Bluetooth A2DP codec control. The label half is portable; the platform
+    # half is a stub until Linux owns its own A2DP endpoint.
+    src/bt_codec.cc
+    ${MATRIX_BT_CODEC_SOURCE}
     src/panels/settings_panels.cc)
 
 if(WIN32)
@@ -111,6 +129,15 @@ else()
         list(APPEND MATRIX_LINUX_AUDIO_SOURCES src/os/jack_output.cc)
         list(APPEND MATRIX_LINUX_AUDIO_LIBS ae_jack)
     endif()
+    # Bluetooth A2DP, our own endpoint on BlueZ rather than a client of a sound
+    # server. Two source files: bt_output.cc is the AudioOutput adapter, and
+    # os/bt_codec_linux.cc — which REPORTS the route for the signal chain and
+    # the AutoEQ key — is in MATRIX_BT_CODEC_SOURCE with the portable half,
+    # because the capture tool needs that one and never needs an output.
+    if(TARGET ae_bluetooth)
+        list(APPEND MATRIX_LINUX_AUDIO_SOURCES src/os/bt_output.cc)
+        list(APPEND MATRIX_LINUX_AUDIO_LIBS ae_bluetooth)
+    endif()
 
     add_executable(matrix_player
         ${MATRIX_PLAYER_PORTABLE_SOURCES}
@@ -123,12 +150,16 @@ else()
     if(TARGET ae_jack)
         target_compile_definitions(matrix_player PRIVATE MATRIX_HAVE_JACK)
     endif()
+    if(TARGET ae_bluetooth)
+        target_compile_definitions(matrix_player PRIVATE MATRIX_HAVE_BLUETOOTH)
+    endif()
 
     target_include_directories(matrix_player PRIVATE
         src
         ${CMAKE_SOURCE_DIR}/third_party
         ${CMAKE_SOURCE_DIR}/third_party/soxr/src
         ${CMAKE_BINARY_DIR}/generated
+        ${CMAKE_SOURCE_DIR}/framework/audio_engine
         ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/linux)
 
     target_compile_options(matrix_player PRIVATE -Wall)
@@ -230,11 +261,11 @@ add_custom_target(copy_shader_assets ALL
     COMMENT "Copying compiled shaders next to the executables")
 add_dependencies(copy_shader_assets matrix_player)
 
-# Copy bundled fonts (Latin Modern + multi-script fallback faces) next to the executable
-add_custom_command(TARGET matrix_player POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/assets/fonts
-        $<TARGET_FILE_DIR:matrix_player>/fonts)
+# Copy the bundled faces (UI family + icon face + multi-script fallbacks) next
+# to the executable. The LIST, not the directory — see MATRIX_SHIPPED_FONTS in
+# the root CMakeLists.txt for why, and for the rule about adding to it.
+matrix_copy_shipped_fonts(matrix_player ${CMAKE_SOURCE_DIR}
+                          $<TARGET_FILE_DIR:matrix_player>/fonts)
 
 # ---------------------------------------------------------------------------
 # ui_metrics_test — the app's only automated test. Pure arithmetic (no Vulkan,
@@ -339,6 +370,12 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
             src/rail_layout.cc
             src/ui_icons.cc
             src/ui_icons_draw.cc
+            # player_view.cc calls the media_session.hh seam; the capture tool
+            # publishes nothing to any OS, so it links the same no-ops the
+            # desktop app does.
+            src/os/media_session_null.cc
+            src/bt_codec.cc
+            ${MATRIX_BT_CODEC_SOURCE}
             src/panels/settings_panels.cc
             ${MATRIX_LINUX_AUDIO_SOURCES}
             ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/linux/wayland_platform.cc)
@@ -350,6 +387,9 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         if(TARGET ae_jack)
             target_compile_definitions(matrix_ui_capture PRIVATE MATRIX_HAVE_JACK)
         endif()
+        if(TARGET ae_bluetooth)
+            target_compile_definitions(matrix_ui_capture PRIVATE MATRIX_HAVE_BLUETOOTH)
+        endif()
 
         target_include_directories(matrix_ui_capture PRIVATE
             src
@@ -357,6 +397,9 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
             ${CMAKE_SOURCE_DIR}/third_party/soxr/src
             ${CMAKE_BINARY_DIR}/generated
             ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/linux
+            # bluez_a2dp.h, reached the same way matrix_player reaches it: the
+            # capture tool links player_view.cc, which calls the bt_codec seam.
+            ${CMAKE_SOURCE_DIR}/framework/audio_engine
             # stb_image_write.h (public domain, vendored by vk_canvas's own
             # capture runner) — header-only, so no link against that target.
             ${CMAKE_SOURCE_DIR}/framework/vk_canvas/core/capture)

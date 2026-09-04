@@ -10,6 +10,25 @@ struct EqAssignment {
     std::string form;
 };
 
+// One pair of Bluetooth headphones and the A2DP codec chosen for it.
+//
+// `codec`, `sampleRate` and `bits` are the Bluetooth stack's own values, not
+// this app's: AOSP codec ids, and BITMASKS for the last two. They are stored
+// exactly as they are handed back to the platform so nothing has to be
+// converted twice. gui/src/bt_codec.hh turns them into words.
+//
+// `core/` deliberately knows nothing else about Bluetooth — this is a row, not
+// a driver, and the rule that core/ includes no OS header still holds.
+struct BtCodecPref {
+    std::string mac;
+    std::string deviceName;
+    int codec       = -1;
+    int sampleRate  = 0;
+    int bits        = 0;
+    int channelMode = 0;
+    int ldacQuality = 0;
+};
+
 // One pair of headphones the listener actually uses. Distinct from
 // EqAssignment, which says which pair is on a given OUTPUT right now: a DAC has
 // no frequency response, so "the profile for this device" was never the real
@@ -165,6 +184,22 @@ public:
                           const std::string& form);
     void clearEqAssignment(const std::string& deviceKey);
     bool loadEqAssignment(const std::string& deviceKey, EqAssignment& out);
+
+    // ── Bluetooth codecs ────────────────────────────────────────────────────
+    // The codec chosen for one pair of headphones, so it can be re-applied when
+    // they reconnect. Keyed by MAC.
+    //
+    // The numbers here are the Bluetooth stack's OWN encoding — AOSP codec ids,
+    // and BITMASKS for rate and depth rather than a rate in Hz and a depth in
+    // bits. Kept in that form deliberately: they are stored exactly as they are
+    // handed back to the platform, so there is no conversion to get wrong on
+    // either side. gui/src/bt_codec.hh is where they get names.
+    void saveBtCodec(const std::string& mac, const BtCodecPref& pref);
+    void clearBtCodec(const std::string& mac);
+    bool loadBtCodec(const std::string& mac, BtCodecPref& out);
+    // Everything remembered, for the settings list. Ordered by name so the list
+    // does not reshuffle itself as devices connect.
+    std::vector<BtCodecPref> loadBtCodecs();
 
     // ── Driver inventory ────────────────────────────────────────────────────
     // Pinned first, then MOST USED, with recency only as the tie-break among

@@ -172,6 +172,27 @@ public:
         h_->writePos.store(0, std::memory_order_relaxed);
     }
 
+    // Consumer-side discard: throw away everything the producer has written and
+    // we have not taken yet, by jumping our own readPos up to its writePos.
+    //
+    // This is the flush() path, and it exists SEPARATELY from clear() because
+    // clear() moves writePos -- the producer's index, which this side does not
+    // own (see ShmRingHeader). Doing that under a live producer is a race: the
+    // client's decode thread reads and advances writePos on its own schedule,
+    // and a consumer that rewrites it corrupts the producer's view of its own
+    // buffer. Here the producer is still running by definition -- a flush is a
+    // track change, not a handover -- so only readPos may move.
+    //
+    // The consequence is the correct one: bytes written after this call
+    // survive, because those belong to whatever the client is starting, not to
+    // the audio it just asked to abandon.
+    void discardPending() {
+        if (!h_) return;
+        const size_t w = loadPeer(h_->writePos);
+        if (w == kBadPos) return;   // peer index out of range: trust nothing
+        h_->readPos.store(static_cast<uint32_t>(w), std::memory_order_release);
+    }
+
 private:
     ShmRing(ShmRingHeader* h, size_t capacity) : h_(h), capacity_(capacity) {}
 

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The app's own background, and the ONLY place it is written down twice.
+         Must track CLR_BG_MAIN in gui/src/theme.hh — RGB(10, 10, 10).
+
+         It has to be duplicated here because the two consumers cannot share a
+         definition: theme.hh is C++ compiled into the .so, and this is an
+         Android resource the system reads BEFORE any of our code runs. That is
+         the whole point of it (see styles.xml). -->
+    <color name="matrix_bg">#FF0A0A0A</color>
+</resources>

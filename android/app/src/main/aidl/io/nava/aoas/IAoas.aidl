@@ -99,6 +99,36 @@ interface IAoas {
     void release();
 
     /**
+     * Throw away every sample already handed over but not yet heard -- what is
+     * still in the shared ring, and the seconds sitting in the driver's own
+     * playback buffer behind it -- while KEEPING ownership.
+     *
+     * This is what a player's Stop button, and its Next button, actually mean.
+     * Without it a client's only way to discard was release() followed by
+     * acquire(): four round trips, a new shared-memory region, and a format
+     * renegotiation -- and it did not even work, because releasing never
+     * touched the driver's buffer. Audio kept playing for up to three seconds
+     * after the listener asked it to stop.
+     *
+     * The isochronous stream is NOT touched and the format is NOT renegotiated,
+     * so this costs no clock re-lock: the endpoint keeps running on padded
+     * silence exactly as it does when nobody is streaming. That is the
+     * difference between this and a handover, and it is why this is the cheap
+     * call and release()/acquire() is not.
+     *
+     * SYNCHRONOUS on purpose, rather than `oneway`. The caller's very next act
+     * is to write the audio it wants heard instead; if this returned before the
+     * discard had happened, the two would race and the new track's opening
+     * frames could be thrown away with the old track's tail.
+     *
+     * Calling this without owning the device does nothing. Throws
+     * SecurityException if another client owns it -- flushing somebody else's
+     * audio is a forced interruption, which release() refuses for the same
+     * reason.
+     */
+    void flush();
+
+    /**
      * The format the DAC is actually running, as
      * {sampleRate, channels, bitDepth, subslotBytes} -- see the FMT_* indices.
      * Empty when no stream is configured. Read it after acquire(): the driver

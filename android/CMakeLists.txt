@@ -32,6 +32,75 @@ target_compile_options(sqlite3 PRIVATE -w)
 # poll, no Linux-desktop-specific assumptions) in the design doc's review.
 add_subdirectory(${REPO_ROOT}/core ${CMAKE_BINARY_DIR}/matrix_core)
 
+# ---------- libjpeg-turbo, cross-compiled for the NDK ----------
+#
+# This is what makes album art appear instead of a black square.
+#
+# img_decode_kit has two JPEG paths (img_decode.cc's decodeImageScaled): with
+# turbojpeg it reads the JPEG header, picks the smallest DCT scaling factor
+# that still covers the target, and decodes DIRECTLY at that size; without it,
+# stb_image decodes at FULL native resolution and then box-downsamples. Album
+# covers in a real library run to 4000x4000, so the fallback does up to ~64x
+# the pixel work and allocates ~64 MB of RGBA to produce a 459x459 thumbnail.
+# Measured on a moto g06 before this existed: 64-149 ms of decode per cover,
+# serialized, which is exactly how long the grid showed black tiles.
+#
+# It is also a QUALITY upgrade, not a trade: libjpeg's fancy (triangle) chroma
+# upsampling plus img_decode_kit's MKS2013 resample replace stb_image's
+# baseline decode plus a box filter. Android now decodes covers the same way
+# the desktop already did.
+#
+# ExternalProject_Add rather than add_subdirectory because libjpeg-turbo's own
+# CMakeLists.txt FATAL_ERRORs unless it is the top-level project — the same
+# reason, and the same workaround, as the desktop root CMakeLists.txt. The only
+# difference here is forwarding the NDK toolchain into the nested configure
+# instead of host compilers (see libjpeg-turbo's BUILDING.md, "Building
+# libjpeg-turbo for Android").
+#
+# MUST be defined BEFORE the add_subdirectory below. img_decode_kit's
+# CMakeLists.txt gates on `if(TARGET turbojpeg-static)` at the moment IT is
+# configured (transitively, via vk_canvas/core), and CMake evaluates that
+# immediately. Defining it later links the library into the .so and leaves the
+# stb_image path compiled in — the change would appear to work and do nothing.
+# The desktop build has already been bitten by exactly this; its own comment
+# records the stretched-JPEG bug it caused.
+include(ExternalProject)
+set(TURBOJPEG_INSTALL_DIR ${CMAKE_BINARY_DIR}/libjpeg-turbo-install)
+set(TURBOJPEG_BYPRODUCT ${TURBOJPEG_INSTALL_DIR}/lib/libturbojpeg.a)
+ExternalProject_Add(libjpeg_turbo_ext
+    SOURCE_DIR ${REPO_ROOT}/third_party/libjpeg-turbo
+    CMAKE_ARGS
+        -G${CMAKE_GENERATOR}
+        -DCMAKE_BUILD_TYPE=Release
+        # The NDK toolchain, forwarded verbatim from this configure. Every one
+        # of these is required: without the toolchain file the nested build
+        # would compile for the HOST, and the resulting .a would fail to link
+        # into an arm64 .so with an error that names neither Android nor JPEG.
+        -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
+        -DANDROID_ABI=${ANDROID_ABI}
+        -DANDROID_PLATFORM=${ANDROID_PLATFORM}
+        -DANDROID_NDK=${ANDROID_NDK}
+        -DCMAKE_ANDROID_ARCH_ABI=${ANDROID_ABI}
+        -DCMAKE_SYSTEM_NAME=Android
+        -DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}
+        -DCMAKE_INSTALL_LIBDIR=lib
+        -DENABLE_SHARED=OFF
+        -DENABLE_STATIC=ON
+        -DWITH_TURBOJPEG=ON
+        -DWITH_TOOLS=OFF
+        -DWITH_TESTS=OFF
+        -DWITH_JAVA=OFF
+        -DCMAKE_INSTALL_PREFIX=${TURBOJPEG_INSTALL_DIR}
+    INSTALL_DIR ${TURBOJPEG_INSTALL_DIR}
+    BUILD_BYPRODUCTS ${TURBOJPEG_BYPRODUCT})
+
+add_library(turbojpeg-static STATIC IMPORTED GLOBAL)
+file(MAKE_DIRECTORY ${TURBOJPEG_INSTALL_DIR}/include)  # must exist at configure time
+set_target_properties(turbojpeg-static PROPERTIES
+    IMPORTED_LOCATION ${TURBOJPEG_BYPRODUCT}
+    INTERFACE_INCLUDE_DIRECTORIES ${TURBOJPEG_INSTALL_DIR}/include)
+add_dependencies(turbojpeg-static libjpeg_turbo_ext)
+
 # vk_canvas_core: Vulkan canvas/text engine, unmodified. Its own CMakeLists.txt
 # already has an if(ANDROID) branch linking vulkan/android/log directly (NDK
 # provides libvulkan), so PUBLIC linking the target alone is enough.
@@ -148,6 +217,12 @@ add_subdirectory(${REPO_ROOT}/framework/app_shell ${CMAKE_BINARY_DIR}/app_shell)
 #   gui_main.cc            — the desktop entry point; src/main.cc is ours
 #   os/alsa_output.cc,
 #   os/jack_output.cc,
+#   os/bt_output.cc,       — the other platforms' audio backends. bt_output is
+#                            DESKTOP Bluetooth: it registers our own BlueZ
+#                            endpoint, which is not how a phone reaches A2DP
+#                            (there the stack owns the encode and AAudio hands
+#                            it PCM). os/bt_codec_android.cc is the phone's
+#                            half of that story and IS listed below.
 #   wasapi_output.cc       — the other platforms' audio backends
 #   art_view.cc            — the second-window implementation; the Android
 #                            branch of its header is inline and has no .cc
@@ -156,11 +231,16 @@ add_subdirectory(${REPO_ROOT}/framework/app_shell ${CMAKE_BINARY_DIR}/app_shell)
 # The three Hosts, app_paths and ui_metrics/ui_orientation are all in app_shell
 # now and arrive by linking it, not by being listed here.
 #
-# libjpeg-turbo is absent on purpose: its own CMakeLists.txt refuses
-# add_subdirectory (it FATAL_ERRORs unless top-level), and img_decode_kit
-# already falls back to stb_image when turbojpeg-static is undefined. Its one
-# known cost is aspect distortion when the decode box is not square, and grid
-# artwork is square. Revisit if the album view's art shows it.
+# libjpeg-turbo IS built here now — see the ExternalProject_Add above.
+#
+# It used to be absent "on purpose", on the grounds that its CMakeLists.txt
+# refuses add_subdirectory and that the stb_image fallback's only known cost
+# was aspect distortion on non-square decode boxes, which square grid artwork
+# never hits. Both halves of that were wrong in the same way: the refusal is
+# worked around by ExternalProject_Add (the desktop already did), and the cost
+# that actually mattered was never aspect ratio — it was SPEED. Without
+# turbojpeg there is no scaled decode, so every cover was decoded at full
+# native resolution before being downsampled.
 set(MATRIX_GUI_SRC ${REPO_ROOT}/gui/src)
 
 add_library(matrix_player_android SHARED
@@ -174,6 +254,9 @@ add_library(matrix_player_android SHARED
     ${MATRIX_GUI_SRC}/ui_icons_draw.cc
     ${MATRIX_GUI_SRC}/os/aaudio_output.cc
     ${MATRIX_GUI_SRC}/os/aoas_output.cc
+    ${MATRIX_GUI_SRC}/os/media_session_android.cc
+    ${MATRIX_GUI_SRC}/bt_codec.cc
+    ${MATRIX_GUI_SRC}/os/bt_codec_android.cc
     ${NATIVE_APP_GLUE}/android_native_app_glue.c)
 
 target_compile_definitions(matrix_player_android PRIVATE MATRIX_HAVE_AAUDIO MATRIX_HAVE_AOAS)
@@ -220,7 +303,11 @@ target_link_options(matrix_player_android PRIVATE -u ANativeActivity_onCreate)
 # fix in app/build.gradle (mergeDebugAssets/mergeReleaseAssets depending on
 # the buildCMake* tasks) already covers this ordering too, same as it does
 # for the compiled shaders above.
-add_custom_command(TARGET matrix_player_android POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${REPO_ROOT}/assets/fonts
-        ${MATRIX_ANDROID_SHADER_DIR}/../fonts)
+#
+# The LIST, not the directory. Android is where copying the whole tree hurt
+# most: fonts are not ABI-specific, so all three split APKs carried the same
+# 123 MiB, of which 86 MiB was faces no code path opens. See
+# MATRIX_SHIPPED_FONTS in the root CMakeLists.txt.
+include(${REPO_ROOT}/cmake/MatrixFonts.cmake)
+matrix_copy_shipped_fonts(matrix_player_android ${REPO_ROOT}
+                          ${MATRIX_ANDROID_SHADER_DIR}/../fonts)

@@ -14,6 +14,7 @@
 #include <climits>
 #include <cmath>
 #include <chrono>
+#include <unordered_set>
 #include <vector>
 #include <algorithm>
 #include <stdexcept>
@@ -116,6 +117,7 @@ static const char* backendDisplayName(AudioBackend b) {
     case AudioBackend::Jack:   return "JACK";
     case AudioBackend::AAudio: return "AAudio";
     case AudioBackend::Aoas:   return "AOAS (shared USB)";
+    case AudioBackend::Bluetooth: return "Bluetooth (A2DP)";
     }
     return "?";
 }
@@ -189,6 +191,36 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
     // Refusing here turns "nobody injected one" into a clean startup failure.
     if (!host_) return false;
 
+    // The OS's transport, wired straight through to this app's own. The handler
+    // is called on the PLATFORM's thread — Android's main thread, not this one
+    // — so it must not touch anything here directly; posting is what hands the
+    // work to the app thread, exactly as the gapless coordinator and the AOAS
+    // ownership callback already do. Registered before the window exists
+    // because a headset press can arrive at any moment after that.
+    media_session::setCommandHandler([this](media_session::Command c) {
+        switch (c) {
+        case media_session::Command::Stop: host_->postAppEvent((int)AppEvent::RequestStop); break;
+        case media_session::Command::Next: host_->postAppEvent((int)AppEvent::RequestNext); break;
+        case media_session::Command::Prev: host_->postAppEvent((int)AppEvent::RequestPrev); break;
+        case media_session::Command::Play: host_->postAppEvent((int)AppEvent::RequestPlay); break;
+        }
+    });
+
+    // The Bluetooth route. Same rule as above: these fire on the platform's
+    // thread, and all three do nothing but ring the doorbell — the app thread
+    // reads the actual state, because it is the only thread allowed to touch
+    // the database that says which codec this pair of headphones should get.
+    bt_codec::setDeviceConnectedHandler([this](const bt_codec::Device&) {
+        host_->postAppEvent((int)AppEvent::BtRouteChanged);
+    });
+    bt_codec::setDeviceGoneHandler([this](const std::string&) {
+        host_->postAppEvent((int)AppEvent::BtRouteChanged);
+    });
+    bt_codec::setAppliedHandler([this](const std::string&, bool, int) {
+        host_->postAppEvent((int)AppEvent::BtRouteChanged);
+    });
+    bt_codec::start();
+
     // Fixed, non-resizable window: the app sets its size once (true
     // fullscreen) and never leaves it to interactive resize/maximize.
     //
@@ -244,8 +276,36 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
     // script-fallback glyphs (Cyrillic/Greek/CJK/…) needs to scan the
     // library's actual track/album/artist text for which non-Latin
     // codepoints it must cover.
+    // ── Startup phase timing (MATRIX_TIMING=1) ──────────────────────────────
+    //
+    // Off by default, compiled in always. The one number this file used to
+    // carry about startup was a comment — "~150 ms of a ~730 ms startup" —
+    // which is a measurement nobody can repeat and which nothing keeps honest.
+    // A phase that is not timed is a phase whose cost is a guess, and the
+    // library restore below is O(albums²) with no number attached to it at all.
+    const bool timing = std::getenv("MATRIX_TIMING") != nullptr;
+    auto t0 = std::chrono::steady_clock::now();
+    auto phase = [&](const char* what) {
+        if (!timing) return;
+        auto now = std::chrono::steady_clock::now();
+        printf("[startup] %-18s %6.1f ms\n", what,
+               std::chrono::duration<double, std::milli>(now - t0).count());
+        t0 = now;
+    };
+
     std::string exeDir = host_->exeDir();
     db_.open(app_paths::stateDir() + "matrix_player.db");
+    phase("db open");
+
+    // Ask the Bluetooth route once, now that there is a database to answer
+    // with: onBtRouteChanged() re-applies whatever codec was saved for the
+    // pair of headphones it finds, so it CANNOT run before db_.open() — the
+    // handlers registered above are only doorbells and this is the first
+    // read. On Android those handlers do the rest; on Linux there are none
+    // yet (BlueZ signals are not watched), so the route is sampled at the
+    // three moments it can matter: here, when playback starts, and when the
+    // Audio Settings panel opens.
+    onBtRouteChanged();
 
     // Orientation preference. An absent key means "automatic", which is the
     // right default for a fresh install: the window's own shape is a better
@@ -256,18 +316,60 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
 
     // Restore library from DB
     {
+        // Two hash lookups where there used to be two nested scans. This runs
+        // synchronously, before the first frame, and both loops were shaped
+        // like the library: the dedup was O(albums²) and the track join was
+        // O(tracks × albums) — on a real collection, tens of millions of string
+        // compares to answer questions a map answers once each. Nothing about
+        // the RESULT changes: albums_ keeps its insertion order (the map only
+        // answers "seen already"), and each track still lands on the first
+        // album whose name matches, because only one entry per name is kept —
+        // the same album the linear `break` would have found.
         auto raw = db_.loadAlbums();
+        albums_.reserve(raw.size());
+        std::unordered_set<std::string> seen;
+        seen.reserve(raw.size() * 2);
         for (auto& a : raw) {
-            bool dup = false;
-            for (auto& ex : albums_)
-                if (ex.name == a.name && ex.artist == a.artist) { dup = true; break; }
-            if (!dup) albums_.push_back(std::move(a));
+            // U+001F between the halves, the same separator last_played_album
+            // uses: a name and an artist that concatenate to the same string
+            // must not collide, and no tag carries a unit separator.
+            std::string key = a.name + "\x1f" + a.artist;
+            if (!seen.insert(std::move(key)).second) continue;
+            albums_.push_back(std::move(a));
         }
         if (!albums_.empty()) {
+            // Keyed on BOTH names, because the two sides of this join do not
+            // agree on what "album" means. Track::album is the ALBUM TAG
+            // (core/src/library.cpp:452); Album::name is the FOLDER name
+            // (library.cpp:216). In a library whose folders are download
+            // hashes — o241ulhlce88b, kshhopakagi1b — those never match, so
+            // the old `a.name == t.album` comparison joined NOTHING and every
+            // launch restored albums with zero tracks until the background
+            // scan finished and replaced them wholesale.
+            //
+            // That was invisible in two ways and expensive in a third: the
+            // album view was empty for the first second, the scan always
+            // looked like a change (so onScanDone ran its full teardown), and
+            // clearGridArtTexCache() in that teardown meant every cover was
+            // decoded a second time on every launch.
+            //
+            // displayName is the ALBUM tag whenever the tracks agree on one
+            // and the folder name otherwise (library.cpp:221-224), so the two
+            // keys together cover both layouts. emplace keeps the first, which
+            // is the same album the old linear scan's `break` would have found.
+            std::unordered_map<std::string, Album*> byName;
+            byName.reserve(albums_.size() * 4);
+            for (auto& a : albums_) {
+                byName.emplace(a.name, &a);
+                if (!a.displayName.empty() && a.displayName != a.name)
+                    byName.emplace(a.displayName, &a);
+            }
             auto allTracks = db_.loadTracks();
-            for (auto& t : allTracks)
-                for (auto& a : albums_)
-                    if (a.name == t.album) { a.tracks.push_back(t); break; }
+            for (auto& t : allTracks) {
+                auto it = byName.find(t.album);
+                if (it != byName.end()) it->second->tracks.push_back(t);
+            }
+            for (auto& a : albums_) a.sortTracks();
 
             // Re-derive the structured fields (displayName/quality/mode/
             // country) from each album's folder. Rows written before those
@@ -286,11 +388,20 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
                 for (auto& r : roots)
                     if (folder.rfind(r, 0) == 0 && r.size() > root.size()) root = r;
                 parseAlbumFolder(folder, root, a);
+                // The same second step the scan takes (core/library.h). Without
+                // it the restore stops at the FOLDER-derived name, so a library
+                // whose folders are download ids rendered every tile as its
+                // hash — "kshhopakagi1b" instead of "4ÆM" — until the scan
+                // finished and replaced the albums wholesale. This block never
+                // used to run at all: it is guarded on tracks being present,
+                // and before the join above was fixed they never were.
+                applyMetaAlbumName(a);
             }
         }
         rebuildAlbumGroups();   // must precede rebuildGridIndices — it feeds it
         rebuildGridIndices();
     }
+    phase("library restore");
 
     // UI font (fonts/ is copied next to the exe by the CMake build step).
     {
@@ -403,11 +514,13 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
     // device and (before sharing) re-read ~39 MB of faces, at launch, for a
     // window most sessions never open.
     recalcLayout();
+    phase("layout");
     // Needs metrics_, which recalcLayout() just computed: the sizes to bake at
     // ARE the type roles. Anything drawn at a size not in that set (icon boxes,
     // the art window) is picked up by the miss path after the first frame that
     // asks for it — see refreshGlyphs().
     refreshGlyphs();
+    phase("glyph bake");
 
     // Last-played album (grid indicator, Fix C): stored as "name\x1fartist"
     // rather than an index, since the album list's order/indices shift
@@ -447,6 +560,7 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
 
     setupWatchers();
     startBackgroundScan();
+    phase("watchers+scan");
 
     // Load audio mode
     bitperfectMode_.store(db_.loadSetting("audio_mode") == "bitperfect");
@@ -484,6 +598,9 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
 #ifdef MATRIX_HAVE_AOAS
         if (backend == "aoas") audioBackend_ = AudioBackend::Aoas;
 #endif
+#ifdef MATRIX_HAVE_BLUETOOTH
+        if (backend == "bt") audioBackend_ = AudioBackend::Bluetooth;
+#endif
 #endif
     }
 #ifdef _WIN32
@@ -500,6 +617,12 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
 #endif
 #ifdef MATRIX_HAVE_JACK
     jackStartPort_ = db_.loadSetting("jack_port");
+#endif
+#ifdef MATRIX_HAVE_BLUETOOTH
+    // BlueZ's object path, not the MAC: the path is what BluetoothSink opens
+    // by, and it is derived from the MAC anyway (/org/bluez/hciN/dev_XX_...),
+    // so nothing is lost by storing the one the backend actually uses.
+    btDevicePath_ = db_.loadSetting("bt_device_path");
 #endif
 #endif
 
@@ -558,6 +681,16 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
         output_ = std::make_unique<JackOutput>(jackStartPort_);
         printf("[Audio] JACK backend selected (start port=%s)\n",
                jackStartPort_.empty() ? "auto" : jackStartPort_.c_str());
+    }
+#endif
+#ifdef MATRIX_HAVE_BLUETOOTH
+    else if (audioBackend_ == AudioBackend::Bluetooth) {
+        // Constructed, not connected: BtOutput registers its endpoint on the
+        // first configure(), because until a track is chosen there is no rate
+        // to negotiate for and no reason to take a device off the sound server.
+        output_ = std::make_unique<BtOutput>(btDevicePath_);
+        printf("[Audio] Bluetooth A2DP backend selected (device=%s)\n",
+               btDevicePath_.empty() ? "none chosen" : btDevicePath_.c_str());
     }
 #endif
 #ifdef MATRIX_HAVE_AAUDIO
@@ -770,13 +903,34 @@ void PlayerWindow::bakeGlyphMisses() {
 }
 
 void PlayerWindow::markDirty() {
-    // Keep rendering for one frame per swapchain image (+1 for the frame
-    // currently on screen) so a state change reaches every image in the
-    // swapchain's rotation instead of leaving some presenting stale content.
-    // Guard against calls that land before renderer_ exists: a resize can
-    // fire synchronously during window creation (before create() constructs
-    // renderer_ a few lines later), and that resize handler calls invalidate().
-    pendingFrames_ = renderer_ ? renderer_->swapchainImageCount() + 1 : 1;
+    // ONE frame per dirty event, because one frame is what a dirty event costs.
+    //
+    // This used to arm `swapchainImageCount() + 1` — five frames with the
+    // four-image swapchain the app actually gets — "so a state change reaches
+    // every image in the swapchain's rotation instead of leaving some
+    // presenting stale content". That reasoning describes a renderer that
+    // accumulates into its images. This one does not: the colour attachment is
+    // VK_ATTACHMENT_LOAD_OP_CLEAR (vk_canvas renderer.cc) and drawFrame()
+    // repaints the whole surface from that cleared attachment every time — it
+    // says so itself, at the `No canvas.clear()` comment. No frame inherits a
+    // pixel from the image before it, so the image that gets presented is the
+    // same picture whether it is drawn once or five times.
+    //
+    // What the five cost: every hover, every focus change and every 250 ms
+    // SeekUpdate tick while music plays paid for five full layout+draw passes
+    // and five vsync-paced submissions. Scrolling and flinging are unaffected
+    // either way — they re-arm this on every wheel delta — so the whole of it
+    // was spent on discrete events, which is most of what a phone does with a
+    // screen on. The saving is exactly the arming factor — five full repaints
+    // per isolated event became one — and vk_canvas's own per-second
+    // `render: N fps` line is where to watch it while music plays.
+    //
+    // If a platform ever genuinely presents a stale image, the honest answer is
+    // 2 (the one being drawn, plus one), not 5 — and the failure would be
+    // visible rather than subtle. Guard against calls that land before
+    // renderer_ exists: a resize can fire synchronously during window creation,
+    // and that resize handler calls invalidate().
+    pendingFrames_ = 1;
 }
 
 void PlayerWindow::invalidate() {
@@ -1236,6 +1390,28 @@ void PlayerWindow::drawFrame() {
             int gridH = rcGrid_.bottom - rcGrid_.top;
             int lastRow = (gridScrollY_ + gridH) / tileStepY + 1;
 
+            // Warm the rows just outside the viewport, one above and one
+            // below. Covers are only ever decoded for a tile being DRAWN, so
+            // scrolling used to walk into a fresh wall of placeholders every
+            // row: the decode could not start until the tile was already on
+            // screen and late. Asking for the texture is what queues the
+            // decode (getGridArtTexture returns kInvalidTexture and enqueues),
+            // so a bare call is the whole prefetch.
+            //
+            // Deliberately ONE row, not the whole section: the work is bounded
+            // by the viewport rather than by the library, so a 5000-album grid
+            // costs exactly what a 20-album grid does, and the LRU (96 keys)
+            // is never thrashed by speculation. Nothing off-screen is drawn —
+            // this only starts the decode earlier.
+            for (int row = std::max(0, firstRow - 1); row <= lastRow + 1; row++) {
+                if (row >= firstRow && row <= lastRow) continue;   // drawn below
+                for (int col = 0; col < gridCols_; col++) {
+                    int tile = row * gridCols_ + col;
+                    if (tile >= (int)gridIndices_.size()) break;
+                    (void)getGridArtTexture(gridIndices_[tile]);
+                }
+            }
+
             for (int row = firstRow; row <= lastRow; row++) {
                 for (int col = 0; col < gridCols_; col++) {
                     int tile = row * gridCols_ + col;
@@ -1389,7 +1565,9 @@ void PlayerWindow::drawFrame() {
                               r.y + r.h * 0.5f - sz * 0.5f, sz, toColor(clr), st);
         };
         {
-            Rect hdr = { g.x, g.y + 24, g.w, metrics_.text.header };
+            // space(24), not a bare 24: the rows below it are scaled, so a
+            // fixed title pad drifts toward them as the display grows.
+            Rect hdr = { g.x, g.y + metrics_.space(24.0f), g.w, metrics_.text.header };
             centeredIn("Settings", hdr, metrics_.text.header, CLR_TEXT_PRIMARY, FontStyle::Bold);
         }
 
@@ -2001,96 +2179,130 @@ void PlayerWindow::drawFrame() {
             // So the type is always shown, and the number joins it only when
             // there IS more than one track to be at. Same rule as the disc
             // prefix below, one level up.
-            const char* type      = nullptr;
-            const char* typeShort = nullptr;
-            std::string ord;
-            if (currentAlbum_ >= 0 && currentAlbum_ < (int)albums_.size() &&
-                currentTrack_ >= 0 && currentTrack_ < (int)albums_[currentAlbum_].tracks.size()) {
-                const Album& alb = albums_[currentAlbum_];
-                const Track& tr  = alb.tracks[currentTrack_];
-                switch (alb.releaseType) {
-                case Album::ReleaseType::Ep:          type = "EP";     typeShort = "EP";    break;
-                case Album::ReleaseType::Single:      type = "SINGLE"; typeShort = "SINGLE";break;
-                case Album::ReleaseType::Remix:       type = "REMIX";  typeShort = "REMIX"; break;
-                // The only one long enough to need a short form at all, and it
-                // is chosen by MEASURING below, never by orientation.
-                case Album::ReleaseType::Compilation: type = "COMPILATION"; typeShort = "COMP."; break;
-                case Album::ReleaseType::Live:        type = "LIVE";   typeShort = "LIVE";  break;
-                case Album::ReleaseType::Album:
-                default:                              type = "ALBUM";  typeShort = "ALBUM"; break;
-                }
-                if (alb.tracks.size() > 1) {
-                    // The disc prefix appears only when there IS more than one
-                    // disc. On a single-disc record "D1" is noise that says
-                    // nothing, and this bar has no room for a word that adds
-                    // nothing. Decided from the album's own tracks, never stored.
-                    int maxDisc = 0;
-                    for (const Track& x : alb.tracks) maxDisc = std::max(maxDisc, x.discNumber);
-                    if (maxDisc > 1 && tr.discNumber > 0)
-                        ord = "D" + std::to_string(tr.discNumber) + " \xC2\xB7 ";
-                    ord += std::to_string(tr.trackNumber > 0 ? tr.trackNumber
-                                                             : currentTrack_ + 1);
-                }
-            }
+            const TransportOrdinal to = transportOrdinal(currentAlbum_, currentTrack_);
+            const char* type      = to.type;
+            const char* typeShort = to.typeShort;
+            const std::string& ord = to.ord;
 
             const float typeSz = metrics_.text.caption;
-            const float ordSz  = metrics_.text.body;
-            // Same budget, same reasoning as the DSP tag: upright text runs
-            // ACROSS the bar in the horizontal layout, so its room is the
-            // bar's thickness less the padding either side. Vertical is
-            // unconstrained, and the full word costs nothing there.
+
+            // ── The budget, on whichever axis is actually constrained ────────
+            //
+            // BOTH orientations are constrained; this used to believe only one
+            // was. Upright text runs ACROSS the bar in the horizontal layout,
+            // so its room is the bar's thickness. In the vertical layout it
+            // runs ALONG the bar — where the room is not the window's width
+            // but THIS LABEL'S CELL, which ends where the transport buttons
+            // begin. Reading that as "unconstrained" (hardCap 0) is what let
+            // "ALBUM  ·  D1 · 1" — 154 units of text into an 86-unit cell on a
+            // 720px phone — run out under the Prev button.
+            //
+            // The cell, not a constant, so it answers any width: the same
+            // vertical layout on a 1920 desktop gives this cell 686 units and
+            // the full label simply fits.
             const float sidePad   = metrics_.space(SP_MD);
             const float thickness = barBVert ? t.h : t.w;
-            const float hardCap   = barBVert ? 0.0f : (thickness - sidePad * 2.0f);
-            const char* typeTag = nullptr;
-            if (type) {
-                typeTag = (hardCap <= 0.0f ||
-                           canvas.textWidthStyled(type, typeSz, FontStyle::Math) <= hardCap)
-                          ? type : typeShort;
+
+            // ── The mass-to-label gap, measured from INK ─────────────────────
+            //
+            // Both ends of the bar author this gap as one tPad to the CELL, and
+            // that was believed to make them symmetric. It does not, because
+            // the two masses are not the same kind of thing: the artwork FILLS
+            // its 92-unit cell, and the clock is text CENTRED in a cell of the
+            // same width, carrying its centring slack inside its own box. So
+            // the DSP tag stood ~47 units from the clock's ink while the type
+            // label stood 20 from the artwork's edge — measured on a 720px
+            // phone, and plainly lopsided once seen.
+            //
+            // Equalised by giving the left label the same optical gap the right
+            // one already has: one tPad, plus the slack the clock's cell holds.
+            // Derived, not the number 47, so it stays true at any scale.
+            //
+            // The reference string is a canonical "0:00" rather than the LIVE
+            // clock, deliberately: the clock is mono, so 0:00 and 9:59 measure
+            // the same, but a track crossing ten minutes would otherwise shift
+            // this label sideways. A gap that twitches as the seconds run would
+            // be a worse fault than the one being fixed.
+            // CENTRED in its cell, and the cell IS the span from the artwork
+            // to the buttons (see recalcLayout). Anchoring it hard against the
+            // artwork is what made its two gaps unequal to each other: the
+            // mass gap was authored and the button gap was whatever remained,
+            // so a longer word ate the clearance in front of the Prev button.
+            // Centred, the pair moves together and the buttons keep their room
+            // whatever the label says. The DSP tag at the far end is centred
+            // in its mirror-image cell for the same reason.
+            //
+            // The cap RESERVES that clearance rather than spending it. Capping
+            // at the cell's full width let the ladder climb back up to a rung
+            // that filled the span end to end — measured at 12 units of air on
+            // either side, which is worse than the overrun this started as.
+            // A label may take the span less one SP_LG at each end; centred,
+            // it then sits at least that far from both the artwork and the
+            // buttons, and further when the text is short.
+            const float minClear = metrics_.space(SP_LG);
+            const float hardCap  = barBVert
+                ? std::max(0.0f, infoR.w - minClear * 2.0f)
+                : (thickness - sidePad * 2.0f);
+
+            // ── The ladder ───────────────────────────────────────────────────
+            //
+            // Rungs widest-first; the drawn form is the widest that FITS,
+            // measured — the same rule the DSP tag at the other end follows for
+            // its own short form, and the reason neither answers to
+            // orientation.
+            //
+            // What it gives up, and in what order, is the decision here: the
+            // separators close up first (they cost nothing), then the release
+            // TYPE goes, and the track number is what survives. The thumbnail
+            // beside this label already says which record is playing; what it
+            // cannot say is which track of it. A bare "1" on a single would be
+            // the opposite case — a digit that was never in doubt — which is
+            // why an ordinal-less record never reaches the lower rungs: its
+            // ladder is just the type word, long form then short.
+            //
+            // The full form is untouched at any width where it already fits.
+            const bool hasOrd = !ord.empty();
+            std::vector<std::string> rungs;
+            if (!type) {
+                rungs.push_back("\xE2\x80\x94");        // nothing playing
+            } else if (!hasOrd) {
+                rungs.push_back(type);
+                if (typeShort && typeShort != type) rungs.push_back(typeShort);
+            } else {
+                const std::string& tight = to.ordTight.empty() ? ord : to.ordTight;
+                rungs.push_back(std::string(type) + "  \xC2\xB7  " + ord);
+                if (typeShort && typeShort != type)
+                    rungs.push_back(std::string(typeShort) + "  \xC2\xB7  " + ord);
+                rungs.push_back(std::string(type) + " \xC2\xB7 " + tight);
+                if (typeShort && typeShort != type)
+                    rungs.push_back(std::string(typeShort) + " \xC2\xB7 " + tight);
+                rungs.push_back(ord);
+                rungs.push_back(tight);
+                if (!to.num.empty()) rungs.push_back(to.num);
             }
 
-            // ONE line, because this label is the mirror of the DSP tag at the
-            // other end and a two-line stack here would out-weigh it. Nothing
-            // playing: an em dash, which says "no track" without pretending to
-            // be a type.
-            const bool hasOrd = !ord.empty();
-            std::string oneLine;
-            if (!typeTag)      oneLine = "\xE2\x80\x94";
-            else if (!hasOrd)  oneLine = typeTag;
-            else               oneLine = std::string(typeTag) + "  \xC2\xB7  " + ord;
-
-            const float lineGap = metrics_.space(SP_XS);
-            // ... unless it does not fit ACROSS the bar, which is the only
-            // constrained axis. "COMPILATION · D2 · 7" overruns 92 units and
-            // then falls back to two lines rather than being cut. Measured,
-            // exactly like the tag's own short form — never by orientation.
-            const bool twoLines = hardCap > 0.0f && hasOrd && typeTag &&
-                canvas.textWidthStyled(oneLine, typeSz, FontStyle::Math) > hardCap;
-
-            const float blockH = twoLines ? (typeSz + lineGap + ordSz) : typeSz;
-            float cellW = twoLines
-                ? std::max(canvas.textWidthStyled(typeTag, typeSz, FontStyle::Math),
-                           canvas.textWidthStyled(ord, ordSz, FontStyle::Bold))
-                : canvas.textWidthStyled(oneLine, typeSz, FontStyle::Math);
+            // The last rung is the floor: when even it overruns there is
+            // nothing left to give up, and a number cut in half would be worse
+            // than one that is merely tight.
+            const std::string* pick = &rungs.back();
+            for (const std::string& r : rungs) {
+                if (hardCap <= 0.0f ||
+                    canvas.textWidthStyled(r, typeSz, FontStyle::Math) <= hardCap) {
+                    pick = &r;
+                    break;
+                }
+            }
+            const std::string& oneLine = *pick;
+            const float cellW = canvas.textWidthStyled(oneLine, typeSz, FontStyle::Math);
 
             // Anchored beside the artwork it qualifies — the near end of its
             // cell, not the middle of it. That is what mirrors the DSP tag,
             // which sits against the clock at its own end.
-            auto [sx, sy] = mapPoint(infoR.x + cellW * 0.5f,
+            auto [sx, sy] = mapPoint(infoR.x + infoR.w * 0.5f,
                                      infoR.y + infoR.h * 0.5f);
-            float ly = sy - blockH * 0.5f;
-            auto line = [&](const std::string& str, float sz, ColorRef clr, FontStyle st) {
-                float w = canvas.textWidthStyled(str, sz, st);
-                canvas.textStyled(str, sx - w * 0.5f, ly, sz, toColor(clr), st);
-                ly += sz + lineGap;
-            };
-            if (twoLines) {
-                line(typeTag, typeSz, CLR_TEXT_DIM,     FontStyle::Math);
-                line(ord,     ordSz,  CLR_TEXT_PRIMARY, FontStyle::Bold);
-            } else {
-                line(oneLine, typeSz, hasOrd ? CLR_TEXT_SECONDARY : CLR_TEXT_DIM,
-                     FontStyle::Math);
-            }
+            canvas.textStyled(oneLine, sx - cellW * 0.5f, sy - typeSz * 0.5f, typeSz,
+                              toColor(hasOrd ? CLR_TEXT_SECONDARY : CLR_TEXT_DIM),
+                              FontStyle::Math);
         }
 
         // Three buttons only — prev / play-stop / next, same combined
@@ -2125,33 +2337,23 @@ void PlayerWindow::drawFrame() {
             // truncating would be exactly the dishonesty this badge exists to
             // prevent. Before playback starts bpState_ is Off, so fall back to
             // the toggle for the idle label.
-            const char* dsp;      // full form
-            const char* dspShort; // when 92 units will not take the full one
-            ColorRef    dspClr;
-            switch (bpState_) {
-            case BpState::Exact:     dsp = "BITPERFECT";     dspShort = "EXACT";
-                                     dspClr = CLR_ACCENT;   break;
-            // Asterisk, not a lie in either direction: exact up to the server.
-            case BpState::ViaServer: dsp = "BITPERFECT*";    dspShort = "EXACT*";
-                                     dspClr = CLR_ACCENT;   break;
-            case BpState::Degraded:  dsp = "NOT BITPERFECT"; dspShort = "ALTERED";
-                                     dspClr = CLR_WARNING;  break;
-            case BpState::Off:
-            default:
-                dsp      = bitperfectMode_.load() && !isPlaying_ ? "BITPERFECT" : "REF EQ";
-                dspShort = bitperfectMode_.load() && !isPlaying_ ? "EXACT"      : "REF EQ";
-                dspClr   = bitperfectMode_.load() && !isPlaying_ ? CLR_ACCENT : CLR_TEXT_DIM;
-                break;
-            }
+            const DspBadge badge = dspBadge();
+            const char* dsp      = badge.full;       // full form
+            const char* dspShort = badge.shortForm;  // when 92 units will not take it
+            ColorRef    dspClr   = badge.color;
 
-            // Only ONE axis is constrained, and pretending otherwise would
-            // cost information for nothing. Upright text runs ACROSS the bar
-            // in the horizontal layout, so its room is the bar's thickness —
-            // 130 - 2*SP_MD = 92 units, which "NOT BITPERFECT" overruns and
-            // "ALTERED" does not. In the vertical layout the same text runs
-            // ALONG the bar, where there is room to spare and the full word
-            // costs nothing. So the short form answers a MEASURED overrun,
-            // never an orientation.
+            // BOTH axes are constrained, and believing otherwise cost this
+            // label the same bug the type label at the far end had. Upright
+            // text runs ACROSS the bar in the horizontal layout, so its room is
+            // the bar's thickness — 130 - 2*SP_MD = 92 units, which
+            // "NOT BITPERFECT" overruns and "ALTERED" does not. In the vertical
+            // layout the same text runs ALONG the bar, and the room there is
+            // not the window's width but THIS TAG'S CELL (rcDspBadge_), which
+            // is 85 units on a 720px phone — so "NOT BITPERFECT" overran there
+            // too and ran out under the Next button, exactly as the type label
+            // did under Prev. The short form still answers a MEASURED overrun
+            // and never an orientation; what changed is that the measurement
+            // is now taken on both.
             const float sidePad = metrics_.space(SP_MD);
             const float capSz   = metrics_.text.caption;
             const float secSz   = metrics_.text.secondary;
@@ -2160,7 +2362,12 @@ void PlayerWindow::drawFrame() {
             // unconditionally is how the cluster first came out a full window
             // wide in the vertical layout and landed on top of the buttons.
             const float thickness = barBVert ? t.h : t.w;
-            const float hardCap = barBVert ? 0.0f : (thickness - sidePad * 2.0f);
+            // Same reserve as the type label at the other end (see there): the
+            // cell is the whole span to the clock, and the tag may take it
+            // less one SP_LG at each end so the Next button keeps its room.
+            const float hardCap = barBVert
+                ? std::max(0.0f, authored(rcDspBadge_).w - metrics_.space(SP_LG) * 2.0f)
+                : (thickness - sidePad * 2.0f);
             const bool  fitsFull = hardCap <= 0.0f ||
                 canvas.textWidthStyled(dsp, capSz, FontStyle::Math) <= hardCap;
             const char* tag = fitsFull ? dsp : dspShort;
@@ -2203,10 +2410,13 @@ void PlayerWindow::drawFrame() {
             {
                 const Rect bR = authored(rcDspBadge_);
                 const float w = canvas.textWidthStyled(tag, capSz, FontStyle::Math);
-                // The FAR end of its cell — up against the clock — which is
-                // what makes it the mirror of the type label sitting against
-                // the artwork.
-                auto [bx, by] = mapPoint(bR.x + bR.w - w * 0.5f,
+                // CENTRED in its cell, which runs from the buttons to the
+                // clock's ink — the mirror image of the type label's cell, so
+                // the two labels sit at mirrored distances from both the
+                // buttons and their own masses. It used to hug the clock end,
+                // which fixed the gap to the clock and left the gap to the
+                // Next button to be whatever remained.
+                auto [bx, by] = mapPoint(bR.x + bR.w * 0.5f,
                                          bR.y + bR.h * 0.5f);
                 canvas.textStyled(tag, bx - w * 0.5f, by - capSz * 0.5f, capSz,
                                   toColor(hoverDspBadge_ ? CLR_TEXT_PRIMARY : dspClr),
@@ -2539,7 +2749,51 @@ void PlayerWindow::recalcLayout() {
     int btnSize   = (int)metrics_.space(71.0f);
     int btnGap    = (int)metrics_.space(SP_MD);
     int totalBtnL = btnSize * 3 + btnGap * 2;
-    const int btnA0 = barBLong / 2 - totalBtnL / 2;   // kept: btnA is walked below
+
+    // ── The fulcrum sits at the centre of what you can SEE ───────────────
+    //
+    // Not at barBLong/2, which is where it used to sit and which is the centre
+    // of the empty bar rather than of the composition standing in it. The two
+    // masses do not reach equally far in: the artwork FILLS its 92-unit cell
+    // and its ink ends one pad from the left, while the clock is text CENTRED
+    // in a cell of the same width, so its ink stops ~26 units short of its own
+    // cell edge. Centring the buttons geometrically therefore left 136 units
+    // of room on the left and 161 on the right — and with four gaps to place
+    // in unequal rooms, equalising the two MASS gaps could only be paid for by
+    // unbalancing the two BUTTON gaps (measured on a 720px phone: 47/34/58/47).
+    //
+    // So the group is centred between the artwork's ink and the clock's ink
+    // instead. Both spans then come out the same length, each label centres in
+    // its own span, and the mirrored pairs are equal by construction rather
+    // than by arithmetic that has to be redone whenever a word changes length.
+    //
+    // Measured against a canonical "0:00" and not the live clock: the clock is
+    // mono, so 0:00 and 9:59 are the same width, but a track crossing ten
+    // minutes would otherwise move the transport buttons under the listener's
+    // thumb. Buttons that migrate while the seconds run would be a far worse
+    // fault than the asymmetry this fixes.
+    // The clock's slack, measured through a scratch Canvas rather than by
+    // re-deriving the font's advances here: textWidthStyled is the ONE
+    // implementation of "how wide is this string", and a second copy of that
+    // walk living in the layout is exactly how two font metrics drift apart.
+    // The Canvas writes nothing (measuring never touches its output vector),
+    // so a throwaway one costs a vector that stays empty. Layout runs on
+    // resize, not per frame.
+    float clockSlack = 0.0f;
+    if (msdfFont_.valid()) {
+        std::vector<float> scratch;
+        Canvas measure(scratch, 1, 1, &uiFont_, 0.0f, 0.0f, 0.0f, 0.0f);
+        measure.useMsdf(&msdfFont_, nullptr);
+        const float refW = measure.textWidthStyled("0:00", metrics_.text.secondary,
+                                                   FontStyle::Math);
+        clockSlack = std::max(0.0f, ((float)artSide - refW) * 0.5f);
+    }
+    const int artInkEnd   = tPad + artSide;
+    const int clockCellA0 = barBLong - tPad - artSide;
+    const int clockInkA0  = clockCellA0 + (int)(clockSlack + 0.5f);
+    // Clamped so a window too narrow to hold the composition still produces a
+    // sane layout instead of buttons walking off their own bar.
+    const int btnA0 = std::max(tPad, (artInkEnd + clockInkA0 - totalBtnL) / 2);
     int btnA      = btnA0;
     int btnC      = (barThickness - btnSize) / 2;
     rcBtnPrev_ = barB(btnA, btnA + btnSize, btnC, btnC + btnSize);
@@ -2579,9 +2833,15 @@ void PlayerWindow::recalcLayout() {
     // its own hit rect and a finger on the word missed the button. Nothing
     // moves on screen by widening it — both labels are anchored at the ends
     // that face their masses — but the rect now contains what it draws.
-    const int mirrorGap = tPad;
-    const int infoA0 = tPad + artSide + tPad;
-    const int infoA1 = btnA0 - mirrorGap;
+    // Each label's cell IS the span between its mass and the buttons, and the
+    // label is centred in it (see the draw). The cell used to stop one pad
+    // short of the buttons and the label was anchored hard against its mass,
+    // which is what made the two gaps on one side unequal to each other. A
+    // cell that is the whole span, with the text centred, gives the mirrored
+    // pair for free — and keeps the rect containing what it draws, which is
+    // what the DSP tag needs to stay hit-testable.
+    const int infoA0 = artInkEnd;
+    const int infoA1 = btnA0;
     rcTransportInfo_ = barB(infoA0, infoA1, tPad, barThickness - tPad);
 
     // The clock's cell is exactly the artwork's size, because it is the mirror
@@ -2594,8 +2854,11 @@ void PlayerWindow::recalcLayout() {
     // HERE rather than in the draw (where it used to be) so it is geometry
     // like everything else — and it no longer swallows the clock, which is
     // now a separate cell at the far end.
-    const int modeA1 = clockA0 - tPad;
-    const int modeA0 = btnA0 + totalBtnL + mirrorGap;
+    // The mirror of the info cell: from the buttons to the clock's INK, with
+    // the tag centred in it. Reaching to the ink rather than to the clock's
+    // cell edge is what makes this span the same length as the info cell.
+    const int modeA1 = clockInkA0;
+    const int modeA0 = btnA0 + totalBtnL;
     rcDspBadge_ = barB(modeA0, modeA1, tPad, barThickness - tPad);
 
     // (The album view has no on-screen close button — Escape closes it.)
@@ -2604,11 +2867,42 @@ void PlayerWindow::recalcLayout() {
     // the panels (fixed 400x50 rows under height-scaled text looked cramped
     // and off-center at 1080p), centered on the content area with a uniform
     // vertical rhythm.
+    //
+    // Everything here is measured from rcGrid_, never from the window. settTop
+    // used to be an absolute window y, which is the same number only while the
+    // content area starts at y=0 — true in Horizontal, where bar A is the LEFT
+    // column and the content owns the full height, and false everywhere else.
+    // In Vertical bar A is the TOP strip, so the content begins space(130) down
+    // plus the status-bar inset, and a list anchored at an absolute 147 was
+    // drawn over the "Settings" title and up into the rail itself. Reading
+    // rcGrid_.top costs nothing on the desktop — it is 0 there, so not one
+    // pixel moves — and it is the only version that is right on a phone.
+    const int settPad = (int)metrics_.space(24.0f);
     int settCx   = (rcGrid_.left + rcGrid_.right) / 2;
-    int settTop  = (int)metrics_.space(147.0f);
-    int rowHalfW = (int)metrics_.space(359.0f);
+    int settTop  = rcGrid_.top + (int)metrics_.space(147.0f);
+    // The rows are a fixed 718 wide at the reference, which is wider than a
+    // 720px phone is: clamped to the content area so they keep a margin
+    // instead of running edge to edge, or past the edge once a cutout eats in.
+    int rowHalfW = std::min((int)metrics_.space(359.0f),
+                            std::max(0, (rcGrid_.right - rcGrid_.left) / 2 - settPad));
     int rowH     = (int)metrics_.space(84.0f);
-    int rowStep  = rowH + (int)metrics_.space(22.0f);
+    int rowGap   = (int)metrics_.space(22.0f);
+    // Five rows, and this list has no scroll of its own — onPanelWheel serves
+    // the PANELS, and the settings page is not one — so the last row has to be
+    // reachable at every height. A phone in Horizontal is ~720 tall and the
+    // rhythm authored at 1080 does not fit in it: give up the gap first, then
+    // the row height, and each only as far as it actually has to go. At every
+    // size where today's rhythm already fits, neither branch is entered.
+    {
+        const int kSettRows = 5;
+        const int avail = std::max(0, rcGrid_.bottom - settPad - settTop);
+        if (kSettRows * rowH + (kSettRows - 1) * rowGap > avail) {
+            rowGap = std::max(0, (avail - kSettRows * rowH) / (kSettRows - 1));
+            if (kSettRows * rowH + (kSettRows - 1) * rowGap > avail)
+                rowH = std::max(1, (avail - (kSettRows - 1) * rowGap) / kSettRows);
+        }
+    }
+    int rowStep  = rowH + rowGap;
     auto settRow = [&](int i) -> LayoutRect {
         return { settCx - rowHalfW, settTop + i * rowStep,
                  settCx + rowHalfW, settTop + i * rowStep + rowH };
@@ -2685,16 +2979,30 @@ TextureHandle PlayerWindow::getGridArtTexture(int albumIdx, int sizeClass) {
     // Not cached: queue an async decode (once) and show the placeholder this
     // frame — onArtDecoded() invalidates when the texture is ready.
     if (artDecodePending_.emplace(key, 1).second) {
-        if (!artDecodeThread_.joinable())
-            artDecodeThread_ = std::thread([this]{ artDecodeWorker(); });
+        ensureArtDecodeThreads();
         {
             std::lock_guard<std::mutex> lk(artDecodeMu_);
             artDecodeQueue_.push_back({key, albums_[albumIdx].artPath,
-                                       target, artCacheGen_.load()});
+                                       target, target, ImageFit::kPerAxis,
+                                       artCacheGen_.load()});
         }
         artDecodeCv_.notify_one();
     }
     return kInvalidTexture;
+}
+
+// Spun up lazily, on the first cover anyone actually asks for, so a session
+// that never shows a grid never pays for the threads. Capped at 4: a screenful
+// is about six tiles, the work is bounded by memory bandwidth and flash reads
+// rather than by cores, and this must leave the decode and gapless threads room
+// on a phone whose whole job right now is not stuttering the audio.
+void PlayerWindow::ensureArtDecodeThreads() {
+    if (!artDecodeThreads_.empty()) return;
+    const unsigned hw = std::thread::hardware_concurrency();
+    const int n = (int)std::clamp<unsigned>(hw ? hw / 2 : 2u, 2u, 4u);
+    artDecodeThreads_.reserve((size_t)n);
+    for (int i = 0; i < n; i++)
+        artDecodeThreads_.emplace_back([this]{ artDecodeWorker(); });
 }
 
 void PlayerWindow::artDecodeWorker() {
@@ -2712,12 +3020,29 @@ void PlayerWindow::artDecodeWorker() {
         // report back so the main thread clears its pending mark.
         ArtDecodeResult res;
         res.key = job.key;
+        res.path = job.path;
         res.gen = job.gen;
         if (job.gen == artCacheGen_.load() && !job.path.empty()) {
             std::vector<uint8_t> bytes;
-            if (reader.read(job.path.c_str(), bytes) && !bytes.empty()) {
+            // Timed because this is the one stage a listener actually waits on:
+            // a cover that takes half a second to decode is half a second of
+            // black square, and without a number nobody can tell a slow decoder
+            // from a slow disk. Read and decode are separated for the same
+            // reason — they have different fixes.
+            const auto t0 = std::chrono::steady_clock::now();
+            const bool ok = reader.read(job.path.c_str(), bytes) && !bytes.empty();
+            const auto t1 = std::chrono::steady_clock::now();
+            if (ok) {
                 DecodedImage img = decodeImageScaled(bytes.data(), bytes.size(),
-                                                     job.targetSize, job.targetSize);
+                                                     job.targetW, job.targetH,
+                                                     job.fit);
+                const auto t2 = std::chrono::steady_clock::now();
+                using ms = std::chrono::duration<double, std::milli>;
+                printf("[Art] %s -> %dx%d  read %.0f ms (%.1f MB), decode %.0f ms\n",
+                       job.path.c_str(), img.w, img.h,
+                       ms(t1 - t0).count(), (double)bytes.size() / (1024.0 * 1024.0),
+                       ms(t2 - t1).count());
+                fflush(stdout);
                 res.rgba = std::move(img.rgba);
                 res.w = img.w; res.h = img.h;
             }
@@ -2740,6 +3065,50 @@ void PlayerWindow::onArtDecoded() {
     for (auto& r : done) {
         artDecodePending_.erase(r.key);
         if (r.gen != artCacheGen_.load()) continue;  // rescan invalidated it
+        if (r.key == kArtistArtKey) {
+            // The album-view artist photo. Single slot: apply the result only
+            // if it is still the photo we WANT — the request may have moved on
+            // to another album's artist while this was decoding, and painting
+            // A's artist under B would be a stale-texture bug, not a feature.
+            // Failed decodes cache kInvalidTexture so an album whose artist
+            // has no image (or failed) doesn't re-queue a doomed job every
+            // time it is opened — same behaviour the old synchronous path had.
+            if (r.path != artistImgRequestPath_ || !renderer_) continue;
+            if (artistImgTex_ != kInvalidTexture) renderer_->destroy_texture(artistImgTex_);
+            artistImgTex_ = kInvalidTexture;
+            if (!r.rgba.empty())
+                artistImgTex_ = renderer_->create_texture(r.rgba.data(), (uint32_t)r.w,
+                                                          (uint32_t)r.h, /*mips=*/false);
+            artistImgCachePath_ = r.path;
+            anyNew = true;
+            continue;
+        }
+        if (r.key == kOverlayArtKey) {
+            // The fullscreen art scene. overlayArtRequestPath_ is what the
+            // newest openArtOverlay is waiting for; a result for a scene the
+            // listener already left (or a request the drag-eject replaced) is
+            // dropped rather than painted over a different picture. Cleared
+            // here whether the decode succeeded or not so drawArtOverlay knows
+            // a settled "no artwork" from a still-in-flight blank.
+            if (r.path != overlayArtRequestPath_ || !renderer_) continue;
+            overlayArtRequestPath_.clear();
+            // ANY result replaces the previous texture — a new cover's decode,
+            // successful or failed, must not leave the scene showing a picture
+            // that no longer matches the path it claims to be.
+            if (overlayArtTex_ != kInvalidTexture) renderer_->destroy_texture(overlayArtTex_);
+            overlayArtTex_ = kInvalidTexture;
+            overlayArtTexW_ = overlayArtTexH_ = 0;
+            if (!r.rgba.empty())
+                overlayArtTex_ = renderer_->create_texture(r.rgba.data(), (uint32_t)r.w,
+                                                           (uint32_t)r.h, /*mips=*/false);
+            // The KEY is the "resolved" record: set whether or not the decode
+            // landed, so drawArtOverlay's per-frame no-op check treats this
+            // path+box as done even when there is nothing to show (a file that
+            // fails to open must not be re-queued and re-tried every frame).
+            overlayArtTexPath_ = r.path;
+            anyNew = true;
+            continue;
+        }
         if (gridArtTexCache_.count(r.key)) continue;  // duplicate job — keep the existing texture
         // Failed decodes cache kInvalidTexture so the tile keeps its
         // placeholder without re-queuing a doomed decode every frame —
@@ -2781,8 +3150,12 @@ void PlayerWindow::stopArtDecodeThread() {
         std::lock_guard<std::mutex> lk(artDecodeMu_);
         artDecodeQuit_ = true;
     }
-    artDecodeCv_.notify_one();
-    if (artDecodeThread_.joinable()) artDecodeThread_.join();
+    // notify_ALL, not notify_one: every worker is parked on this variable and
+    // one wake would leave the rest asleep on a join that never returns.
+    artDecodeCv_.notify_all();
+    for (std::thread& t : artDecodeThreads_)
+        if (t.joinable()) t.join();
+    artDecodeThreads_.clear();
 }
 
 void PlayerWindow::clearGridArtTexCache() {
@@ -2796,8 +3169,15 @@ void PlayerWindow::clearGridArtTexCache() {
 
 void PlayerWindow::loadTrackPanelArtTexture(int albumIdx) {
     if (trackPanelArtTexAlbum_ == albumIdx && trackPanelArtTex_ != kInvalidTexture) return;
-    if (trackPanelArtTex_ != kInvalidTexture) { renderer_->destroy_texture(trackPanelArtTex_); trackPanelArtTex_ = kInvalidTexture; }
+    if (renderer_ && trackPanelArtTex_ != kInvalidTexture) { renderer_->destroy_texture(trackPanelArtTex_); }
+    trackPanelArtTex_ = kInvalidTexture;
     trackPanelArtTexAlbum_ = albumIdx;
+    // Reachable with no Renderer for the same reason the transport thumbnail
+    // is: applyTrackMetadata() calls this at a gapless boundary, and on Android
+    // a boundary can land while the app is off screen and the surface gone.
+    // The album index is remembered either way — it is CPU-side state — so
+    // onSurfaceRecreated() can put the picture back.
+    if (!renderer_) return;
     if (albumIdx >= 0 && albumIdx < (int)albums_.size()) {
         // Same target-size formula the album view's draw block uses, so the
         // texture always covers what's actually displayed.
@@ -2852,13 +3232,9 @@ std::string PlayerWindow::artistImagePathFor(int albumIdx) const {
     if (albumDir.empty()) return {};
 
     // Same two sources, in the same order, as loadAlbumViewContent().
-    std::string root = rootForPath(albumDir.u8string());
-    if (!root.empty()) {
-        auto it = streamerDbs_.find(root);
-        if (it != streamerDbs_.end() && it->second.isOpen())
-            if (auto info = it->second.artistInfoForAlbum(a.name))
-                if (!info->imagePath.empty()) return info->imagePath;
-    }
+    if (StreamerDb* sdb = streamerDbForAlbumDir(albumDir.u8string()))
+        if (auto info = sdb->artistInfoForAlbum(a.name))
+            if (!info->imagePath.empty()) return info->imagePath;
     fsys::path artistDir = albumDir.parent_path();
     if (artistDir.filename().u8string() == "Singles")
         artistDir = artistDir.parent_path();
@@ -2866,23 +3242,92 @@ std::string PlayerWindow::artistImagePathFor(int albumIdx) const {
     return resolveArtPath(artistDir.u8string());
 }
 
-TextureHandle PlayerWindow::loadArtistImageTexture(const std::string& path) {
-    artistImgPath_ = path;   // remembered so ArtWindow can show the original
-    // Decode at the size it is actually drawn, and WITHOUT mips.
-    //
-    // Both matter, and the second one is what made the photo look washed out
-    // even at 1080. art_texture.hh spells out the trap: the sampler picks its
-    // LOD from the on-screen ratio, so a mip chain "softens anything drawn
-    // even slightly below 1:1". This was decoded at a fixed 256 and drawn at
-    // space(196) — a ratio of 0.77, just under 1:1, which is enough to pull in
-    // a blurrier level. The fixed 256 was the other half: space() scales with
-    // resolution, so on a 4x display the photo was drawn at 784 from a 256px
-    // source. loadTrackPanelArtTexture() already does it this way.
-    const int target = std::max(64, (int)metrics_.space(196.0f));
-    FileByteReader reader;
-    return createTextureFromImageFile(*renderer_, reader, path.c_str(),
-                                      target, target,
-                                      nullptr, nullptr, /*mips=*/false);
+// The size the album-view artist photo is decoded to AND drawn at (one value,
+// kept in sync by both callers). It is what made the photo not look washed out:
+// decode at the size it is actually drawn, and WITHOUT mips — art_texture.hh
+// spells out the trap (a ratio under 1:1 pulls in a blurrier mip level and a
+// fixed 256 was too small for a 4x display; space() scales with resolution).
+int PlayerWindow::artistImageTargetSize() const {
+    return std::max(64, (int)metrics_.space(196.0f));
+}
+
+// Request the album-view artist photo at `path`, asynchronously — the photo is
+// decoded on the existing art-worker pool so a huge artist.jpg cannot stall the
+// UI thread when the album view opens. Single-slot semantics (see the members
+// in player_view.hh): the most recent request is the one shown; cache reuse
+// lives here so loadAlbumViewContent() stays a plain call.
+//
+// The async artist jobs share the grid-cover pool and its ArtDecoded delivery
+// (kArtistArtKey routes the result to artistImgTex_ rather than the grid cache
+// in onArtDecoded), which are both already wired on every platform including
+// Android — nothing here is platform-specific.
+void PlayerWindow::requestArtistImage(const std::string& path, int targetSize) {
+    artistImgPath_ = path;                 // source file, for ArtWindow's viewer
+    artistImgRequestPath_ = path;          // what a delivered result must match
+
+    // Cache hit: the photo we want is already the texture we hold.
+    if (artistImgTex_ != kInvalidTexture && artistImgCachePath_ == path) return;
+
+    // Spawn the shared pool on first ask, exactly like grid covers do — and
+    // only if we have a renderer. Lazy so a session that never opens an album
+    // view never pays for threads; the pool cap and rationale are the ones
+    // getGridArtTexture() documents.
+    if (!renderer_) {
+        // No renderer (surface gone, e.g. the album view open while the app is
+        // backgrounded): nothing to upload into. artistImgRequestPath_ was set
+        // above, so onSurfaceRecreated() re-requests this when a surface
+        // exists again. NOT pushed to the pool — a job decoding with no
+        // renderer to receive it is a wasted decode.
+        return;
+    }
+    ensureArtDecodeThreads();
+
+    // One pending artist job at a time (the single slot), so re-opening the
+    // same album doesn't pile up duplicate decodes while the first is in flight.
+    if (artDecodePending_.count(kArtistArtKey)) return;
+    {
+        std::lock_guard<std::mutex> lk(artDecodeMu_);
+        artDecodeQueue_.push_back({kArtistArtKey, path, targetSize, targetSize,
+                                   ImageFit::kPerAxis, artCacheGen_.load()});
+    }
+    artDecodePending_.emplace(kArtistArtKey, 1);
+    artDecodeCv_.notify_one();
+}
+
+// Request the fullscreen art scene's texture, asynchronously. Same shape and
+// rationale as requestArtistImage: the source is frequently a multi-megabyte
+// JPEG and the decode resamples to the DISPLAY box (kContain — from the ORIGINAL
+// file, never the thumbnail), so a synchronous decode would freeze the UI at the
+// exact moment the listener asks to see the art at its best. The scene shows
+// nothing (drawArtOverlay's "No artwork" fallback doubles as the pending blank)
+// until onArtDecoded swaps the full-res texture in.
+//
+// Called from drawArtOverlay on EVERY frame the scene is visible, so it must be
+// idempotent: no work once the resolved texture already matches the current
+// path and box, and no duplicate job while one is in flight. Two callers rely
+// on that: the ordinary open (draw repeats until onArtDecoded lands) and the
+// gapless follow (applyTrackMetadata changes overlayArtPath_ mid-scene — the
+// path check misses, so the new cover is requested next frame).
+void PlayerWindow::requestOverlayArtTexture(int boxW, int boxH) {
+    if (!renderer_ || overlayArtPath_.empty() || boxW <= 0 || boxH <= 0) return;
+    // Resolved and still current: the per-frame draw is a no-op. The texture
+    // may be kInvalidTexture when the decode failed — remembering THAT as
+    // "done" is what stops a doomed job being re-requested every frame.
+    if (overlayArtTexPath_ == overlayArtPath_ &&
+        overlayArtReqW_ == boxW && overlayArtReqH_ == boxH)
+        return;
+    // Skip the same decode twice — the single slot: while one is in flight,
+    // returning early here keeps a fresh draw from stacking a second job.
+    if (artDecodePending_.count(kOverlayArtKey)) return;
+    overlayArtRequestPath_ = overlayArtPath_;
+    overlayArtReqW_ = boxW; overlayArtReqH_ = boxH;
+    {
+        std::lock_guard<std::mutex> lk(artDecodeMu_);
+        artDecodeQueue_.push_back({kOverlayArtKey, overlayArtPath_, boxW, boxH,
+                                   ImageFit::kContain, artCacheGen_.load()});
+    }
+    artDecodePending_.emplace(kOverlayArtKey, 1);
+    artDecodeCv_.notify_one();
 }
 
 void PlayerWindow::loadAlbumViewContent(int albumIdx) {
@@ -2895,6 +3340,11 @@ void PlayerWindow::loadAlbumViewContent(int albumIdx) {
         renderer_->destroy_texture(artistImgTex_);
         artistImgTex_ = kInvalidTexture;
     }
+    // The request moves on with the album. Cleared BEFORE resolving the new
+    // album's artist so a stale in-flight decode for the artist we are leaving
+    // cannot match the new request (onArtDecoded checks artistImgRequestPath_).
+    artistImgRequestPath_.clear();
+    artistImgCachePath_.clear();
     artistImgPath_.clear();
     rcArtistImg_ = {};
     // The strip belongs to the album being left; clearing the hover too keeps
@@ -2912,25 +3362,27 @@ void PlayerWindow::loadAlbumViewContent(int albumIdx) {
 
     albumDescText_ = loadSidecarText(albumDir, { "desc", "info", "about" });
 
-    // Prefer a sibling .streamer/library.db (Album::name is that DB's
-    // albums.id primary key) — this is the current downloader layout, where
-    // the album folder's parent is just "FR", not a per-artist folder.
+    // Prefer a .streamer/library.db owning this album (Album::name is that
+    // DB's albums.id primary key) — the current downloader layout, where the
+    // album folder's parent is a country code, not a per-artist folder, and
+    // the database sits at the top of the downloader's own tree wherever that
+    // happens to be relative to our music root.
     bool gotFromStreamer = false;
-    std::string root = rootForPath(albumDir.u8string());
-    if (!root.empty()) {
-        auto it = streamerDbs_.find(root);
-        if (it != streamerDbs_.end() && it->second.isOpen()) {
-            if (auto info = it->second.artistInfoForAlbum(a.name)) {
-                if (!info->bioText.empty()) {
-                    // Bio text sidecars from this downloader are HTML fragments
-                    // (e.g. "<p>...</p>"), same as the legacy bio.html convention.
-                    bool looksHtml = info->bioText.find('<') != std::string::npos;
-                    artistBioText_ = looksHtml ? stripHtmlToPlain(info->bioText) : info->bioText;
-                }
-                if (!info->imagePath.empty())
-                    artistImgTex_ = loadArtistImageTexture(info->imagePath);
-                gotFromStreamer = !info->bioText.empty() || artistImgTex_ != kInvalidTexture;
+    if (StreamerDb* sdb = streamerDbForAlbumDir(albumDir.u8string())) {
+        if (auto info = sdb->artistInfoForAlbum(a.name)) {
+            if (!info->bioText.empty()) {
+                // Bio text sidecars from this downloader are HTML fragments
+                // (e.g. "<p>...</p>"), same as the legacy bio.html convention.
+                bool looksHtml = info->bioText.find('<') != std::string::npos;
+                artistBioText_ = looksHtml ? stripHtmlToPlain(info->bioText) : info->bioText;
             }
+            if (!info->imagePath.empty())
+                requestArtistImage(info->imagePath, artistImageTargetSize());
+            // "From the streamer" is decided by whether the downloader HAS an
+            // image, not by whether it has decoded yet — the decode went async,
+            // so at this instant the texture is usually still invalid, but the
+            // legacy sidecar folder must not take over a library that owns one.
+            gotFromStreamer = !info->bioText.empty() || !info->imagePath.empty();
         }
     }
 
@@ -2944,21 +3396,68 @@ void PlayerWindow::loadAlbumViewContent(int albumIdx) {
             artistBioText_ = loadSidecarText(artistDir, { "bio" });
             std::string artistImg = resolveArtPath(artistDir.u8string());
             if (!artistImg.empty())
-                artistImgTex_ = loadArtistImageTexture(artistImg);
+                requestArtistImage(artistImg, artistImageTargetSize());
         }
     }
 }
 
-std::string PlayerWindow::rootForPath(const std::string& path) const {
-    std::string best;
-    for (auto& [root, _] : streamerDbs_)
-        if (path.rfind(root, 0) == 0 && root.size() > best.size()) best = root;
-    return best;
+// The downloader library that owns this album folder, or nullptr.
+//
+// It WALKS UP from the album rather than probing down from the music root,
+// because those are not the same directory and the difference is not fixed.
+// The downloader's contract places library.db at the top of its OWN tree
+// (<download_dir>/.streamer/library.db); where that tree sits relative to a
+// music root is the listener's filing, not the format. On this desktop they
+// coincide; on the phone the library is one level below the root, and the
+// old "root, or one above root" probe therefore looked away from it and
+// silently dropped every artist bio and photo. Album descriptions kept
+// working the whole time — they are a sidecar INSIDE the album folder — so
+// the page looked half-populated rather than broken, which is why this
+// survived so long.
+//
+// UI THREAD ONLY. See streamerDbs_ for why that is load-bearing.
+StreamerDb* PlayerWindow::streamerDbForAlbumDir(const std::string& albumDir) const {
+    if (albumDir.empty()) return nullptr;
+
+    // The root that contains this album — longest match, since one root may
+    // sit inside another. It is the walk's bound and nothing else.
+    std::string root;
+    for (const std::string& r : musicRoots_)
+        if (albumDir.rfind(r, 0) == 0 && r.size() > root.size()) root = r;
+    if (root.empty()) return nullptr;
+
+    for (const std::string& dir : streamerSearchPath(albumDir, root)) {
+        auto it = streamerDbs_.find(dir);
+        if (it != streamerDbs_.end())
+            return it->second.isOpen() ? &it->second : nullptr;
+
+        StreamerDb sdb;
+        if (!sdb.openAt(dir)) continue;   // not this one — keep climbing
+        printf("[Streamer] library.db at %s\n", dir.c_str());
+        fflush(stdout);
+        auto [pos, _] = streamerDbs_.emplace(dir, std::move(sdb));
+        return &pos->second;
+    }
+
+    // Said once per root, not once per album: a library with no downloader
+    // metadata is an ordinary library, and this must not become noise. It is
+    // still worth saying at all — the absence of a file was invisible before,
+    // and finding that out cost a database pull and a live logcat.
+    if (streamerMissLogged_.insert(root).second) {
+        printf("[Streamer] no .streamer/library.db at or under %s\n", root.c_str());
+        fflush(stdout);
+    }
+    return nullptr;
 }
 
 void PlayerWindow::loadTransportArtTexture(const std::string& artPath) {
+    // Recorded FIRST and unconditionally, because it is the CPU-side fact —
+    // which cover the transport is showing — and everything below it is GPU
+    // work that may not be possible right now. onSurfaceRecreated() reads it.
+    transportArtPath_ = artPath;
     if (transportArtTexPath_ == artPath && transportArtTex_ != kInvalidTexture) return;
-    if (transportArtTex_ != kInvalidTexture) { renderer_->destroy_texture(transportArtTex_); transportArtTex_ = kInvalidTexture; }
+    if (renderer_ && transportArtTex_ != kInvalidTexture) { renderer_->destroy_texture(transportArtTex_); }
+    transportArtTex_ = kInvalidTexture;
     transportArtTexPath_ = artPath;
     // Single choke point for "the now-playing art changed" (onPlay, gapless
     // boundary flips via applyTrackMetadata) — keep the fullscreen art
@@ -2980,7 +3479,17 @@ void PlayerWindow::loadTransportArtTexture(const std::string& artPath) {
         overlayArtPath_ = artPath;
         invalidate();   // ensureOverlayArtTexture() reloads on the next draw
     }
-    if (!artPath.empty()) {
+    // NO RENDERER, NO TEXTURE — and this is not a corner case on Android, it
+    // is every track boundary that happens while the listener is somewhere
+    // else. APP_CMD_TERM_WINDOW fires the moment the app leaves the screen and
+    // onSurfaceLost() destroys the Renderer, but the music does not stop: the
+    // foreground service exists precisely so it does not. This function is
+    // called from applyTrackMetadata(), which a gapless boundary reaches
+    // through onTimer() with no drawing involved at all — so `*renderer_`
+    // below was a null dereference that took the whole process down mid-album
+    // with the screen off. Everything above this line is CPU-side and still
+    // runs; the picture comes back in onSurfaceRecreated().
+    if (!artPath.empty() && renderer_) {
         // Sized for the transport bar's thumbnail, the only place it is drawn.
         // It used to take max(transport, essential) because Alt+L switched to a
         // much larger now-playing widget WITHOUT reloading this texture, and
@@ -3487,7 +3996,35 @@ void PlayerWindow::onMouseLeave() {
     invalidate();
 }
 
+// The press ARMS the click and does nothing else — see the declaration for
+// why. Hover has already been updated by the host's own onMouseMove, which on
+// a touch screen is synthesised at contact, so what is under the finger is
+// already lit by the time this runs.
 void PlayerWindow::onLButtonDown(int x, int y) {
+    pressX_ = x;
+    pressY_ = y;
+    pressArmed_ = true;
+}
+
+// The release FIRES it, at the point the press landed rather than the point
+// the finger left: a click belongs to what was pressed, and on glass the two
+// are never quite the same pixel.
+void PlayerWindow::onLButtonUp(int x, int y) {
+    if (!pressArmed_) return;
+    pressArmed_ = false;
+
+    // The stroke moved. On Android a scroll has already disarmed this through
+    // onMouseWheel, so what this catches is the case that produces no wheel at
+    // all — a sideways drag, and every desktop drag, where the button is held
+    // and the pointer travels without the wheel ever turning. Authored units,
+    // so the distance means the same thing on a 27-inch monitor as on a phone.
+    const int slop = (int)metrics_.space(12.0f);
+    if (std::abs(x - pressX_) > slop || std::abs(y - pressY_) > slop) return;
+
+    handleClick(pressX_, pressY_);
+}
+
+void PlayerWindow::handleClick(int x, int y) {
     if (activePanel_ != SettingsPanel::None) { onPanelClick(x, y); return; }
 
     // ── The artwork scene owns the window, so it is tested FIRST ──────────
@@ -3758,7 +4295,7 @@ void PlayerWindow::onLButtonDblClk(int x, int y) {
     }
 
     // Double-click the transport thumbnail closes the fullscreen art view.
-    // Single-click already opens it (onLButtonDown -> onArtClick), so a fast
+    // Single-click already opens it (handleClick -> onArtClick), so a fast
     // double-click nets an open-then-close flash — harmless, same layering
     // the grid-tile dblclk below already has (click opens album view, dblclk
     // also plays the first track).
@@ -3812,6 +4349,12 @@ void PlayerWindow::onLButtonDblClk(int x, int y) {
 // and gets ScreenToClient()'d in windows_host.cc before calling this;
 // Wayland's pointer coords are already surface-relative).
 void PlayerWindow::onMouseWheel(int x, int y, int delta) {
+    // A scroll is not a click, and on a touch screen this IS the drag: the
+    // host turns a finger past its slop into wheel deltas, so the first one to
+    // arrive is the moment the stroke stopped being a tap. Disarming here is
+    // what keeps a scroll that started on an album tile from opening it.
+    pressArmed_ = false;
+
     if (activePanel_ != SettingsPanel::None) { onPanelWheel(x, y, delta); return; }
     // A scene owns the content area, so the wheel stops here rather than
     // scrolling a grid nobody can see — which would otherwise leave the
@@ -4077,6 +4620,22 @@ void PlayerWindow::onPanelMouseMove(int x, int y) {
 
         int hdv = hitTestListRows(asDeviceListRows_, x, y);
         if (hdv != asHoverDeviceRow_) { asHoverDeviceRow_ = hdv; changed = true; }
+
+        // Bluetooth codec section. Every rect is empty unless that section drew
+        // this frame, so these all read false on the other backends.
+        int hbt = -1;
+        for (int i = 0; i < (int)asBtCodecRows_.size(); i++)
+            if (ptInRect(asBtCodecRows_[i], x, y)) { hbt = i; break; }
+        if (hbt != asHoverBtCodecRow_) { asHoverBtCodecRow_ = hbt; changed = true; }
+        auto hoverRc = [&](const LayoutRect& rc, bool& flag) {
+            const bool h = ptInRect(rc, x, y);
+            if (h != flag) { flag = h; changed = true; }
+        };
+        hoverRc(asBtRateRc_,    asHoverBtRate_);
+        hoverRc(asBtBitsRc_,    asHoverBtBits_);
+        hoverRc(asBtQualityRc_, asHoverBtQuality_);
+        hoverRc(asBtEnableRc_,  asHoverBtEnable_);
+        hoverRc(asBtForgetRc_,  asHoverBtForget_);
 #ifdef _WIN32
         AudioBackend sel = asBackendOptions_.empty() ? AudioBackend::Usb : asBackendOptions_[asBackendSelIdx_];
         int hm = -1;
@@ -4136,6 +4695,10 @@ void PlayerWindow::onPanelClick(int x, int y) {
     }
     case SettingsPanel::AudioSettings: {
         if (ptInRect(asCloseRc_, x, y)) { closeActivePanel(); return; }  // cancel, no apply
+        // Before the backend rows: the section's controls are drawn INSIDE the
+        // AAudio branch, below them, and its rects are empty on every other
+        // backend, so this can never swallow a click meant for something else.
+        if (handleBluetoothCodecClick(x, y)) return;
         for (int i = 0; i < (int)asBackendRowRects_.size(); i++)
             if (ptInRect(asBackendRowRects_[i], x, y)) {
                 asBackendSelIdx_ = i;
@@ -4164,6 +4727,11 @@ void PlayerWindow::onPanelClick(int x, int y) {
 #ifdef MATRIX_HAVE_JACK
         else if (sel == AudioBackend::Jack) {
             if (devRow >= 0) { asJackSel_ = devRow; invalidate(); return; }
+        }
+#endif
+#ifdef MATRIX_HAVE_BLUETOOTH
+        else if (sel == AudioBackend::Bluetooth) {
+            if (devRow >= 0) { asBtSel_ = devRow; invalidate(); return; }
         }
 #endif
 #endif
@@ -4289,6 +4857,9 @@ void PlayerWindow::onPanelWheel(int x, int y, int delta) {
 #endif
 #ifdef MATRIX_HAVE_JACK
         case AudioBackend::Jack: rowCount = (int)asJackPorts_.size() + 1; break;
+#endif
+#ifdef MATRIX_HAVE_BLUETOOTH
+        case AudioBackend::Bluetooth: rowCount = (int)asBtDevices_.size(); break;
 #endif
 #endif
         default: break;
@@ -4424,6 +4995,18 @@ void PlayerWindow::onAudioSettings() {
             if (asJackPorts_[i].portName == savedPort) { asJackSel_ = i + 1; break; }
     }
 #endif
+#ifdef MATRIX_HAVE_BLUETOOTH
+    // Last of the Linux backends, because it is the only one that is not
+    // bit-perfect and the list reads as a ladder down from USB Direct.
+    asBackendOptions_.push_back(AudioBackend::Bluetooth);
+    asBtDevices_ = BtOutput::enumerateDevices();
+    asBtSel_ = -1;     // no "(default)" row: a radio link has to be chosen
+    {
+        auto savedPath = db_.loadSetting("bt_device_path");
+        for (int i = 0; i < (int)asBtDevices_.size(); i++)
+            if (asBtDevices_[i].path == savedPath) { asBtSel_ = i; break; }
+    }
+#endif
 #endif
 
     // The radio shows WHAT IS PLAYING, read straight off audioBackend_.
@@ -4454,6 +5037,12 @@ void PlayerWindow::onAudioSettings() {
     asHoverModeRow_ = -1;
 #endif
     activePanel_ = SettingsPanel::AudioSettings;
+    // The other moment: an association may have been granted, or headphones
+    // connected, since this panel was last on screen.
+    onBtRouteChanged();        // which headphones, and what is on the wire
+    asBtCap_        = bt_codec::capability();
+    asBtSelectable_ = bt_codec::selectableCodecs();
+    asBtEditLoaded_ = false;   // re-seed from whatever is connected now
     invalidate();
 }
 
@@ -4592,6 +5181,47 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         y += listH + metrics_.space(SP_MD);
     }
 #endif
+#ifdef MATRIX_HAVE_BLUETOOTH
+    else if (sel == AudioBackend::Bluetooth) {
+        canvas.textStyled("Headphones:", c.x + pad, y, metrics_.text.body,
+                          toColor(CLR_TEXT_DIM), FontStyle::Roman);
+        y += metrics_.text.body * 1.6f;
+        std::vector<std::string> labels;
+        for (auto& d : asBtDevices_) {
+            // Three states, said on the row rather than discovered on Apply:
+            // available, not connected, and already somebody else's. The last
+            // one is the whole reason this backend can fail, so it is named
+            // where the choice is made.
+            std::string label = d.name;
+            if (!d.connected)  label += "  â not connected";
+            else if (d.busy)   label += "  â in use by another app";
+            labels.push_back(std::move(label));
+        }
+        float listH = listHeightFor(std::max(1, (int)labels.size()));
+        asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
+        asDeviceListRows_ = widgets::drawScrollList(canvas, toRect(asDeviceListArea_), labels,
+                                                    asBtSel_, (float)asDeviceScrollY_, listRowH,
+                                                    asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
+        panels::drawScrollbar(canvas, asDeviceListArea_, (int)((float)labels.size() * listRowH),
+                              asDeviceScrollY_, metrics_.scale);
+        if (asBtDevices_.empty()) {
+            Rect a = toRect(asDeviceListArea_);
+            canvas.textStyled("No paired A2DP device. Pair and connect a pair of headphones first.",
+                              a.x + metrics_.space(22.0f), a.y + metrics_.space(98.0f),
+                              metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        }
+        y += listH + metrics_.space(SP_MD);
+
+        // The one thing this backend is not, stated where it is chosen rather
+        // than left to the signal chain to reveal after a track has started.
+        canvas.textStyled("SBC is a lossy encode â this route can never be bit-perfect.",
+                          c.x + pad, y, metrics_.text.body, toColor(CLR_WARNING), FontStyle::Italic);
+        y += metrics_.text.body * 1.8f;
+        canvas.textStyled("Release the device in your sound server first; only one app can stream to it.",
+                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        y += metrics_.text.body * 1.6f + metrics_.space(SP_MD);
+    }
+#endif
 #ifdef MATRIX_HAVE_AAUDIO
     else if (sel == AudioBackend::AAudio) {
         // No device list at all, and the empty rect matters: it is what the
@@ -4609,6 +5239,11 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         canvas.textStyled("16-bit output. Not a bit-perfect path for deeper sources.",
                           c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
         y += metrics_.space(SP_MD) + metrics_.text.body;
+
+        // The one thing on this route that CAN be chosen. Android owns which
+        // device the audio goes to; it does not own which codec carries it
+        // there, and on a phone that encode is the largest thing in the chain.
+        drawBluetoothCodecSection(canvas, c, y, pad);
     }
 #endif
 #ifdef MATRIX_HAVE_AOAS
@@ -4639,6 +5274,228 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
                                            metrics_.space(panels::kMinActionBtnW), by, (int)btnH);
     asBtnApply_ = asRects[0];
     panels::drawButton(canvas, asBtnApply_, "Apply", asHoverApply_, metrics_.text.body, true);
+}
+
+// ── Bluetooth codec, inside the Audio Settings panel ────────────────────────
+//
+// Three states, and the panel says which one it is in rather than offering
+// controls that quietly do nothing:
+//
+//   Unavailable  — no Bluetooth, or this ROM has no codec control at all.
+//   ReadOnly     — the codec can be NAMED but not changed. Still worth drawing:
+//                  the encode is happening either way, and saying so is the
+//                  same duty the signal chain has. Offers the two doors that
+//                  lead to Writable.
+//   Writable     — the controls, and Apply saves them against this MAC.
+//
+// Seeded once per device from what is saved, falling back to what is actually
+// running — so the panel opens showing the truth rather than a default nobody
+// chose.
+void PlayerWindow::seedBtEditFromDevice() {
+    if (asBtEditLoaded_ || btDevice_.empty()) return;
+    BtCodecPref saved;
+    if (db_.loadBtCodec(btDevice_.mac, saved)) {
+        asBtEdit_.codec       = saved.codec;
+        asBtEdit_.sampleRate  = saved.sampleRate;
+        asBtEdit_.bits        = saved.bits;
+        asBtEdit_.channelMode = saved.channelMode ? saved.channelMode : bt_codec::kStereo;
+        asBtEdit_.ldacQuality = saved.ldacQuality;
+    } else if (btActive_.valid()) {
+        asBtEdit_ = btActive_;
+    } else {
+        return;   // nothing to seed from yet; try again next frame
+    }
+    asBtEditLoaded_ = true;
+}
+
+void PlayerWindow::drawBluetoothCodecSection(Canvas& canvas, const Rect& c, float& y, float pad) {
+    // Cleared unconditionally: these rects are what the hit-test reads, so
+    // leaving last frame's behind would keep controls clickable that are no
+    // longer drawn — the same trap the device-list rect documents above.
+    asBtCodecRows_.clear();
+    asBtRateRc_ = asBtBitsRc_ = asBtQualityRc_ = asBtEnableRc_ = asBtForgetRc_ = LayoutRect{};
+
+    const bt_codec::Capability cap = asBtCap_;   // cached; see the declaration
+    if (cap == bt_codec::Capability::Unavailable && btDevice_.empty()) return;
+
+    const float lineH = metrics_.text.body * 1.5f;
+    canvas.textStyled("Bluetooth codec", c.x + pad, y, metrics_.text.body,
+                      toColor(CLR_TEXT_DIM), FontStyle::Bold);
+    y += lineH * 1.2f;
+
+    if (btDevice_.empty()) {
+        canvas.textStyled("No Bluetooth headphones connected.", c.x + pad, y,
+                          metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        y += lineH;
+        return;
+    }
+
+    canvas.textStyled(btDevice_.name, c.x + pad, y, metrics_.text.body,
+                      toColor(CLR_TEXT_PRIMARY), FontStyle::Roman);
+    y += lineH;
+
+    // What is actually running, always — this needs no permission and it is the
+    // single most useful line on the page for a listener on Bluetooth.
+    const std::string now = btActive_.valid() ? bt_codec::summary(btActive_)
+                                              : std::string("unknown");
+    canvas.textStyled("Now: " + now, c.x + pad, y, metrics_.text.body,
+                      toColor(btActive_.valid() ? CLR_WARNING : CLR_TEXT_DIM), FontStyle::Roman);
+    y += lineH * 1.3f;
+
+    if (cap != bt_codec::Capability::Writable) {
+        canvas.textStyled("This phone has not granted codec control. Two ways to get it:",
+                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        y += lineH;
+
+        const float btnH = metrics_.space(50.0f);
+        asBtEnableRc_ = { (int)(c.x + pad), (int)y,
+                          (int)(c.x + pad + metrics_.space(330.0f)), (int)(y + btnH) };
+        panels::drawButton(canvas, asBtEnableRc_, "Pair as companion device",
+                           asHoverBtEnable_, metrics_.text.body);
+        y += btnH + metrics_.space(SP_SM);
+
+        canvas.textStyled("...or, from a computer, once:", c.x + pad, y,
+                          metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        y += lineH;
+        // The literal line to type. Shown in full rather than summarised: it is
+        // useless paraphrased, and there is no clipboard on this route worth
+        // relying on.
+        canvas.textStyled(bt_codec::adbGrantCommand(), c.x + pad, y,
+                          metrics_.text.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Roman);
+        y += lineH * 1.4f;
+        return;
+    }
+
+    seedBtEditFromDevice();
+
+    // Codec, as radio rows — the same widget the backend list above uses, so
+    // the two read as one page rather than two idioms.
+    //
+    // The rows are WHAT THESE HEADPHONES CAN TAKE, asked of the stack. They
+    // used to be a fixed five (SBC, AAC, aptX, aptX HD, LDAC), which was wrong
+    // in both directions on the hardware this was tested on: an LG-PL7 that
+    // speaks only SBC and AAC was offered LDAC and two flavours of aptX, and
+    // no device could ever be offered LC3, Opus or aptX Adaptive, because they
+    // were not in the enum. A settings page that lists choices the device will
+    // refuse is the same failure as one that hides choices it would accept.
+    const float rowH = metrics_.space(48.0f);
+    asBtCodecRows_.assign(asBtSelectable_.size(), LayoutRect{});
+    for (int i = 0; i < (int)asBtSelectable_.size(); i++) {
+        LayoutRect rc = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + rowH) };
+        Rect hit = widgets::drawRadioRow(canvas, toRect(rc),
+                                         asBtEdit_.codec == asBtSelectable_[i].id,
+                                         (i == asHoverBtCodecRow_),
+                                         asBtSelectable_[i].name,
+                                         widgets::kTextFree, matrixRadioStyle());
+        asBtCodecRows_[i] = toLayoutRect(hit);
+        y += rowH;
+    }
+    if (asBtSelectable_.empty()) {
+        // An empty list means the QUESTION went unanswered, never "this device
+        // supports nothing" — see bt_codec.hh. Drawing no rows and saying
+        // nothing would read as the second, which is a claim we cannot make.
+        canvas.textStyled("This phone will not say which codecs " + btDevice_.name +
+                          " supports, so none can be offered.",
+                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM),
+                          FontStyle::Italic);
+        y += lineH * 1.4f;
+    }
+    y += metrics_.space(SP_SM);
+
+    // Rate, depth and LDAC quality cycle in place. Three more radio groups
+    // would be fifteen rows for settings that are picked once and then left,
+    // and the panel has a bottom.
+    const float btnH = metrics_.space(50.0f);
+    const float btnW = metrics_.space(200.0f);
+    float bx = (float)c.x + pad;
+    asBtRateRc_ = { (int)bx, (int)y, (int)(bx + btnW), (int)(y + btnH) };
+    panels::drawButton(canvas, asBtRateRc_, bt_codec::sampleRateLabel(asBtEdit_.sampleRate),
+                       asHoverBtRate_, metrics_.text.body);
+    bx += btnW + metrics_.space(SP_SM);
+    asBtBitsRc_ = { (int)bx, (int)y, (int)(bx + btnW), (int)(y + btnH) };
+    panels::drawButton(canvas, asBtBitsRc_, bt_codec::bitDepthLabel(asBtEdit_.bits),
+                       asHoverBtBits_, metrics_.text.body);
+    bx += btnW + metrics_.space(SP_SM);
+    // Only LDAC has a quality. Drawing the control for the others would be
+    // offering a setting that codec does not have.
+    if (asBtEdit_.codec == bt_codec::kLdac) {
+        asBtQualityRc_ = { (int)bx, (int)y, (int)(bx + btnW), (int)(y + btnH) };
+        panels::drawButton(canvas, asBtQualityRc_,
+                           bt_codec::ldacQualityLabel(asBtEdit_.ldacQuality),
+                           asHoverBtQuality_, metrics_.text.body);
+    }
+    y += btnH + metrics_.space(SP_SM);
+
+    BtCodecPref existing;
+    if (db_.loadBtCodec(btDevice_.mac, existing)) {
+        asBtForgetRc_ = { (int)(c.x + pad), (int)y,
+                          (int)(c.x + pad + metrics_.space(200.0f)), (int)(y + btnH) };
+        panels::drawButton(canvas, asBtForgetRc_, "Forget", asHoverBtForget_, metrics_.text.body);
+        y += btnH + metrics_.space(SP_SM);
+    }
+
+    canvas.textStyled("Apply saves this against these headphones and re-applies it "
+                      "whenever they reconnect.",
+                      c.x + pad, y, metrics_.text.secondary, toColor(CLR_TEXT_DIM),
+                      FontStyle::Italic);
+    y += lineH;
+    if (!btNotice_.empty()) {
+        canvas.textStyled(btNotice_, c.x + pad, y, metrics_.text.secondary,
+                          toColor(CLR_WARNING), FontStyle::Italic);
+        y += lineH;
+    }
+}
+
+// Returns true when the click was this section's. Each control cycles rather
+// than opening a menu: a popup is a second surface to lay out and dismiss, and
+// these are four short lists.
+bool PlayerWindow::handleBluetoothCodecClick(int x, int y) {
+    if (ptInRect(asBtEnableRc_, x, y)) {
+        // The system dialog. The result is not read back — this app's activity
+        // is the platform's own NativeActivity and has nowhere to override
+        // onActivityResult — so the association is re-checked when Android
+        // tells us, through nativeOnAssociationChanged.
+        bt_codec::requestAssociation(btDevice_.mac);
+        return true;
+    }
+    if (ptInRect(asBtForgetRc_, x, y)) {
+        db_.clearBtCodec(btDevice_.mac);
+        // Nothing is un-applied: the headphones keep whatever they negotiated.
+        // Forgetting means "stop choosing for me", not "undo what is playing".
+        btNotice_.clear();
+        invalidate();
+        return true;
+    }
+    for (int i = 0; i < (int)asBtCodecRows_.size(); i++) {
+        if (!ptInRect(asBtCodecRows_[i], x, y)) continue;
+        if (i >= (int)asBtSelectable_.size()) break;   // list refreshed under the click
+        asBtEdit_.codec = asBtSelectable_[i].id;
+        invalidate();
+        return true;
+    }
+    if (ptInRect(asBtRateRc_, x, y)) {
+        static const int kRates[] = { bt_codec::kRate44100, bt_codec::kRate48000,
+                                      bt_codec::kRate88200, bt_codec::kRate96000 };
+        int idx = 0;
+        for (int i = 0; i < 4; i++) if (kRates[i] == asBtEdit_.sampleRate) idx = i;
+        asBtEdit_.sampleRate = kRates[(idx + 1) % 4];
+        invalidate();
+        return true;
+    }
+    if (ptInRect(asBtBitsRc_, x, y)) {
+        static const int kBits[] = { bt_codec::kBits16, bt_codec::kBits24, bt_codec::kBits32 };
+        int idx = 0;
+        for (int i = 0; i < 3; i++) if (kBits[i] == asBtEdit_.bits) idx = i;
+        asBtEdit_.bits = kBits[(idx + 1) % 3];
+        invalidate();
+        return true;
+    }
+    if (ptInRect(asBtQualityRc_, x, y)) {
+        asBtEdit_.ldacQuality = (asBtEdit_.ldacQuality + 1) % 4;
+        invalidate();
+        return true;
+    }
+    return false;
 }
 
 void PlayerWindow::applyAudioSettingsPanel() {
@@ -4722,10 +5579,58 @@ void PlayerWindow::applyAudioSettingsPanel() {
         output_ = std::make_unique<JackOutput>(jackStartPort_);
     }
 #endif
+#ifdef MATRIX_HAVE_BLUETOOTH
+    else if (sel == AudioBackend::Bluetooth) {
+        db_.saveSetting("audio_backend", "bt");
+        std::string path;
+        if (asBtSel_ >= 0 && asBtSel_ < (int)asBtDevices_.size())
+            path = asBtDevices_[asBtSel_].path;
+        db_.saveSetting("bt_device_path", path);
+        btDevicePath_ = path;
+        output_ = std::make_unique<BtOutput>(btDevicePath_);
+        if (path.empty())
+            audioNotice_ = "No Bluetooth device chosen â pick a pair of headphones "
+                           "in Audio Settings.";
+    }
+#endif
 #ifdef MATRIX_HAVE_AAUDIO
     else if (sel == AudioBackend::AAudio) {
         db_.saveSetting("audio_backend", "aaudio");
         output_ = std::make_unique<AAudioOutput>();
+
+        // The Bluetooth codec is saved and applied here, with the rest of this
+        // panel's Apply. It is NOT part of the output backend — nothing above
+        // this line touches it and it survives the backend being rebuilt —
+        // but it IS one of the choices this page offers, and a listener who
+        // presses Apply means all of them.
+        if (!btDevice_.empty() && asBtEdit_.valid() &&
+            bt_codec::capability() == bt_codec::Capability::Writable) {
+            BtCodecPref pref;
+            pref.mac         = btDevice_.mac;
+            pref.deviceName  = btDevice_.name;
+            pref.codec       = asBtEdit_.codec;
+            pref.sampleRate  = asBtEdit_.sampleRate;
+            pref.bits        = asBtEdit_.bits;
+            pref.channelMode = asBtEdit_.channelMode ? asBtEdit_.channelMode : bt_codec::kStereo;
+            pref.ldacQuality = asBtEdit_.ldacQuality;
+            // Saved BEFORE it is attempted, and deliberately so: the choice is
+            // the listener's and it should outlive a stack that refuses it
+            // today. The next reconnect tries again.
+            db_.saveBtCodec(pref.mac, pref);
+            // A deliberate request supersedes the automatic one, and marks this
+            // device as already acted on: without this the apply below bounces
+            // the link, the device returns looking new, and the AUTOMATIC path
+            // would then apply the saved value on top of the one the listener
+            // just asked for.
+            btAutoAppliedMac_ = pref.mac;
+            if (!bt_codec::apply(pref.mac, asBtEdit_)) {
+                btNotice_ = "The Bluetooth stack refused " +
+                            bt_codec::codecName(asBtEdit_.codec) + " \xE2\x80\x94 saved anyway, "
+                            "and it will be tried again on the next connection.";
+            } else {
+                btNotice_.clear();
+            }
+        }
     }
 #endif
 #ifdef MATRIX_HAVE_AOAS
@@ -5530,9 +6435,10 @@ void PlayerWindow::commitAddFolder(const std::string& root) {
     watcher_.watchRoot(root, [this](const std::string&) {
         host_->postAppEvent((int)AppEvent::ScanDone, 1);
     });
-    StreamerDb sdb;
-    sdb.open(root);  // no-op if this root has no sibling .streamer db
-    streamerDbs_[root] = std::move(sdb);
+    // The root bounds the .streamer walk (streamerDbForAlbumDir); the database
+    // itself is opened lazily, on the first album view inside it.
+    musicRoots_.push_back(root);
+    streamerMissLogged_.erase(root);
     startBackgroundScan();
 }
 
@@ -5621,12 +6527,29 @@ std::string PlayerWindow::getActiveDeviceKey() {
     // key should become VID:PID, because the EQ profile follows the DAC's
     // drivers, not the relay.
     case AudioBackend::Aoas: return "aoas";
-    // No device id in the key. AAudio picks the route itself and changes it
-    // under us when headphones are plugged in, so there is exactly one
-    // AutoEQ slot for "this phone's output" — which is also the honest
-    // model: the profile follows the DRIVERS, and the listener says which
-    // pair is on.
-    case AudioBackend::AAudio: return "aaudio";
+    // AAudio picks the route itself and moves it under us, and for a long time
+    // it never said WHERE to — so this was the bare string "aaudio", one AutoEQ
+    // slot for the whole handset, with a comment admitting it.
+    //
+    // A Bluetooth sink can now be named, so it is. The key becomes the
+    // headphones' MAC, which means a profile follows THE PAIR — across a
+    // reconnect, and eventually across machines, because the same MAC is what
+    // a Linux A2DP route would key on too. That was always the honest model
+    // (a driver has a frequency response; a phone does not), and the only
+    // reason it was not the model before was that the route was anonymous.
+    //
+    // Everything else on the phone — speaker, wired, USB through the OS —
+    // still falls back to "aaudio", so assignments already saved under that key
+    // keep working exactly as they did.
+    case AudioBackend::AAudio:
+        return btDevice_.empty() ? std::string("aaudio") : "a2dp:" + btDevice_.mac;
+    // The desktop A2DP backend, keyed the SAME way and deliberately so: a
+    // profile written for a pair of headphones on the phone is the same
+    // profile on this machine, because the drivers are the same drivers.
+    // btDevice_ is filled by onBtRouteChanged() from BlueZ here and from the
+    // Bluetooth stack there, in one shape, for exactly this.
+    case AudioBackend::Bluetooth:
+        return btDevice_.empty() ? std::string("a2dp") : "a2dp:" + btDevice_.mac;
     case AudioBackend::Usb:
     default: {
         auto vid = db_.loadSetting("usb_vid");
@@ -5645,6 +6568,7 @@ std::string PlayerWindow::audioBackendLabel() const {
     case AudioBackend::Jack:   return "JACK";
     case AudioBackend::AAudio: return "AAudio";
     case AudioBackend::Aoas:   return "AOAS";
+    case AudioBackend::Bluetooth: return "A2DP";
     case AudioBackend::Usb:
     default:                   return "USB";
     }
@@ -5792,7 +6716,7 @@ BarAModel PlayerWindow::barAModel() const {
 }
 
 // The desktop's integer hover/hit vocabulary, in both directions. It stays an
-// int in PlayerWindow because onLButtonDown() and every hover comparison in
+// int in PlayerWindow because handleClick() and every hover comparison in
 // this file already speak it, and because its low end IS AlbumTypeFilter --
 // which is exactly the coupling the shared layer must not inherit.
 BarAPick PlayerWindow::sidebarHitToPick(int nav) {
@@ -6154,6 +7078,20 @@ void PlayerWindow::onPlay(StartCause cause) {
         chain_.outChannels   = output_ ? output_->getConfiguredChannels() : 0;
         chain_.outBits       = output_ ? output_->getConfiguredBits() : 0;
         chain_.deviceMaxBits = deviceMaxBits;
+        // The last link, and on a phone routinely the loudest thing in the
+        // chain: everything above describes the PCM handed to the OS, and over
+        // A2DP the Bluetooth stack then ENCODES it, lossily, before it reaches
+        // the headphones. Refreshed here rather than only on a route change,
+        // because the stack renegotiates on its own and the readout must
+        // describe the track that is starting now.
+        // Re-sampled here, not merely read: on Linux nothing pushes a route
+        // change at us, and the headphones may have connected since the last
+        // time anything asked.
+        btDevice_ = bt_codec::connectedDevice();
+        btActive_ = btDevice_.empty() ? bt_codec::Config{} : bt_codec::activeConfig();
+        chain_.btDevice = btDevice_.name;
+        chain_.btCodec  = btActive_.valid() ? bt_codec::codecName(btActive_.codec) : std::string();
+        chain_.btDetail = btActive_.valid() ? bt_codec::summary(btActive_)         : std::string();
         // Bit-perfect clears the EQ outright (see below), so the DSP half is
         // known here and is simply empty. The Reference-EQ path fills its own
         // resample/dither/EQ fields further down, where those exist.
@@ -6375,14 +7313,146 @@ void PlayerWindow::onPlay(StartCause cause) {
     startGaplessCoordinator(callbackI32, capturedOutSr, capturedDacCh);
     host_->startTimer((int)TimerId::SeekUpdate, 250);
 
+    // Audio is really flowing now, so tell the OS. Deliberately HERE and not at
+    // the top of onPlay(): every early return above this line leaves nothing
+    // playing, and a foreground service raised for a track that failed to open
+    // would leave a transport notification on screen over silence.
+    media_session::begin();
+    media_session::update(nowPlayingForOs());
+
     // Nothing seeks here. Every track starts at zero, including the one that
     // was playing when the app last closed — see create(). onSeek() survives
     // for onPrev()'s restart-this-track path, which is a return to the
     // beginning, not a jump into the middle.
 }
 
+// Reflects what the chain ACHIEVED (bpState_, set in onPlay), not what the
+// toggle requested — claiming BITPERFECT while silently truncating would be
+// exactly the dishonesty this badge exists to prevent. Before playback starts
+// bpState_ is Off, so it falls back to the toggle for the idle label.
+//
+// The asterisk on ViaServer is not a lie in either direction: exact up to the
+// server, which owns the final conversion.
+PlayerWindow::DspBadge PlayerWindow::dspBadge() const {
+    switch (bpState_) {
+    case BpState::Exact:     return { "BITPERFECT",     "EXACT",   CLR_ACCENT };
+    case BpState::ViaServer: return { "BITPERFECT*",    "EXACT*",  CLR_ACCENT };
+    case BpState::Degraded:  return { "NOT BITPERFECT", "ALTERED", CLR_WARNING };
+    case BpState::Off:
+    default:
+        return bitperfectMode_.load() && !isPlaying_
+             ? DspBadge{ "BITPERFECT", "EXACT",  CLR_ACCENT }
+             : DspBadge{ "REF EQ",     "REF EQ", CLR_TEXT_DIM };
+    }
+}
+
+// Everything the OS needs to draw the transport it owns — the lock screen, the
+// notification, a watch face. Assembled from exactly what bar B draws from, so
+// the two cannot disagree about what is playing.
+// Bar B's left label, as DATA: the release type and, when there is more than
+// one track to be at, which one — "ALBUM", "EP \xC2\xB7 1", "ALBUM \xC2\xB7 D1 \xC2\xB7 2".
+//
+// Extracted from the draw switch for the same reason dspBadge() was: the OS
+// notification says the same thing bar B says, and two copies of this would be
+// two things to keep in step. The drawing still lays the two parts out at
+// different sizes, which is why this returns them apart rather than joined.
+PlayerWindow::TransportOrdinal PlayerWindow::transportOrdinal(int album, int track) const {
+    TransportOrdinal out;
+    if (album < 0 || album >= (int)albums_.size()) return out;
+    const Album& alb = albums_[album];
+    if (track < 0 || track >= (int)alb.tracks.size()) return out;
+    const Track& tr = alb.tracks[track];
+
+    switch (alb.releaseType) {
+    case Album::ReleaseType::Ep:          out.type = "EP";     out.typeShort = "EP";    break;
+    case Album::ReleaseType::Single:      out.type = "SINGLE"; out.typeShort = "SINGLE";break;
+    case Album::ReleaseType::Remix:       out.type = "REMIX";  out.typeShort = "REMIX"; break;
+    // The only one long enough to need a short form at all, and it is chosen
+    // by MEASURING at the draw site, never by orientation.
+    case Album::ReleaseType::Compilation: out.type = "COMPILATION"; out.typeShort = "COMP."; break;
+    case Album::ReleaseType::Live:        out.type = "LIVE";   out.typeShort = "LIVE";  break;
+    case Album::ReleaseType::Album:
+    default:                              out.type = "ALBUM";  out.typeShort = "ALBUM"; break;
+    }
+    if (alb.tracks.size() > 1) {
+        // The disc prefix appears only when there IS more than one disc. On a
+        // single-disc record "D1" is noise that says nothing, and this bar has
+        // no room for a word that adds nothing. Decided from the album's own
+        // tracks, never stored.
+        int maxDisc = 0;
+        for (const Track& x : alb.tracks) maxDisc = std::max(maxDisc, x.discNumber);
+        if (maxDisc > 1 && tr.discNumber > 0) {
+            const std::string d = "D" + std::to_string(tr.discNumber);
+            out.ord      = d + " \xC2\xB7 ";
+            out.ordTight = d + "\xC2\xB7";
+        }
+        out.num = std::to_string(tr.trackNumber > 0 ? tr.trackNumber : track + 1);
+        out.ord      += out.num;
+        out.ordTight += out.num;
+    }
+    return out;
+}
+
+// The one line joined, as the OS wants it: "ALBUM \xC2\xB7 D1 \xC2\xB7 2".
+std::string PlayerWindow::transportOrdinalLine(int album, int track) const {
+    const TransportOrdinal to = transportOrdinal(album, track);
+    if (!to.type) return {};
+    if (to.ord.empty()) return to.type;
+    return std::string(to.type) + " \xC2\xB7 " + to.ord;
+}
+
+media_session::NowPlaying PlayerWindow::nowPlayingForOs() const {
+    media_session::NowPlaying np;
+    // Bar B's line, not the track's name. The bar has said "ALBUM \xC2\xB7 D1 \xC2\xB7 2"
+    // and not a title since the transport was reworked — a name never fitted
+    // the bar's thickness and came out rotated on its side — and the
+    // notification follows the bar, which was the whole instruction for it.
+    // displayAlbum_/displayTrack_, never the decode cursor: at a gapless
+    // boundary the decoder has already moved on, and the lock screen must say
+    // what is being HEARD.
+    np.title    = transportOrdinalLine(displayAlbum_, displayTrack_);
+    if (np.title.empty()) np.title = currentTitle_;   // nothing known yet
+    np.artist   = currentArtist_;
+    np.dspTag   = dspBadge().shortForm;
+    np.positionMs = seekPosMs_ > 0 ? seekPosMs_ : 0;
+    np.durationMs = seekTotalMs_ > 0 ? seekTotalMs_ : 0;
+    // displayAlbum_, not currentAlbum_: the DISPLAY cursor is what the listener
+    // is hearing right now. At a gapless boundary the decode cursor has already
+    // moved on to the next track, and taking the album from it would put the
+    // wrong cover and the wrong record on the lock screen a few seconds early.
+    if (displayAlbum_ >= 0 && displayAlbum_ < (int)albums_.size()) {
+        np.album   = albums_[displayAlbum_].name;
+        np.artPath = albums_[displayAlbum_].artPath;
+    }
+    return np;
+}
+
 void PlayerWindow::onStop() {
-    // Before anything resets the clock: both of these read seekPosMs_.
+    // SILENCE FIRST. Everything below this line is bookkeeping, and none of it
+    // is worth a millisecond of audio the listener has already asked to end:
+    // this used to run two sqlite writes and a thread join before it reached
+    // the output, so Stop was audibly late by the sum of them plus whatever the
+    // backend still had buffered.
+    //
+    // Stopping the sink here also strictly HELPS the two things that follow.
+    // The decode thread spends steady playback blocked inside
+    // output_->writeXBlocking(), which only unblocks promptly once the output
+    // stops — that is the ordering rule onPlay() states — and the gapless
+    // coordinator's drain loop waits on pendingPlaybackMs(), which a stopped
+    // output reports as 0. So the join below gets faster, not slower.
+    //
+    // Safe with respect to the clock the two calls after it read: seekPosMs_ is
+    // written only by onTimer(), on this same thread, so it cannot move here.
+    if (output_) output_->stop();
+
+    // Second, and still before the bookkeeping: drop the foreground service,
+    // the audio focus and the wake lock. Holding a "now playing" notification
+    // over silence is its own kind of lie, and the wake lock is the whole
+    // reason this process is allowed to keep the CPU up.
+    media_session::end();
+
+    // Both of these read seekPosMs_, so they still come before anything that
+    // resets it.
     savePlaybackStateNow();
     flushTrackStats(EndCause::Stop);
     {
@@ -6399,10 +7469,9 @@ void PlayerWindow::onStop() {
     bpDetail_.clear();
     chain_ = SignalChain{};
 
-    // Stop the sink BEFORE joining the decode threads — see onPlay() for why:
-    // the decode thread is typically blocked inside output_->writeXBlocking(),
-    // which only unblocks promptly once the output itself is stopped.
-    if (output_) output_->stop();
+    // The sink was already stopped at the top of this function — see the note
+    // there. The decode threads are joined here, after it, which is the order
+    // onPlay() explains.
     decoder_.stop();
     nextDecoder_.close();
     active_ = &decoder_;
@@ -6810,7 +7879,120 @@ void PlayerWindow::onAppEvent(int id, intptr_t p1, intptr_t p2) {
         break;
     case AppEvent::ArtDecoded:  onArtDecoded(); break;
     case AppEvent::RequestPlay: onPlay(); break;
+    // The OS's transport, answered by the SAME methods the on-screen buttons
+    // call. A lock-screen Stop and a Stop in bar B are the same act, so they
+    // must not be able to behave differently — including "the next play starts
+    // this track from zero", which onPlay() already guarantees for both.
+    case AppEvent::RequestStop: if (isPlaying_) onStop(); break;
+    case AppEvent::RequestNext: onNext(); break;
+    case AppEvent::RequestPrev: onPrev(); break;
+    case AppEvent::BtRouteChanged: onBtRouteChanged(); break;
     }
+}
+
+// A Bluetooth sink connected, went away, or finished negotiating. Runs on the
+// app thread, which is what makes it safe to read the database here.
+void PlayerWindow::onBtRouteChanged() {
+    const bt_codec::Device was = btDevice_;
+    btDevice_ = bt_codec::connectedDevice();
+    btActive_ = bt_codec::activeConfig();
+    // A companion association is per-device, so the answer genuinely changes
+    // with the route — this is one of the two moments it can.
+    asBtCap_  = bt_codec::capability();
+    asBtSelectable_ = bt_codec::selectableCodecs();
+
+    if (btDevice_.empty()) {
+        btNotice_.clear();
+        chain_.btCodec.clear();
+        chain_.btDetail.clear();
+        chain_.btDevice.clear();
+        invalidate();
+        return;
+    }
+
+    // A newly arrived pair gets whatever was remembered for it. Not on every
+    // event: an apply() verdict also lands here, and re-applying in response to
+    // the verdict on the last apply is how a loop starts.
+    if (was.mac != btDevice_.mac) applySavedBtCodec();
+
+    // Whether the codec was set or merely observed, SAY what is running. This
+    // costs no permission and it is the largest thing happening to the audio.
+    chain_.btDevice = btDevice_.name;
+    if (btActive_.valid()) {
+        chain_.btCodec  = bt_codec::codecName(btActive_.codec);
+        chain_.btDetail = bt_codec::summary(btActive_);
+    } else {
+        chain_.btCodec.clear();
+        chain_.btDetail.clear();
+    }
+    invalidate();
+}
+
+// Re-apply the saved configuration for the connected sink.
+//
+// Nothing happens when there is nothing saved: a pair of headphones the
+// listener has never configured must keep whatever the system negotiated, not
+// be pushed onto this app's idea of a default. Choosing for them silently is
+// the opposite of what a per-device setting is for.
+void PlayerWindow::applySavedBtCodec() {
+    if (btDevice_.empty()) return;
+    BtCodecPref pref;
+    if (!db_.loadBtCodec(btDevice_.mac, pref)) return;
+
+    bt_codec::Config want;
+    want.codec       = pref.codec;
+    want.sampleRate  = pref.sampleRate;
+    want.bits        = pref.bits;
+    want.channelMode = pref.channelMode;
+    want.ldacQuality = pref.ldacQuality;
+
+    // ── Two guards, and neither is belt-and-braces: without them this loops,
+    // and the loop is SILENT MUSIC. ────────────────────────────────────────
+    //
+    // Setting an A2DP codec is not a property write. The stack tears the link
+    // down and renegotiates it, so for a second or two the device reports
+    // itself disconnected and then connected again — and the audio stops,
+    // because there is no transport to carry it. Verified on a moto g06 with
+    // LG-PL7 headphones: the log showed "requested AAC ... -> sent" every ~14
+    // seconds, each one restarting the track, the clock frozen at 0:00 and
+    // nothing audible.
+    //
+    // 1. NEVER APPLY WHAT IS ALREADY RUNNING. This is the honest rule rather
+    //    than the defensive one: the saved configuration was AAC 44.1/16 and
+    //    the link was ALREADY running AAC 44.1/16, so every one of those
+    //    applies bought exactly nothing and cost the music. btActive_ is read
+    //    one line before this is called, so the comparison is free.
+    if (btActive_.valid() && btActive_ == want) {
+        btNotice_.clear();
+        btAutoAppliedMac_ = btDevice_.mac;
+        return;
+    }
+
+    // 2. ONE AUTOMATIC APPLY PER DEVICE. onBtRouteChanged() already refuses to
+    //    re-apply unless the MAC changed — but the renegotiation in guard 1's
+    //    comment makes the MAC go empty and come back, which IS a change, so
+    //    that guard cannot see the loop it is standing in. This one can: it
+    //    remembers the device we already acted on and does not act twice.
+    //    Deliberately NOT reset when the device disconnects, for the same
+    //    reason. The Audio Settings panel's Apply is a separate path and is
+    //    never blocked by this — a listener asking for a codec always gets the
+    //    attempt.
+    if (btAutoAppliedMac_ == btDevice_.mac) return;
+    btAutoAppliedMac_ = btDevice_.mac;
+
+    if (bt_codec::capability() != bt_codec::Capability::Writable) {
+        // Refused before it was attempted, and the listener is told which door
+        // is shut rather than watching a saved setting quietly not happen.
+        btNotice_ = "Saved codec for " + btDevice_.name +
+                    " cannot be applied \xE2\x80\x94 this phone has not granted codec control.";
+        return;
+    }
+    if (!bt_codec::apply(btDevice_.mac, want)) {
+        btNotice_ = "The Bluetooth stack refused " + bt_codec::codecName(want.codec) +
+                    " for " + btDevice_.name + ".";
+        return;
+    }
+    btNotice_.clear();
 }
 
 // The platform may have been launched already knowing where the music is —
@@ -6855,7 +8037,37 @@ void PlayerWindow::onTimer(int /*timerId*/) {
 
     int pendingMs = output_ ? output_->pendingPlaybackMs() : 0;
     // Keep the clock moving through the final drain even after the decoder stops.
-    if (!active_->isRunning() && pendingMs <= 0) return;
+    if (!active_->isRunning() && pendingMs <= 0) {
+        // The music MAY have run out — but this same condition is also what a
+        // track change looks like for an instant, and telling them apart is
+        // the whole reason for the counter below.
+        //
+        // onNext() does exactly two things in a row: active_->stop() and
+        // output_->flush(). So isRunning() goes false and pendingMs goes to
+        // zero together, and the very next 250 ms tick lands here in the
+        // middle of a perfectly healthy skip. Ending the OS session there was
+        // a real bug and an ugly one: end() calls stopSelf(), the service's
+        // sInstance goes null, and every later update() then returns silently
+        // — so the notification vanished on the first Next and could only come
+        // back by stopping and starting inside the app.
+        //
+        // Two seconds of the condition HOLDING is the difference. A skip
+        // replaces the decoder in milliseconds; the end of a section is a
+        // state nothing will change until the listener acts.
+        if (++drainIdleTicks_ < kDrainIdleTicksToEnd) return;
+
+        // Now it is genuinely over: the last track of the section, or the
+        // playlist ended and the coordinator found nothing to follow it.
+        // isPlaying_ deliberately stays true (that is this app's existing
+        // behaviour: the transport goes on showing what was last heard), but
+        // the OS session must NOT: it holds a partial wake lock and an ongoing
+        // notification, and leaving those up over silence would pin the CPU
+        // awake for the rest of the session. end() is idempotent, so this
+        // costs nothing on the ticks that follow.
+        media_session::end();
+        return;
+    }
+    drainIdleTicks_ = 0;
 
     // Position the DAC has actually rendered = frames written minus what's still
     // buffered in the output (ring + in-flight queue).
@@ -6882,6 +8094,13 @@ void PlayerWindow::onTimer(int /*timerId*/) {
     if (seekTotalMs_ > 0 && posMs > seekTotalMs_) posMs = seekTotalMs_;
     seekPosMs_ = (int)posMs;
     accrueListenTime();
+    // Bar B's clock, on the lock screen. seekPosMs_ is frames the DAC has
+    // actually rendered, so the progress the OS draws is the same honest
+    // position the bar shows — not the decoder's read head. Called at the full
+    // 250 ms tick; media_session::update() drops the ones that would tell the
+    // OS something it already knows, so this is not four IPC round trips a
+    // second for a bar nobody can read that finely.
+    media_session::update(nowPlayingForOs());
     invalidate();
 }
 
@@ -6937,6 +8156,12 @@ bool PlayerWindow::ejectArtToSecondScreen() {
 }
 
 void PlayerWindow::onDragEnd(int dx, int dy) {
+    // Whatever else this stroke was, it was not a click. Disarmed before the
+    // gate below, because the gate is about the ARTWORK and this is about
+    // every scene: a host reports a drag from its own slop, which is a smaller
+    // and earlier fact than "was this a deliberate throw".
+    pressArmed_ = false;
+
     // The gesture belongs to the artwork scene and to nothing else. Everywhere
     // else a drag is already a scroll, and the host has been feeding it as
     // wheel deltas the whole way — this fires afterwards, on release.
@@ -6970,32 +8195,15 @@ void PlayerWindow::releaseOverlayArtTexture() {
         renderer_->destroy_texture(overlayArtTex_);
     overlayArtTex_  = kInvalidTexture;
     overlayArtTexW_ = overlayArtTexH_ = 0;
-    overlayArtBoxW_ = overlayArtBoxH_ = 0;
+    overlayArtReqW_ = overlayArtReqH_ = 0;
     // The KEY goes with the handle. Leaving it set is the exact bug
     // onSurfaceLost() documents: a loader convinced it is already showing the
     // right thing, in front of an invalid handle, forever.
     overlayArtTexPath_.clear();
-}
-
-// The quality story is ArtWindow::loadArtTexture()'s, unchanged and for the
-// same reason: ImageFit::kContain resamples on the CPU (Magic Kernel Sharp) to
-// exactly the pixels the art will occupy, so the draw is a 1:1 blit and no GPU
-// filter ever scales it. mips=false follows — at 1:1 level 0 is the only level
-// the sampler can want.
-void PlayerWindow::ensureOverlayArtTexture(int boxW, int boxH) {
-    if (!renderer_ || overlayArtPath_.empty() || boxW <= 0 || boxH <= 0) return;
-    if (overlayArtTex_ != kInvalidTexture && overlayArtTexPath_ == overlayArtPath_ &&
-        overlayArtBoxW_ == boxW && overlayArtBoxH_ == boxH)
-        return;
-    releaseOverlayArtTexture();
-    FileByteReader reader;
-    overlayArtTex_ = createTextureFromImageFile(*renderer_, reader, overlayArtPath_.c_str(),
-                                                boxW, boxH, &overlayArtTexW_, &overlayArtTexH_,
-                                                /*mips=*/false, ImageFit::kContain);
-    if (overlayArtTex_ != kInvalidTexture) {
-        overlayArtTexPath_ = overlayArtPath_;
-        overlayArtBoxW_ = boxW; overlayArtBoxH_ = boxH;
-    }
+    // And the request, so a decode still in flight when the scene closed is
+    // dropped (onArtDecoded matches overlayArtRequestPath_) rather than
+    // applied to a scene that is no longer on screen.
+    overlayArtRequestPath_.clear();
 }
 
 // ── The signal chain, in full ────────────────────────────────────────────────
@@ -7175,6 +8383,35 @@ void PlayerWindow::drawSignalChain(Canvas& canvas, const LayoutRect& area) {
             if (!bpDetail_.empty())
                 note(bpDetail_, bpState_ == BpState::Degraded ? CLR_WARNING : CLR_TEXT_DIM);
         }
+
+        // ── BLUETOOTH ──
+        // Its own section, after OUTPUT, because that is where it happens: the
+        // rows above describe the PCM handed to the OS, and the A2DP encode
+        // takes place AFTER all of them, between the phone and the headphones.
+        //
+        // Not folded into "Device" for the same reason. This is a re-encode of
+        // the finished signal — the one lossy step in a chain the rest of this
+        // page is at pains to prove is not — and a readout that let it hide
+        // inside a device name would be understating the largest thing that
+        // happens to the audio on a phone.
+        if (!s.btDevice.empty()) {
+            section("BLUETOOTH");
+            row("Headphones", s.btDevice, CLR_TEXT_PRIMARY);
+            if (s.btCodec.empty()) {
+                // Connected, but the codec could not be read. Said plainly:
+                // the alternative is a blank where the honest answer is
+                // "something is encoding this and I cannot tell you what".
+                row("Codec", "unknown \xE2\x80\x94 the stack did not say", CLR_WARNING);
+            } else {
+                // Always CLR_WARNING: every A2DP codec is lossy, LDAC at 990
+                // included. The colour is the point — nothing else on this page
+                // is allowed to imply that a re-encode is free.
+                row("Codec", s.btDetail, CLR_WARNING);
+                note("Re-encoded by the Bluetooth stack after everything above.",
+                     CLR_TEXT_DIM);
+            }
+            if (!btNotice_.empty()) note(btNotice_, CLR_WARNING);
+        }
     }
 
     canvas.clearClip();
@@ -7210,7 +8447,9 @@ void PlayerWindow::drawArtOverlay(Canvas& canvas, const LayoutRect& area) {
     // other keeps whatever the aspect ratio leaves over.
     const int boxW = (int)std::max(1.0f, a.w);
     const int boxH = (int)std::max(1.0f, a.h);
-    ensureOverlayArtTexture(boxW, boxH);
+    // Async, once per open: the scene is blank ("No artwork") until the full-res
+    // frame lands, then onArtDecoded invalidates and this draws the texture.
+    requestOverlayArtTexture(boxW, boxH);
 
     if (overlayArtTex_ != kInvalidTexture && overlayArtTexW_ > 0 && overlayArtTexH_ > 0) {
         // Already resampled to fit, so scale is 1 and this is a straight blit.
@@ -7236,7 +8475,7 @@ void PlayerWindow::drawArtOverlay(Canvas& canvas, const LayoutRect& area) {
     // `Second screen` button broke rule 2 outright: it RESERVED SURFACE for a
     // capability one of the three platforms does not have, which is two
     // layouts to keep and a hole on the phone. Ejecting the art to a window of
-    // its own is a SWIPE now (see onLButtonUp) — it costs no pixels, so where
+    // its own is a SWIPE now (see onDragEnd) — it costs no pixels, so where
     // the capability is missing the screen is identical rather than different.
 }
 
@@ -7281,6 +8520,11 @@ void PlayerWindow::applyTrackMetadata(int album, int track) {
         selectedAlbumIdx_ = album;
         loadTrackPanelArtTexture(album);
     }
+    // The lock screen changes track at the same instant bar B does. This is the
+    // seamless path — it never reaches onPlay() — so without this line an
+    // automatic advance would leave the notification naming the previous track
+    // for the whole of the next one.
+    media_session::update(nowPlayingForOs());
     invalidate();
 }
 
@@ -7288,14 +8532,17 @@ void PlayerWindow::applyTrackMetadata(int album, int track) {
 
 void PlayerWindow::setupWatchers() {
     Host* host = host_.get();
+    // Dropped wholesale rather than refreshed: these describe directories a
+    // rescan may have moved or emptied, and a stale handle would answer with
+    // a library that is no longer there. They reopen on demand.
     streamerDbs_.clear();
+    streamerMissLogged_.clear();
+    musicRoots_.clear();
     for (auto& root : db_.loadMusicRoots()) {
         watcher_.watchRoot(root, [host](const std::string&) {
             host->postAppEvent((int)AppEvent::ScanDone, 1);
         });
-        StreamerDb sdb;
-        sdb.open(root);  // no-op if this root has no sibling .streamer db
-        streamerDbs_[root] = std::move(sdb);
+        musicRoots_.push_back(root);
     }
 }
 
@@ -7396,6 +8643,39 @@ void PlayerWindow::onScanDone() {
     }
 
     if (newAlbums.empty() && albums_.empty()) return;
+
+    // A scan that found exactly what was already loaded is not news, and
+    // acting on it is expensive: everything below throws away every album-art
+    // texture (clearGridArtTexCache) and re-points every index. On an
+    // unchanged library that meant EVERY COVER WAS DECODED TWICE ON EVERY
+    // LAUNCH — once from the DB restore, then again a second later when the
+    // incremental scan reported in having changed nothing. Measured on a moto
+    // g06: four covers, 12-62 ms each, done twice.
+    //
+    // The signature is deliberately cheap and structural — count, then name,
+    // artist and track count per album. It is not a content hash: the scan
+    // only ever rewrites these rows from the same files, so anything it could
+    // change that this misses (a tag edit inside an existing track) still
+    // reaches the screen on the NEXT launch through the DB restore, and the
+    // incremental scanner's own mtime/size check is what decides a file was
+    // touched in the first place.
+    auto librarySignature = [](const std::vector<Album>& v) {
+        std::string sig;
+        sig.reserve(v.size() * 48);
+        sig += std::to_string(v.size());
+        for (const Album& a : v) {
+            sig += '\x1f'; sig += a.name;
+            sig += '\x1f'; sig += a.displayName;   // what the tile actually reads
+            sig += '\x1f'; sig += a.artist;
+            sig += '\x1f'; sig += std::to_string(a.tracks.size());
+        }
+        return sig;
+    };
+    if (!albums_.empty() && librarySignature(newAlbums) == librarySignature(albums_)) {
+        // Still worth persisting nothing and redrawing nothing — the library
+        // on screen is already the library on disk.
+        return;
+    }
 
     { std::lock_guard<std::mutex> lk(albumsMu_); albums_ = std::move(newAlbums); }
 
@@ -7799,6 +9079,32 @@ void PlayerWindow::shutdown() {
 void PlayerWindow::onSurfaceLost() {
     if (!renderer_) return;
 
+    // ── The surface is going, the DEVICE is not ──────────────────────────────
+    //
+    // Renderer::recreate_surface() rebuilds only what the surface owns and
+    // keeps the device, the render pass, every pipeline, the glyph atlas and
+    // every texture already uploaded — so there is nothing to tear down here
+    // and nothing to reload on the way back. Returning from the notification
+    // finds its artwork already on screen.
+    //
+    // What this replaces: destroying the Renderer whole and building it again,
+    // measured at ~370 ms on a moto g06 between the window arriving and the
+    // first frame, every single time.
+    //
+    // The full teardown below is the FALLBACK, taken only when the new surface
+    // turns out to be incompatible with the pipelines (a format or colour-space
+    // change). onSurfaceRecreated() decides that, because it is the first
+    // moment the new surface exists to be asked.
+    surfaceOnly_ = true;
+    return;
+}
+
+// The teardown for the case where the device really cannot be kept. Kept as a
+// separate function precisely so the fallback path stays the code that was
+// already proven, rather than a second variant of it.
+void PlayerWindow::destroyRendererForSurfaceLoss() {
+    if (!renderer_) return;
+
     // Textures first, then the Renderer that owns their VkImages — the same
     // order shutdown() states, and for the same reason.
     clearGridArtTexCache();
@@ -7812,6 +9118,7 @@ void PlayerWindow::onSurfaceLost() {
     // never comes back.
     trackPanelArtTexAlbum_ = -1;
     transportArtTexPath_.clear();
+    artistImgCachePath_.clear();
     // Same rule, same trap: releaseOverlayArtTexture() clears handle AND key.
     // overlayArtPath_ is deliberately NOT cleared — that is CPU-side state
     // (which picture the scene is showing) and it must survive, so returning
@@ -7832,6 +9139,26 @@ void PlayerWindow::onSurfaceLost() {
 }
 
 bool PlayerWindow::onSurfaceRecreated() {
+    // The fast path: the device is still alive and only the surface changed.
+    // Everything the app had a moment ago — pipelines, atlas, album art — is
+    // still on the GPU, so this is a swapchain rebuild and a relayout, not a
+    // Vulkan bring-up.
+    if (renderer_ && surfaceOnly_) {
+        surfaceOnly_ = false;
+        if (renderer_->recreate_surface()) {
+            // A rotation is a resize and Android delivers one on return as a
+            // matter of course, so the layout is re-derived exactly as the
+            // slow path does. refreshGlyphs() is cheap when nothing new is
+            // needed and the atlas image is still resident.
+            recalcLayout();
+            refreshGlyphs();
+            markDirty();
+            return true;
+        }
+        // Incompatible surface: fall through to the full rebuild, which is why
+        // that path was kept intact.
+        destroyRendererForSurfaceLoss();
+    }
     if (renderer_) return true;   // never lost it; nothing to do
 
     try {
@@ -7852,6 +9179,27 @@ bool PlayerWindow::onSurfaceRecreated() {
     // and queues the decodes again. clearGridArtTexCache() already bumped
     // artCacheGen_, so any decode still in flight from before is discarded
     // rather than handed to a Renderer that never asked for it.
+    //
+    // The transport thumbnail is the one that CANNOT be lazy. It is not loaded
+    // from drawFrame(); it is loaded when the track changes, and the track may
+    // well have changed several times while we were away. transportArtPath_ is
+    // the CPU-side record of what should be there, kept across the surface
+    // loss for exactly this line. recalcLayout() above has already sized
+    // rcTransportArt_, which loadTransportArtTexture() reads.
+    if (!transportArtPath_.empty()) loadTransportArtTexture(transportArtPath_);
+    // And the album view's cover, for the same reason: its three callers are
+    // all events (a click, a jump, a track change), none of them drawing, so
+    // nothing would ever ask for it again on its own.
+    if (trackPanelOpen_) loadTrackPanelArtTexture(selectedAlbumIdx_);
+    // The album-view artist photo likewise: it is requested when the album view
+    // OPENS, not on every draw, so nothing asks for it again on its own. The
+    // request survives in artistImgRequestPath_ (CPU-side, kept across the
+    // loss); re-fire it now that a surface exists to upload into. The clear on
+    // album change already stopped a request that outlived its album.
+    if (trackPanelOpen_ && !artistImgRequestPath_.empty() &&
+        artistImgTex_ == kInvalidTexture)
+        requestArtistImage(artistImgRequestPath_, artistImageTargetSize());
+
     markDirty();
     return true;
 }
@@ -7860,7 +9208,7 @@ bool PlayerWindow::onSurfaceRecreated() {
 // ── Headless UI capture (tools/ui_capture) ───────────────────────────────────
 //
 // Compiled only into the capture tool. Everything here drives the app through
-// its ORDINARY entry points — the same onLButtonDown() the Wayland backend
+// its ORDINARY entry points — the same press/release pair the Wayland backend
 // calls, the same drawFrame() run() calls — so a capture is a photograph of the
 // app, not a re-staging of it. The one thing being a member buys is access to
 // the rects recalcLayout() already computed; a tool that hardcoded sidebar
@@ -7909,7 +9257,11 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
     auto click = [&](const LayoutRect& r) {
         int x, y; centerOf(r, x, y);
         onMouseMove(x, y);       // hover first — the real pointer always does
+        // Press AND release, because the action fires on the release now (see
+        // onLButtonDown). A capture that only pressed would photograph the
+        // screen it started on.
         onLButtonDown(x, y);
+        onLButtonUp(x, y);
     };
     // A playlist tile lives on the album grid's geometry and is only a rect
     // while it draws, so there is nothing stored to click — the same math the
@@ -7923,6 +9275,7 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
                 + gridArtSize_ / 2;
         onMouseMove(x, y);
         onLButtonDown(x, y);
+        onLButtonUp(x, y);
     };
     auto reset = [&] {
         activePanel_    = SettingsPanel::None;
@@ -8112,6 +9465,33 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
     // The AutoEQ switcher unfurled. Reached the way a listener reaches it —
     // by clicking the box's name — so the capture exercises the real toggle
     // and the real row layout, not a flag set from outside.
+    // Bar B's left label, which is otherwise never drawn by a capture: nothing
+    // plays in a screenshot session (RequestPlay is swallowed on purpose), so
+    // currentAlbum_ stays -1 and the label renders as an em dash. Pinning the
+    // pair here is what puts "ALBUM · D2 · 7" on screen, and it is the only way
+    // the fit ladder is visible to a diff at all.
+    //
+    // A DOUBLE album on its second disc, chosen by search rather than by index
+    // so it keeps working if the fixture is reordered — that is the longest
+    // form the label can take, and the one that used to run out under the Prev
+    // button.
+    if (state == "44-transport-ordinal") {
+        click(rcNavAlbum_);
+        int found = -1, trk = 0;
+        for (size_t a = 0; a < albums_.size() && found < 0; a++) {
+            int maxDisc = 0;
+            for (const Track& t : albums_[a].tracks)
+                maxDisc = std::max(maxDisc, t.discNumber);
+            if (maxDisc < 2) continue;
+            for (size_t t = 0; t < albums_[a].tracks.size(); t++)
+                if (albums_[a].tracks[t].discNumber == 2) { found = (int)a; trk = (int)t; break; }
+        }
+        if (found < 0) return false;
+        currentAlbum_ = displayAlbum_ = found;
+        currentTrack_ = displayTrack_ = trk;
+        return true;
+    }
+
     if (state == "43-autoeq-unfurled") {
         // States run in sequence and the search ones come first, so this has to
         // put the bar back: with search open there IS no AutoEQ box (see
@@ -8128,5 +9508,113 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
     }
 
     return false;
+}
+
+// See the header for why this exists and why it is generated rather than read.
+// Deterministic by construction: no clock, no RNG, no filesystem — the same
+// binary produces byte-identical PNGs on two runs, which is the property the
+// whole before/after diff rests on.
+void PlayerWindow::captureLoadFixture(int albumCount) {
+    // Five scripts. The Latin ones sort first (byte order), so the three
+    // non-Latin families land at the tail of the grid — where the multiscript
+    // states go looking, and where a missing fallback face shows up as blank
+    // rows rather than as wrong-looking ones.
+    static const char* kArtists[] = {
+        "Arvo Part", "Bohren & der Club of Gore", "Colleen", "Deathprod",
+        "Eluvium", "Fennesz", "Grouper", "Hania Rani", "Ital Tek",
+        "Jon Hopkins", "Kali Malone", "Loscil", "Max Richter", "Nils Frahm",
+        "Olafur Arnalds", "Penguin Cafe", "Rival Consoles", "Stars of the Lid",
+        "Tim Hecker", "William Basinski",
+        "Владимир Мартынов", "Ольга Бочихина",
+        "坂本龍一", "細野晴臣",
+        "김목인", "정재일",
+    };
+    static const char* kTitles[] = {
+        "Tabula Rasa",
+        "A Winged Victory for the Sullen and the Long Road Home",
+        "Music for Nine Post Cards",
+        "The Disintegration Loops IV",
+        "An Empty Bliss Beyond This World",
+        "Selected Ambient Works Volume II (Expanded Edition)",
+        "Ravedeath, 1972",
+        "Everywhere at the End of Time — Stage Six",
+        "Immunity",
+        "Spaces",
+        "Живые и мёртвые",
+        "音楽図鑑",
+        "지금, 여기",
+    };
+    // Every ReleaseType, so 10-grid-albums through 15-grid-remixes all draw
+    // something instead of five of them reporting themselves unreachable.
+    static const Album::ReleaseType kTypes[] = {
+        Album::ReleaseType::Album,       Album::ReleaseType::Album,
+        Album::ReleaseType::Album,       Album::ReleaseType::Ep,
+        Album::ReleaseType::Single,      Album::ReleaseType::Remix,
+        Album::ReleaseType::Compilation, Album::ReleaseType::Live,
+    };
+    static const char* kQuality[] = { "", "16-44", "24-48", "24-96", "24-192" };
+
+    const int nArtists = (int)(sizeof(kArtists) / sizeof(*kArtists));
+    const int nTitles  = (int)(sizeof(kTitles)  / sizeof(*kTitles));
+    const int nTypes   = (int)(sizeof(kTypes)   / sizeof(*kTypes));
+    const int nQuality = (int)(sizeof(kQuality) / sizeof(*kQuality));
+
+    std::vector<Album> fx;
+    fx.reserve((size_t)std::max(0, albumCount));
+    for (int i = 0; i < albumCount; i++) {
+        Album a;
+        a.artist      = kArtists[i % nArtists];
+        a.displayName = kTitles[(i * 7 + i / nTitles) % nTitles];
+        // Distinct raw names: `name` is the join key and the dedup key, so
+        // reusing one would collapse the fixture down to a handful of albums
+        // and quietly shrink the grid this is meant to fill.
+        a.quality     = kQuality[i % nQuality];
+        a.name        = a.displayName + (a.quality.empty()
+                                         ? std::string()
+                                         : " (" + a.quality + ")")
+                      + " #" + std::to_string(i);
+        a.mode        = "album";
+        a.releaseType = kTypes[i % nTypes];
+        a.avgSampleRate = (i % 3 == 0) ? 96000 : 44100;
+
+        const int nTracks = 6 + (i % 7);
+        for (int t = 0; t < nTracks; t++) {
+            Track tr;
+            tr.title       = kTitles[(i + t * 3) % nTitles];
+            tr.artist      = a.artist;
+            tr.albumArtist = a.artist;
+            tr.album       = a.name;
+            tr.filePath    = "/fixture/" + a.name + "/" +
+                             std::to_string(t + 1) + ".flac";
+            tr.trackNumber = t + 1;
+            // Every fifth record is a DOUBLE, because the transport label's
+            // longest form only exists on one: the "D2 · " prefix appears only
+            // when an album actually has a second disc, and that is the form
+            // that overran the bar. A fixture without one cannot photograph
+            // the case the ladder was built for.
+            if (i % 5 == 0) tr.discNumber = (t < nTracks / 2) ? 1 : 2;
+            tr.durationMs  = 180000 + (i * 1000 + t * 7919) % 420000;
+            tr.sampleRate  = a.avgSampleRate;
+            tr.channels    = 2;
+            tr.bitDepth    = (i % 3 == 0) ? 24 : 16;
+            tr.year        = 1994 + (i % 31);
+            tr.genre       = "Ambient";
+            tr.trackKey    = tr.album + "|" + tr.title;
+            a.tracks.push_back(std::move(tr));
+        }
+        a.sortTracks();
+        fx.push_back(std::move(a));
+    }
+
+    { std::lock_guard<std::mutex> lk(albumsMu_); albums_ = std::move(fx); }
+
+    // The same settle sequence onScanDone() runs, minus the DB writes — a
+    // capture must never persist its fixture over the real library.
+    clearGridArtTexCache();
+    refreshGlyphs();          // the CJK/Cyrillic rows need faces baked for them
+    rebuildAlbumGroups();     // must precede rebuildGridIndices — it feeds it
+    rebuildGridIndices();
+    markSearchEmptyDirty();
+    recalcLayout();
 }
 #endif  // MATRIX_UI_CAPTURE

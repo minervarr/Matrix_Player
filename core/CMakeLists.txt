@@ -110,6 +110,23 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         target_compile_options(facets_test PRIVATE -Wall)
     endif()
 
+    # ── streamer_db_test ───────────────────────────────────────────────────
+    # WHERE the external downloader's library.db is looked for, relative to a
+    # music root. Only the pure half of streamer_db.cpp is exercised —
+    # streamerSearchPath() touches no filesystem — so the three real layouts
+    # (root above the library, root == the library, root below it) can be
+    # asserted with no fixture and no downloader installed. sqlite3 is linked
+    # because the translation unit includes it for the reader alongside; the
+    # test itself opens nothing.
+    add_executable(streamer_db_test tests/streamer_db_test.cc src/streamer_db.cpp)
+    target_include_directories(streamer_db_test PRIVATE include ${CMAKE_SOURCE_DIR}/third_party)
+    target_link_libraries(streamer_db_test PRIVATE sqlite3)
+    if(MSVC)
+        target_compile_options(streamer_db_test PRIVATE /W3 /utf-8)
+    else()
+        target_compile_options(streamer_db_test PRIVATE -Wall)
+    endif()
+
     # ── matrix_fixture_gen ────────────────────────────────────────────────
     # Writes a small, fixed synthetic music library (real sine-tone WAVs, a
     # real folder layout) to disk so the GUI's Album/EP/Single/Compilation/

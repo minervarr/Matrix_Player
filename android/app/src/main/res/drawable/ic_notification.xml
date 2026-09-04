@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The status-bar mark. Android renders a small icon as a SILHOUETTE - only
+     the alpha channel survives - so this is a square ring cut with evenOdd
+     rather than anything that relies on colour. A square because that is the
+     app's shape language (UI_DESIGN_SYSTEM: square corners everywhere). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="36"
+    android:viewportHeight="36">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M7,7h22v22h-22z M12,12v12h12v-12z" />
+</vector>

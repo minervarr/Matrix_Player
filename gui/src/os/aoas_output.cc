@@ -38,7 +38,7 @@ namespace {
 android_app* g_app = nullptr;
 
 jclass    g_cls = nullptr;   // io.nava.matrixplayer.AoasClient, global ref
-jmethodID mBind, mIsBound, mAcquire, mRelease, mActiveFormat, mPendingMs,
+jmethodID mBind, mIsBound, mAcquire, mRelease, mFlush, mActiveFormat, mPendingMs,
           mDeviceInfo;
 
 // --- down-call state (Java writes, C++ reads) --------------------------------
@@ -131,6 +131,7 @@ bool ensureClient() {
     AOAS_METHOD(mIsBound,      "isBound",            "()Z");
     AOAS_METHOD(mAcquire,      "acquire",            "(IIII)I");
     AOAS_METHOD(mRelease,      "release",            "()V");
+    AOAS_METHOD(mFlush,        "flush",              "()Z");
     AOAS_METHOD(mActiveFormat, "activeFormat",       "()[I");
     AOAS_METHOD(mPendingMs,    "pendingPlaybackMs",  "()I");
     AOAS_METHOD(mDeviceInfo,   "deviceInfo",         "()Ljava/lang/String;");
@@ -397,7 +398,15 @@ bool AoasOutput::start() {
     return acquireOwned(reqRate_, reqCh_, reqBits_);
 }
 
-void AoasOutput::stop() { releaseOwned(); }
+void AoasOutput::stop() {
+    // Flush BEFORE releasing, and the order is the whole point: release() frees
+    // the DAC but leaves the driver's three-second ring playing, so on its own
+    // it makes Stop look ignored. Flushing first is what makes the silence
+    // immediate; releasing after is what hands the device back to whoever wants
+    // it next, instead of holding it idle.
+    flush();
+    releaseOwned();
+}
 
 void AoasOutput::close() {
     // Keep the service bound for the process lifetime: rebinding costs
@@ -406,14 +415,29 @@ void AoasOutput::close() {
 }
 
 void AoasOutput::flush() {
-    // The producer may not move readPos — the consumer's index belongs to
-    // AOAS — so buffered audio cannot be discarded from this side. release()
-    // clears the ring server-side; an immediate re-acquire of the SAME format
-    // leaves the isochronous stream untouched. This is the silent self-
-    // handover the AIDL doc describes, used as a flush — and it is what
-    // PlayerWindow calls at a manual Next and on seek, where the USB path
-    // clears its own ring.
-    if (owned_) acquireOwned(cfgRate_, cfgCh_, cfgBits_);
+    // The producer still may not move readPos — that index belongs to AOAS —
+    // so the discard has to happen server-side. It is now ONE call.
+    //
+    // This used to be release() → acquire(): a self-handover standing in for a
+    // flush, because IAoas had no verb that meant "discard". It cost four
+    // Binder round trips, a fresh ASharedMemory region, an munmap/mmap pair and
+    // a format re-verify — and it did not even do the job, because the server's
+    // endOwnershipLocked() never touched the DRIVER's ring, which is three
+    // seconds deep. Stop and Next were late by that buffer.
+    //
+    // IAoas.flush() is synchronous, so when this returns the audio is really
+    // gone and the caller may start writing the next track at once. The
+    // mapping and the ownership are untouched, which is why no RingTouch drain
+    // is needed here the way releaseOwned() needs one.
+    if (!owned_) return;
+    JNIEnv* env = (g_cls && g_app) ? vce::platform::jni::env_for(g_app) : nullptr;
+    if (!env) return;
+    const jboolean ok = env->CallStaticBooleanMethod(g_cls, mFlush);
+    if (vce::platform::jni::check_exc(env, "aoas flush") || !ok) {
+        // Not fatal: the tail plays on, which is what happened before this
+        // call existed. Worth a line because it means Stop looked ignored.
+        LOGW("AOAS: flush refused — buffered audio will still play out");
+    }
 }
 
 // ── Writes ───────────────────────────────────────────────────────────────────

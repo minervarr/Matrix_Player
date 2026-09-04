@@ -75,15 +75,35 @@ matrix_player/
                                  sqlite, no Canvas, no OS; facets_test links this TU alone,
                                  and Android consumes the same code. Keep it that way
     include/core/streamer_db.h — read-only reader for a FOREIGN database:
-    src/streamer_db.cpp          <music root>/.streamer/library.db (or its sibling one
-                                 level up), belonging to an external Qobuz-style download
-                                 tool. Artist bios/photos and extra album metadata come
-                                 from it, keyed by Album::name (== that DB's albums.id ==
-                                 the folder name). Never written, never migrated, never
-                                 merged into Db's schema, and "no match" is the expected
-                                 common case rather than an error — most libraries have no
-                                 such folder at all. PlayerWindow keeps one per music root
-                                 (streamerDbs_), since only some roots have one
+    src/streamer_db.cpp          <download_dir>/.streamer/library.db, belonging to an
+                                 external Qobuz-style download tool. Artist bios/photos
+                                 and extra album metadata come from it, keyed by
+                                 Album::name (== that DB's albums.id == the folder name).
+                                 Never written, never migrated, never merged into Db's
+                                 schema, and "no match" is the expected common case rather
+                                 than an error — most libraries have no such folder at all.
+                                 <download_dir> IS NOT ASSUMED TO BE A MUSIC ROOT, and
+                                 that is the whole design: the downloader states where the
+                                 file sits relative to ITS OWN tree, and where that tree
+                                 sits under a music root is the listener's filing. This
+                                 used to probe two fixed depths (<root>/.streamer and
+                                 <root>/../.streamer) — which is a guess, and on Android it
+                                 guessed wrong in the one direction it never looked: the
+                                 downloader writes <external>/Music/streamer while the app
+                                 is seeded with <external>/Music, so EVERY artist bio and
+                                 photo was silently missing on the phone while album
+                                 descriptions (a sidecar inside the album folder) kept
+                                 working and made the page look merely sparse. So the
+                                 depth is not assumed: streamerSearchPath() walks UP from
+                                 the ALBUM's folder to one level above the music root —
+                                 pure path arithmetic, no filesystem, asserted in
+                                 core/tests/streamer_db_test.cc for all three real layouts
+                                 — and openAt() opens an already-resolved directory with
+                                 no probing of its own. PlayerWindow caches one per
+                                 DOWNLOADER root (streamerDbs_, keyed by the directory
+                                 holding .streamer, NOT by the music root), opened lazily
+                                 on the first album view inside it. UI thread only — see
+                                 the comment on streamerDbs_ before reaching it elsewhere
     include/core/stats.h       — listening-analytics vocabulary: StartCause/EndCause,
                                  the aggregate result types (Totals, TopEntry,
                                  HourBucket, DayBucket, PlayEvent, SessionStats) and
@@ -121,6 +141,13 @@ matrix_player/
                                  DISABLED, and which chip an empty result blames.
                                  Links src/facets.cpp and NOTHING else — not even
                                  variants.cpp
+    tests/streamer_db_test.cc  — WHERE the foreign library.db is looked for: the
+                                 three real layouts (root above the downloader
+                                 library — the phone; root == it — this desktop;
+                                 root below it), nearest-first ordering, and the
+                                 refusal to climb when the root is not an ancestor.
+                                 Pure: streamerSearchPath() opens nothing, so this
+                                 needs no fixture and no downloader installed
     CMakeLists.txt             — builds matrix_core (STATIC), links ae_core + sqlite3
   gui/
     src/
@@ -434,7 +461,7 @@ exactly how it went unnoticed until an MP3 misnamed `.flac` surfaced it on a
 phone. The generated `config.h` for both linux and android IS committed; only
 the sources are fetched.
 
-**Tests**: there is no ctest/gtest framework, but there are eight assert-based
+**Tests**: there is no ctest/gtest framework, but there are nine assert-based
 pure-logic test executables, built **Debug-only** (see the bottom of
 `gui/CMakeLists.txt` and of `core/CMakeLists.txt`) and run directly. Convention
 matches `framework/vk_canvas/core/tests/*.cc`: plain `assert()`, `#undef NDEBUG`
@@ -451,6 +478,7 @@ scripts/linux/build.sh --debug
 ./build/linux_debug/core/variants_test     # album-variant grouping, edition terms, trackKey()
 ./build/linux_debug/core/stats_test        # listening log, aggregate queries, schema migration
 ./build/linux_debug/core/facets_test       # guided search: suggestions, counts, empty reasons
+./build/linux_debug/core/streamer_db_test  # where the foreign .streamer/library.db is looked for
 ```
 
 Keep them pure. `ui_icons.cc` is deliberately split from `ui_icons_draw.cc`
@@ -835,12 +863,67 @@ libusb/libusbK); this app wires it into `PlayerWindow::onPlay()` via the
 | Windows | WASAPI (shared/exclusive) | `gui/src/wasapi_output.hh/.cc` |
 | Linux | ALSA (system default device) | `gui/src/os/alsa_output.hh/.cc` — wraps `AlsaSink` |
 | Linux | JACK (auto-connects to physical outputs) | `gui/src/os/jack_output.hh/.cc` — wraps `JackSink` |
+| Linux | Bluetooth A2DP (our own BlueZ endpoint) | `gui/src/os/bt_output.hh/.cc` — wraps `ae::BluetoothSink` |
 
-ALSA/JACK are only compiled in when `audio_engine`'s own CMake found their dev
-headers (`ae_alsa`/`ae_jack` targets exist) — `gui/CMakeLists.txt` checks
-`if(TARGET ae_alsa)` and defines `MATRIX_HAVE_ALSA`/`MATRIX_HAVE_JACK`
-accordingly, so the Audio Settings panel only ever offers backends this build
-actually has.
+ALSA/JACK/Bluetooth are only compiled in when `audio_engine`'s own CMake found
+their dev headers (`ae_alsa`/`ae_jack`/`ae_bluetooth` targets exist) —
+`gui/CMakeLists.txt` checks `if(TARGET ae_alsa)` and defines
+`MATRIX_HAVE_ALSA`/`MATRIX_HAVE_JACK`/`MATRIX_HAVE_BLUETOOTH` accordingly, so
+the Audio Settings panel only ever offers backends this build actually has.
+
+### Bluetooth A2DP on Linux (`AudioBackend::Bluetooth`)
+
+We register **our own** `org.bluez.MediaEndpoint1` as an A2DP source, negotiate
+SBC ourselves, encode in-process with libsbc, and write RTP packets to the
+AVDTP socket. Not a client of PipeWire's A2DP — the same move the USB backend
+makes against the OS mixer, for the same reason: a sound server's codec switch
+means the samples reach the radio through its resampler, its mixer and its
+volume stage.
+
+The engine half is `framework/audio_engine/backends/bluetooth/`, in four files
+that each do one thing: `a2dp_sbc` negotiates (PURE, and `a2dp_sbc_test` links
+it alone against capability bytes read off real hardware), `sbc_encoder` wraps
+libsbc, `bluez_a2dp` reads what BlueZ knows, `bluez_endpoint` owns the object
+and the socket, and `bluetooth_sink` is where they meet.
+
+Five things here are load-bearing:
+
+1. **One transport per device, and its owner is whoever registered the endpoint
+   BlueZ configured.** On an ordinary desktop PipeWire takes the headphones the
+   moment they connect, and then this backend cannot have them. That is
+   reported in words — the device list marks the row *in use by another app*,
+   and `lastError()` names PipeWire — rather than discovered as silence.
+   Releasing it is `pactl set-card-profile bluez_card.XX_XX_… off`.
+2. **`Acquire()` must go out on the connection that registered the endpoint.**
+   BlueZ authorises the transport by the registrant's unique name. That is why
+   `bluez_endpoint.cpp` pumps the bus with `poll()` under a mutex instead of the
+   one-line `sd_bus_wait()`: the loop has to be able to give the connection up.
+3. **`SelectConfiguration` is only asked during profile connect**, so changing
+   the rate means `DisconnectProfile` + `ConnectProfile`
+   (`BluetoothSink::negotiate`). It deliberately does NOT do that when the
+   current configuration already matches — otherwise every track boundary in an
+   album at one rate would drop the stream.
+4. **The pacing is ours and it lives on the decode thread.** An A2DP socket has
+   no clock, so `write()` sleeps to stay `kBufferAheadMs` (120 ms) ahead and no
+   further — the same trade `AlsaSink`'s blocking `snd_pcm_writei` makes, and
+   the reason there is no writer thread and no second ring to get wrong on
+   `flush()`. 120 ms is also the whole worst case for a Stop, which is why it is
+   not 500.
+5. **This is the one output that cannot be bit-perfect, and it says so three
+   times.** `strictBitperfect` is refused outright, `getConfiguredBits()`
+   answers 16 (SBC's input is S16), and `wireFormat()` names the codec and the
+   bitpool. The signal chain therefore reports the truncation and the encode
+   instead of drawing a chain that stops at the socket.
+
+`getActiveDeviceKey()` returns `a2dp:<MAC>` here, the **same key the Android
+side produces**, so one AutoEQ profile follows a pair of headphones across the
+phone and the desktop.
+
+Bring-up tools, both Debug-only and both needing real hardware:
+`list_bluetooth_sinks` (what BlueZ knows and what we would negotiate) and
+`play_wav_to_bluetooth <MAC|name> <in.wav>` (a 16-bit WAV, encoded and streamed
+by us). LDAC (`libldacBT_enc`) and aptX (`libfreeaptx`) slot in beside
+`a2dp_sbc` behind the same two functions and are not built yet.
 
 Three things about switching between them are load-bearing:
 

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The window the SYSTEM draws before this app draws anything.
+         This is why the app used to flash black.
+
+         The activity declared no theme at all, so a themeless NativeActivity
+         got the platform default window background — opaque black — and the
+         compositor showed it from the moment the window existed until the
+         first vkQueuePresentKHR. On a return from the notification that gap is
+         the full Vulkan surface bring-up, measured at ~333 ms on a moto g06,
+         and on a cold start it also covers the font bake. None of that black
+         was ours; we simply never said what colour the window should be.
+
+         Saying it costs nothing and cannot fail: it is a system-drawn colour,
+         not a splash screen, not a drawable to keep in sync with a design, and
+         it is on screen for exactly as long as we are not yet drawing. The
+         real fix for the DURATION is keeping the Vulkan device alive across
+         surface loss; this is the fix for it being BLACK, and the two are
+         independent — either is worth having without the other.
+
+         Fullscreen parent because the app runs immersive anyway
+         (enable_immersive() in android_host.cc). Matching the status and
+         navigation bar colours stops them flashing their own default while the
+         bars are still on their way out. -->
+    <style name="MatrixPlayerTheme" parent="@android:style/Theme.Material.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">@color/matrix_bg</item>
+        <item name="android:statusBarColor">@color/matrix_bg</item>
+        <item name="android:navigationBarColor">@color/matrix_bg</item>
+    </style>
+</resources>

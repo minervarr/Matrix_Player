@@ -134,6 +134,28 @@ public final class AoasClient {
         try { aoas.release(); } catch (RemoteException ignored) {}
     }
 
+    /**
+     * Discard everything buffered between us and the DAC, keeping ownership and
+     * the isochronous stream. This is what Stop and Next mean; it returns only
+     * once the server has really done it, so the caller may start writing the
+     * next track the moment it comes back.
+     *
+     * @return false if the service is not bound or the call did not go through,
+     *         so the caller can fall back rather than assume silence it did not
+     *         get. A SecurityException means we are not the owner any more,
+     *         which is a lost race with onOwnershipLost, not a fault.
+     */
+    public static boolean flush() {
+        IAoas aoas = sAoas;
+        if (aoas == null) return false;
+        try {
+            aoas.flush();
+            return true;
+        } catch (RemoteException | SecurityException e) {
+            return false;
+        }
+    }
+
     /** {rate, channels, bitDepth, subslotBytes}, empty when nothing is configured. */
     public static int[] activeFormat() {
         IAoas aoas = sAoas;

@@ -203,6 +203,18 @@ void parseAlbumFolder(const std::string& folderPath,
         album.country = parts[0];
 }
 
+// Declared in core/library.h — the ALBUM-tag preference, in ONE place,
+// because the scan and the DB restore both need it and must not drift.
+void applyMetaAlbumName(Album& album) {
+    std::string metaAlbum;
+    for (const Track& t : album.tracks) {
+        if (t.album.empty()) continue;
+        if (metaAlbum.empty()) metaAlbum = t.album;
+        else if (metaAlbum != t.album) { metaAlbum.clear(); break; }
+    }
+    if (!metaAlbum.empty()) album.displayName = metaAlbum;
+}
+
 // Shared tail of every scan flavor: fold the per-folder track lists into
 // sorted Album entries. Was duplicated inline across scanLibrary /
 // scanLibraryIncremental / scanLibraryParallel.
@@ -218,18 +230,7 @@ static std::vector<Album> buildAlbums(
         album.artPath = resolveArtPath(folder);
         album.artist = deriveAlbumArtist(album.tracks);
         parseAlbumFolder(folder, rootPath, album);
-        // Prefer the ALBUM tag over the folder-derived name whenever the
-        // tracks agree on one: folder names in this library carry encoding
-        // damage (mangled UTF-8, substituted characters) that the embedded
-        // metadata doesn't have. The folder name stays in `name` as the
-        // stable key; only the display string switches.
-        std::string metaAlbum;
-        for (auto& t : album.tracks) {
-            if (t.album.empty()) continue;
-            if (metaAlbum.empty()) metaAlbum = t.album;
-            else if (metaAlbum != t.album) { metaAlbum.clear(); break; }
-        }
-        if (!metaAlbum.empty()) album.displayName = metaAlbum;
+        applyMetaAlbumName(album);   // see its comment: two callers, one rule
         album.releaseType = classifyReleaseType(album.displayName, album.tracks);
         computeAlbumQualityStats(album.tracks, album.avgSampleRate, album.hasDsd);
 

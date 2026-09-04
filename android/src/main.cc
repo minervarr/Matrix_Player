@@ -7,6 +7,8 @@
 #include "android_host.hh"  // app_shell: the third Host
 #include "player_view.hh"
 #include "os/aoas_output.hh"  // AOAS relay backend: hands over the android_app for JNI
+#include "os/media_session_android.hh"  // foreground service + MediaSession: same
+#include "os/bt_codec_android.hh"       // A2DP codec control: same
 
 #define LOG_TAG "MatrixMain"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -36,6 +38,10 @@ void android_main(android_app* state) {
     // The AOAS relay backend's JNI upcalls need the activity (its classloader
     // and its bindService). Available from the first line of android_main.
     matrixAoasSetApp(state);
+    // Same reason, same moment: the foreground service and the MediaSession are
+    // reached by JNI upcalls that need the activity's classloader.
+    matrixMediaSessionSetApp(state);
+    matrixBtCodecSetApp(state);
     try {
         PlayerWindow win;
 

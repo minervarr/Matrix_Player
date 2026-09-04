@@ -6,6 +6,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <unordered_map>
+#include <set>
 #include <deque>
 #include <cstdint>
 #include <memory>
@@ -20,6 +21,7 @@
 #include "ui_orientation.hh"
 #include "rail_layout.hh"
 #include "bar_a.hh"
+#include "img_decode.hh"
 #ifdef _WIN32
 #include "wasapi_output.hh"
 #else
@@ -34,6 +36,9 @@
 #endif
 #ifdef MATRIX_HAVE_AOAS
 #include "os/aoas_output.hh"
+#endif
+#ifdef MATRIX_HAVE_BLUETOOTH
+#include "os/bt_output.hh"
 #endif
 #endif
 #include "core/eq_profiles.h"
@@ -51,6 +56,14 @@
 #include "raster_font.hh"
 #include "glyph_baker.hh"
 #include "theme.hh"
+// The OS's own transport (Android's foreground service + MediaSession; nothing
+// on the desktops). Declared here because nowPlayingForOs() returns one of its
+// types; the seam itself is platform-free.
+#include "media_session.hh"
+// The Bluetooth A2DP codec. Not an AudioOutput and not in the audio path — a
+// property of the OUTPUT ROUTE, which is why it sits beside the per-device EQ
+// assignment rather than beside a backend. See bt_codec.hh.
+#include "bt_codec.hh"
 #include "ui_metrics.hh"
 #include "panels/settings_panels.hh"
 
@@ -80,7 +93,10 @@ static constexpr float kMinWindowContentH = kUiReferenceHeight;
 // gui/src/os/aoas_output.hh and docs/superpowers/specs/2026-08-28-aoas-client-backend.md.
 // Append-only: this value is persisted indirectly (db "audio_backend" stores a
 // name, not an ordinal), but every switch below is written against the set.
-enum class AudioBackend { Usb, Wasapi, Alsa, Jack, AAudio, Aoas };
+// Appended, never reordered: getBackendKey() writes one of these to the
+// database by NAME, but the settings panel's option list is indexed by
+// position and a reorder would silently move a listener's saved choice.
+enum class AudioBackend { Usb, Wasapi, Alsa, Jack, AAudio, Aoas, Bluetooth };
 
 // ── The app's own host vocabularies ──────────────────────────────────────────
 //
@@ -90,7 +106,20 @@ enum class AudioBackend { Usb, Wasapi, Alsa, Jack, AAudio, Aoas };
 
 // Cross-thread completions our background threads (art-decode worker,
 // background scan thread, gapless coordinator) need serviced on the UI thread.
-enum class AppEvent { TrackChange, ScanDone, ArtDecoded, RequestPlay };
+// The three Request* values below RequestPlay are the OS's transport asking for
+// something — a notification button, a headset, a Bluetooth remote, or a lost
+// audio focus. They arrive on the platform's thread and are posted here so the
+// APP thread answers them, through the same onPlay/onStop/onNext/onPrev the
+// on-screen buttons call. Appended, never reordered: these travel through
+// Host::postAppEvent as plain integers.
+enum class AppEvent { TrackChange, ScanDone, ArtDecoded, RequestPlay,
+                      RequestStop, RequestNext, RequestPrev,
+                      // A Bluetooth sink connected, went away, or finished
+                      // negotiating a codec. Carries no payload: the details
+                      // are read from bt_codec on the app thread, because a
+                      // MAC does not fit in an intptr_t and the answer may have
+                      // moved on by the time this is drained anyway.
+                      BtRouteChanged };
 
 // The single repeating timer this app asks for: playback position updates.
 enum class TimerId { SeekUpdate };
@@ -120,6 +149,28 @@ public:
     // Draws exactly one frame and reads the swapchain image back as
     // tightly-packed RGBA8 (Renderer::readbackLastFrame).
     bool captureFrame(std::vector<uint8_t>& rgba, uint32_t& w, uint32_t& h);
+
+    // Replaces the library with a deterministic synthetic one, so a capture
+    // run says something on a machine with no music on it.
+    //
+    // This exists because a capture of an EMPTY grid proves nothing: five of
+    // the states already report themselves unreachable, and — worse for a
+    // before/after diff — the per-tile text layout (truncateToWidth /
+    // splitTwoLines) never runs at all, so a diff of those PNGs would happily
+    // call a broken text change identical.
+    //
+    // Generated in code rather than read from a file: a fixture that can drift
+    // from the tool that consumes it is a fixture that will. Every string here
+    // is chosen to exercise something — titles long enough to wrap and then
+    // truncate, "(24-96)"-style quality suffixes, every ReleaseType so the six
+    // grid states are populated, and Han/Hangul/Cyrillic records that sort to
+    // the END of a Latin-first list, which is exactly where 17-grid-multiscript
+    // scrolls to and where the fallback faces are the only thing that can draw.
+    //
+    // MUST be called AFTER the background scan has reported in: onScanDone()
+    // replaces albums_ wholesale, and a scan that found nothing (no music
+    // roots on this machine) would wipe the fixture right back out.
+    void captureLoadFixture(int albumCount = 240);
 #endif
 
     // Host callbacks — the AppView implementation. Public because Host (a
@@ -154,12 +205,39 @@ public:
     // Rebuilds everything the above released, against the host's NEW surface.
     // Returns false if the Renderer could not be created, in which case the
     // caller must not draw.
+    //
+    // Two paths, and the fast one is the normal one: if the device survived
+    // (surfaceOnly_), only the VkSurfaceKHR and its swapchain are rebuilt and
+    // every pipeline, the glyph atlas and every album-art texture stay put.
+    // The full Vulkan bring-up is the fallback, taken only when the new
+    // surface's format is incompatible with pipelines already built.
     bool onSurfaceRecreated() override;
+
+private:
+    // Set by onSurfaceLost(), cleared by onSurfaceRecreated(). "The window went
+    // away but the device did not" — the ordinary Android background/foreground
+    // cycle. Not a general Renderer state: nothing else may read it, because
+    // between those two calls there is no surface to draw to and run() is
+    // already gated on the host not pumping a frame.
+    bool surfaceOnly_ = false;
+    // The pre-existing full teardown, kept whole as the fallback rather than
+    // re-derived. See its definition.
+    void destroyRendererForSurfaceLoss();
+public:
 
     // Mouse — dispatched from Host's input translation.
     void onMouseMove(int x, int y) override;
     void onMouseLeave() override;
+    // A press ARMS a click; it never performs one. Every action in this window
+    // fires from onLButtonUp instead, and the reason is the phone: the host
+    // reports a press the moment the finger touches the glass, so acting there
+    // meant that starting a scroll on an album tile opened that album under
+    // the finger — and the drag that followed then scrolled the album view
+    // that had just appeared. Nothing in this app is a press-and-drag control
+    // (there is no scrubber and no slider), so nothing needs the down edge,
+    // and firing on release is what every desktop toolkit does anyway.
     void onLButtonDown(int x, int y) override;
+    void onLButtonUp(int x, int y) override;
     void onLButtonDblClk(int x, int y) override;
     void onMouseWheel(int x, int y, int delta) override;
     // A DRAG that has ended: the pointer (or the finger) travelled dx,dy with
@@ -181,6 +259,18 @@ public:
     // this block is: Host dispatches straight into them.
     void onNavBack() override;
     void onNavForward() override;
+
+private:
+    // The armed click: where the press landed, and whether it is still a click
+    // at all. Disarmed by any scroll (on a touch screen the wheel IS the drag)
+    // and by onDragEnd, so a stroke that turned into a gesture never activates
+    // whatever it happened to start on. handleClick() is the body that used to
+    // be onLButtonDown's.
+    void handleClick(int x, int y);
+    int  pressX_ = 0, pressY_ = 0;
+    bool pressArmed_ = false;
+
+public:
 
     // Periodic playback-position tick, see host_->startTimer(). The id is
     // TimerId::SeekUpdate and is not read: this app asks for one timer.
@@ -224,8 +314,12 @@ private:
     void onManageFolders();
     void onAudioSettings();
     // Decodes an artist photo at its on-screen size, mip-free — see the
-    // comment on the definition for why both halves matter.
-    TextureHandle loadArtistImageTexture(const std::string& path);
+    // comment on the definition for why both halves matter. The async path
+    // (requestArtistImage) is the normal one; the sync decode is only the
+    // fallback when no worker is available.
+    int artistImageTargetSize() const;
+    void requestArtistImage(const std::string& path, int targetSize);
+    void ensureArtDecodeThreads();
     void prepareNextTrack();
     // The album that plays after / before `album`: the next one of the SAME
     // release type, which is the next tile in the section on screen —
@@ -375,13 +469,18 @@ private:
     // Full-page album view (replaces the old right-side track panel):
     // openAlbumView() flips into it and loads everything it shows;
     // loadAlbumViewContent() resolves artist bio + artist image, preferring
-    // a sibling .streamer/library.db (see streamerDbs_/rootForPath()) keyed
-    // by the album's folder name, and falling back to the legacy sidecar-
-    // file convention (bio.* + an image loose in the artist's own folder,
-    // one level above the album folder) when no such database is found.
+    // a .streamer/library.db found by walking UP from the album's own folder
+    // (see streamerDbForAlbumDir()) and keyed by the album's folder name, and
+    // falling back to the legacy sidecar-file convention (bio.* + an image
+    // loose in the artist's own folder, one level above the album folder)
+    // when no such database is found.
     void openAlbumView(int albumIdx);
     void loadAlbumViewContent(int albumIdx);
-    std::string rootForPath(const std::string& path) const;
+
+    // The downloader library that owns `albumDir`, or nullptr when that album
+    // is not inside one. Resolves on first use and caches; see streamerDbs_.
+    // std::string rather than a path, to keep <filesystem> out of this header.
+    StreamerDb* streamerDbForAlbumDir(const std::string& albumDir) const;
 
     // Bake every codepoint the app can draw, at every size it draws them at,
     // and push the grown atlas to the GPU. Idempotent — cells already present
@@ -470,7 +569,7 @@ private:
     LayoutRect rcDspBadge_       = {};
     LayoutRect rcTransportClock_ = {};
     // Non-modal bitperfect-mismatch warning strip, drawn above the transport
-    // bar when audioNotice_ is non-empty. See draw()/onLButtonDown().
+    // bar when audioNotice_ is non-empty. See draw()/handleClick().
     LayoutRect rcAudioNotice_ = {};
 
     // Sidebar items
@@ -525,12 +624,44 @@ private:
     int  asDeviceScrollY_ = 0;
     LayoutRect asDeviceListArea_ = {};
     std::vector<widgets::ListRow> asDeviceListRows_;  // cached during draw, read by hit-test
+    // ── Bluetooth codec, inside the Audio Settings panel ────────────────────
+    // It lives HERE, and not on a screen of its own, because it is a property
+    // of the output — the same panel that already chooses the output. The old
+    // player gave it a whole Activity and that is what made it feel like a
+    // separate feature rather than part of the chain.
+    //
+    // asBtEdit_ is what the panel is SHOWING, which is not what the stack is
+    // running until Apply is pressed — the same relationship every other
+    // control on this panel has with the thing it configures.
+    bt_codec::Config asBtEdit_;
+    // Cached, NOT asked per frame. capability() reaches the Bluetooth service
+    // over Binder (getConnectedDevices), and the draw path re-runs on every
+    // hover — so asking there turned a mouse moving across the panel into a
+    // stream of IPC. Refreshed when the panel opens and whenever the route
+    // changes, which is exactly when the answer can differ.
+    bt_codec::Capability asBtCap_ = bt_codec::Capability::Unavailable;
+    bool             asBtEditLoaded_ = false;   // seeded from the saved/active config once
+    std::vector<LayoutRect> asBtCodecRows_;
+    // What the connected headphones can actually take, as the stack names
+    // them. Refreshed with asBtCap_ — at panel-open and on a route change —
+    // never per frame: reading it is a Binder call. EMPTY means the question
+    // went unanswered, not that the device supports nothing.
+    std::vector<bt_codec::CodecOption> asBtSelectable_;
+    int  asHoverBtCodecRow_ = -1;
+    LayoutRect asBtRateRc_{}, asBtBitsRc_{}, asBtQualityRc_{}, asBtEnableRc_{}, asBtForgetRc_{};
+    bool asHoverBtRate_ = false, asHoverBtBits_ = false, asHoverBtQuality_ = false,
+         asHoverBtEnable_ = false, asHoverBtForget_ = false;
+
+    void drawBluetoothCodecSection(Canvas& canvas, const Rect& c, float& y, float pad);
+    bool handleBluetoothCodecClick(int x, int y);
+    void seedBtEditFromDevice();
 #ifdef _WIN32
     std::vector<WasapiDeviceInfo> asWasapiDevices_;  // index 0 shown as "(Default device)"
     int  asWasapiSel_   = 0;
     bool asExclusive_   = false;
     LayoutRect asModeRows_[2] = {};
     int  asHoverModeRow_ = -1;
+
 #else
 #ifdef MATRIX_HAVE_ALSA
     std::vector<AlsaDeviceInfo> asAlsaDevices_;  // index 0 shown as "(System default)"
@@ -539,6 +670,13 @@ private:
 #ifdef MATRIX_HAVE_JACK
     std::vector<JackPlaybackPortInfo> asJackPorts_;  // index 0 shown as "(Auto-connect)"
     int  asJackSel_     = 0;
+#endif
+#ifdef MATRIX_HAVE_BLUETOOTH
+    // No leading "(default)" row, unlike ALSA and JACK: there is no default
+    // pair of headphones, so -1 means nothing is chosen and the list indexes
+    // asBtDevices_ directly.
+    std::vector<BtDeviceInfo> asBtDevices_;
+    int  asBtSel_       = -1;
 #endif
 #endif
     LayoutRect asCloseRc_ = {}, asBtnApply_ = {};
@@ -735,7 +873,7 @@ private:
     float                    albumTextWrapW_ = -1.0f;
     TextureHandle            artistImgTex_ = kInvalidTexture;
     // Where the artist photo landed this frame, written by drawFrame() (same
-    // pattern as rcDspBadge_) and read by onLButtonDown to open the viewer.
+    // pattern as rcDspBadge_) and read by handleClick to open the viewer.
     // It is the CROPPED rect — clicking the sliver that is actually on screen
     // is what a user can aim at. Empty when the photo is off-screen.
     LayoutRect               rcArtistImg_ = {};
@@ -745,7 +883,7 @@ private:
     LayoutRect               rcAlbumText_ = {};
     // The "OTHER VERSIONS" strip below the artist bio: where each variant
     // thumbnail landed this frame and which album it stands for. Written by
-    // drawFrame() and read by onLButtonDown/cursorForPoint, the same
+    // drawFrame() and read by handleClick/cursorForPoint, the same
     // draw-then-hit-test pattern as rcArtistImg_. Cleared on every album
     // switch by loadAlbumViewContent().
     std::vector<std::pair<LayoutRect, int>> rcVariantTiles_;
@@ -802,7 +940,6 @@ private:
     TextureHandle overlayArtTex_ = kInvalidTexture;
     int overlayArtTexW_ = 0, overlayArtTexH_ = 0;
     std::string overlayArtTexPath_;   // cache key; cleared with the handle
-    int overlayArtBoxW_ = 0, overlayArtBoxH_ = 0;   // box it was resampled for
     LayoutRect rcOverlayImage_{};
     void openArtOverlay(const std::string& path);
     // The swipe's destination: ArtWindow, where one can exist. Returns false
@@ -817,7 +954,6 @@ private:
     bool hoverScClose_ = false;
     void closeOverlay();
     void drawArtOverlay(Canvas& canvas, const LayoutRect& area);
-    void ensureOverlayArtTexture(int boxW, int boxH);
     void releaseOverlayArtTexture();
     // Sidebar is two independent things: which album TYPE is being browsed
     // (Albums/EPs/Singles/Remixes — filters the grid), and whether the
@@ -858,7 +994,7 @@ private:
     // Settings. closeActivePanel() restores the previous view when it is set.
     bool            panelFromSidebar_ = false;
     // sidebarHitTest() sentinels. The first SIX values are AlbumTypeFilter
-    // casts, so everything else starts above them — and onLButtonDown() must
+    // casts, so everything else starts above them — and handleClick() must
     // test these BEFORE its `nav >= 0` branch, which would otherwise cast a
     // sentinel straight into an out-of-range AlbumTypeFilter.
     //
@@ -997,6 +1133,14 @@ private:
     int           trackPanelArtTexAlbum_ = -1;
     TextureHandle transportArtTex_       = kInvalidTexture;
     std::string   transportArtTexPath_;
+    // The same split overlayArtPath_ documents, for the transport thumbnail:
+    // transportArtTexPath_ is what the TEXTURE holds and dies with the surface,
+    // transportArtPath_ is what the transport is SHOWING and must not. They are
+    // two facts, and on Android they come apart every time the listener leaves
+    // the app — the Renderer is destroyed while the music keeps playing, so a
+    // gapless boundary lands with nothing to make a texture with. Keeping the
+    // path is what lets onSurfaceRecreated() put the picture back.
+    std::string   transportArtPath_;
 
     // Async grid-art decode: JPEG/PNG decode used to run synchronously inside
     // drawFrame() (getGridArtTexture()), so revealing a new grid row while
@@ -1008,9 +1152,19 @@ private:
     // main-thread-only.
     // `key` is artKey(albumIdx, sizeClass) — the worker never needs the album
     // index itself, only the cache slot the result belongs in.
-    struct ArtDecodeResult { int key; std::vector<uint8_t> rgba; int w = 0, h = 0; uint64_t gen = 0; };
-    struct ArtDecodeJob    { int key; std::string path; int targetSize; uint64_t gen; };
-    std::thread                 artDecodeThread_;
+    struct ArtDecodeResult { int key; std::string path; std::vector<uint8_t> rgba; int w = 0, h = 0; uint64_t gen = 0; };
+    struct ArtDecodeJob    { int key; std::string path; int targetW, targetH;
+                                ImageFit fit; uint64_t gen; };
+    // A small POOL, not one thread. Covers are decoded one per tile and a
+    // screenful is six of them; serialized, that is the whole visible black-
+    // square period stacked end to end (measured on a moto g06: 39-60 ms each
+    // even after turbojpeg, so ~0.3 s for a screenful on one thread).
+    //
+    // Deliberately AFTER the turbojpeg change and not before it: without
+    // scaled decode each in-flight job held a full-resolution RGBA buffer —
+    // ~64 MB for a 4000x4000 cover — and four of those at once is a phone
+    // running out of memory. With scaled decode a job holds about a megabyte.
+    std::vector<std::thread>    artDecodeThreads_;
     std::mutex                  artDecodeMu_;
     std::condition_variable     artDecodeCv_;
     std::deque<ArtDecodeJob>    artDecodeQueue_;
@@ -1020,6 +1174,42 @@ private:
     std::unordered_map<int, char> artDecodePending_;
     void artDecodeWorker();
     void stopArtDecodeThread();
+
+    // The album-view ARTIST PHOTO is decoded on the same worker pool as the
+    // grid covers — one slow artist.jpg (a 7 MB 9000x11054 progressive JPEG is
+    // a real case) must not stall the UI thread when the album view opens, and
+    // the pool already exists and is pressure-tested. It is keyed by PATH, not
+    // by album index, because the photo belongs to the .streamer ARTIST and
+    // must survive a rescan (album indices die on every rescan). A negative
+    // key keeps artist jobs out of gridArtTexCache_, whose int keys are always
+    // artKey(albumIdx, sizeClass) >= 0.
+    static constexpr int kArtistArtKey = -1;
+    // Main-thread only, single-slot: the photo is one-on-screen, so a map buys
+    // nothing. artistImgRequestPath_ is what we currently WANT (set on enqueue
+    // by requestArtistImage); artistImgCachePath_ is what artistImgTex_ holds.
+    // A late result is applied only while it still matches the request — that
+    // is what keeps a quick A→B album switch from painting A's artist under B.
+    std::string artistImgRequestPath_;
+    std::string artistImgCachePath_;
+
+    // The fullscreen art SCENE decodes asynchronously for the same reason the
+    // album-view artist does: the source is often a multi-megabyte JPEG, and
+    // the scene resamples to the DISPLAY box (kContain, full-res — never the
+    // thumbnail), so a synchronous decode would freeze the UI right as the
+    // listener asks to see the art at its best. kOverlayArtKey routes the
+    // result to overlayArtTex_ (the scene's texture) from onArtDecoded.
+    // overlayArtRequestPath_ is what the newest openArtOverlay asked for; a
+    // late result is applied only while it still matches. Single slot, like the
+    // artist photo.
+    static constexpr int kOverlayArtKey = -2;
+    std::string overlayArtRequestPath_;
+    // The box the resolved texture was requested for (its decode box, as
+    // overlayArtTexW_/H_ is the resulting contain-fit DRAWN size). Comparing
+    // the freshly-laid-out box against this is what stops the per-frame draw
+    // re-requesting the same unchanged scene — the request is cheap, the
+    // decode is not.
+    int overlayArtReqW_ = 0, overlayArtReqH_ = 0;
+    void requestOverlayArtTexture(int boxW, int boxH);
 
     // Bound the grid-art VRAM footprint on large libraries: scrolling through
     // thousands of albums used to pin every tile's texture forever. Evict
@@ -1103,12 +1293,34 @@ private:
     bool                     gaplessSignal_  = false;
     std::atomic<bool>        stopGapless_{false};
     Db               db_;
-    // Sibling ".streamer" databases (external Qobuz-style downloader
-    // metadata — see core/streamer_db.h), keyed by music-root path. Kept
-    // per-root since a user may have several roots, only some of which sit
-    // next to a .streamer folder; entries for roots without one just stay
-    // closed (isOpen() == false).
-    std::unordered_map<std::string, StreamerDb> streamerDbs_;
+    // The music roots, as the scanner knows them. Kept because they BOUND the
+    // upward walk in streamerDbForAlbumDir(): without a bound that walk would
+    // climb to "/" and could bind a database belonging to nothing on screen.
+    // Rebuilt by setupWatchers(), appended by commitAddFolder().
+    std::vector<std::string> musicRoots_;
+    // ".streamer" databases (external Qobuz-style downloader metadata — see
+    // core/streamer_db.h), keyed by the DOWNLOADER'S OWN root — the directory
+    // that contains the .streamer folder — and NOT by our music root. Those
+    // are different directories whenever a library sits below a root, which
+    // on Android is always: the downloader writes <external>/Music/streamer
+    // while this app is seeded with <external>/Music.
+    //
+    // Populated lazily, on the first album view opened inside a given library,
+    // so a root with no downloader library costs one failed walk and nothing
+    // more. Cleared wholesale by setupWatchers(), since a rescan can move or
+    // remove what these describe.
+    //
+    // `mutable` because artistImagePathFor() is const and resolves through
+    // here. That is safe ONLY because every path into this map is on the UI
+    // thread: loadAlbumViewContent() from openAlbumView(), and
+    // artistImagePathFor() from loadTransportArtTexture(), which a gapless
+    // boundary reaches through onTimer() — a Host callback, dispatched by
+    // pump(). Nothing here is reached from the decode or gapless threads. If
+    // that ever changes this needs a lock; it does not have one.
+    mutable std::unordered_map<std::string, StreamerDb> streamerDbs_;
+    // Music roots already reported as having no downloader library, so the
+    // log says it once instead of on every album opened under them.
+    mutable std::set<std::string> streamerMissLogged_;
     ArtWindow        artWin_;
     UsbAudioDriver   usbDriver_;
     bool             usbOpen_  = false;
@@ -1142,6 +1354,72 @@ private:
     };
     BpState     bpState_ = BpState::Off;
     std::string bpDetail_;      // one line, shown on the badge's page
+
+    // The badge's three forms, in ONE place. Bar B draws all three; the
+    // Android notification's sub-text takes `shortForm`, because the badge
+    // should not stop telling the truth about the chain just because the
+    // screen went off. Extracted from drawFrame() when the second reader
+    // appeared — two copies of this switch would drift the first time a state
+    // was added, and the whole point of the badge is that it cannot lie.
+    struct DspBadge {
+        const char* full;       // "BITPERFECT" / "NOT BITPERFECT" / "REF EQ"
+        const char* shortForm;  // "EXACT" / "EXACT*" / "ALTERED" / "REF EQ"
+        ColorRef    color;
+    };
+    DspBadge dspBadge() const;
+
+    // What the OS's own transport should show. Built from the DISPLAY cursor,
+    // not the decode cursor — see the note in the implementation.
+    media_session::NowPlaying nowPlayingForOs() const;
+
+    // Bar B's left label as data — the release type plus, when the record has
+    // more than one track, which one. Extracted from drawFrame() so the OS
+    // notification and the bar cannot drift apart; the bar draws the two parts
+    // at different sizes, which is why they come back separately.
+    struct TransportOrdinal {
+        const char* type      = nullptr;   // "ALBUM", "EP", "COMPILATION", ...
+        const char* typeShort = nullptr;   // "COMP." for the one that needs it
+        std::string ord;                   // "", "2", or "D1 \xC2\xB7 2"
+        // The same ordinal with its separator closed up — "D1\xC2\xB7 2" becomes
+        // "D1\xC2\xB72" — and the bare track number on its own. Rungs on the
+        // ladder the bar walks down when the cell is too narrow for the full
+        // label; see the draw site. Built here rather than by cutting `ord`
+        // apart at the draw, because the pieces are known here and a string
+        // taken back apart is a second place for the format to live.
+        std::string ordTight;              // "", "2", or "D1\xC2\xB72"
+        std::string num;                   // "", or "2"
+    };
+    TransportOrdinal transportOrdinal(int album, int track) const;
+    std::string      transportOrdinalLine(int album, int track) const;
+
+    // ── Bluetooth route ─────────────────────────────────────────────────────
+    // The A2DP sink in use, and the codec it negotiated. Both are read on the
+    // app thread only; the platform's own callbacks post BtRouteChanged rather
+    // than writing here, so there is one writer and no lock.
+    bt_codec::Device btDevice_;
+    bt_codec::Config btActive_;
+    // Set when an apply() came back saying the stack negotiated something else.
+    // Shown rather than swallowed: asking for LDAC and silently getting SBC is
+    // exactly the kind of quiet downgrade the signal chain exists to expose.
+    std::string btNotice_;
+    // The device the AUTOMATIC re-apply has already acted on, this run. Setting
+    // an A2DP codec bounces the link, so the device disappears and returns —
+    // which reads as a new device to onBtRouteChanged() and would start the
+    // apply over, forever, with no audio the whole time. See the two guards in
+    // applySavedBtCodec(). The panel's own Apply does not consult this.
+    std::string btAutoAppliedMac_;
+
+    // Consecutive 250 ms ticks with the decoder stopped AND the output drained.
+    // A track change shows that shape for an instant; the end of the music
+    // holds it. Only the second one may end the OS media session — see the
+    // long comment at the test in onTimer().
+    int drainIdleTicks_ = 0;
+    static constexpr int kDrainIdleTicksToEnd = 8;   // 2 s
+
+    void onBtRouteChanged();
+    // Re-apply whatever is remembered for this MAC. Called when a sink
+    // connects and after an association is granted.
+    void applySavedBtCodec();
 
     // ── The signal chain, as DATA ────────────────────────────────────────
     // Everything below was already computed, and then thrown away: the codec
@@ -1186,6 +1464,19 @@ private:
         // OUTPUT
         std::string backend, deviceName, wire;
         int outRate = 0, outBits = 0, outChannels = 0, deviceMaxBits = 0;
+        // BLUETOOTH — the last link, and on a phone usually the largest thing
+        // that happens to the audio. Everything above describes the PCM handed
+        // to the OS; over A2DP the stack then encodes it to SBC/AAC/aptX/LDAC
+        // before it reaches the headphones. A readout that stops at "16-bit
+        // PCM_I16" and says nothing about a lossy encode is not telling the
+        // truth about the chain, which is this struct's whole reason to exist.
+        //
+        // Empty when the route is not Bluetooth. Reading this needs no
+        // permission of any kind, so it is filled in even on a phone that
+        // refuses to let the codec be CHANGED.
+        std::string btCodec;    // "LDAC", or empty
+        std::string btDetail;   // "96 kHz / 24-bit / 990 kbps"
+        std::string btDevice;   // the headphones' own name
     };
     SignalChain chain_;
 #ifdef _WIN32
@@ -1197,6 +1488,13 @@ private:
 #endif
 #ifdef MATRIX_HAVE_JACK
     std::string      jackStartPort_;
+#endif
+#ifdef MATRIX_HAVE_BLUETOOTH
+    // BlueZ's object path for the chosen sink. The MAC lives in btDevice_,
+    // which the bt_codec seam fills for the signal chain and the AutoEQ key —
+    // this is the handle the OUTPUT opens by, and the two are kept apart
+    // because one of them exists on Android too.
+    std::string      btDevicePath_;
 #endif
 #endif
 

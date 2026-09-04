@@ -99,6 +99,30 @@ CREATE TABLE IF NOT EXISTS track_stats (
 );
 -- Resume-on-launch. Exactly one row (the CHECK enforces it), rewritten in
 -- place, so there is no history to prune here — play_history is the log.
+-- The Bluetooth codec chosen for one pair of headphones, remembered so it can
+-- be re-applied when they reconnect. Keyed by MAC, because that is what the
+-- Bluetooth stack keys on and what survives a rename.
+--
+-- Deliberately in THIS database rather than in a preferences file: it is
+-- per-device output state, exactly like eq_assignments above, and the two are
+-- read together (a pair of headphones has both a codec and a frequency
+-- response). The old player kept these in SharedPreferences and then had to
+-- write a migration out of it.
+--
+-- A NEW TABLE, so it belongs in SCHEMA and not in MIGRATIONS[] -- that array is
+-- for ALTER TABLE ADD COLUMN and cannot express anything else. It needs no
+-- SCHEMA_STEPS[] entry either: there is nothing to backfill, and a database
+-- that has never seen a Bluetooth device is correct while empty.
+CREATE TABLE IF NOT EXISTS bluetooth_codecs (
+    mac          TEXT PRIMARY KEY,
+    device_name  TEXT DEFAULT '',
+    codec        INTEGER NOT NULL,
+    sample_rate  INTEGER NOT NULL,   -- AOSP's bitmask, not a rate in Hz
+    bits         INTEGER NOT NULL,   -- AOSP's bitmask, not a depth
+    channel_mode INTEGER NOT NULL,
+    ldac_quality INTEGER DEFAULT 0,
+    updated_at   INTEGER DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS playback_state (
     id          INTEGER PRIMARY KEY CHECK (id = 1),
     file_path   TEXT    NOT NULL,
@@ -311,6 +335,15 @@ bool Db::open(const std::string& dbPath) {
     stats_closeOpenEvents(impl_->db);
 
     sqlite3_exec(impl_->db, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
+    // synchronous=NORMAL is WAL's documented pairing, and WAL was already on
+    // here with the default (FULL) left in place — which fsyncs on every
+    // commit. Under WAL, NORMAL is still crash-safe for the database: a power
+    // loss can cost the most recent transactions, never integrity. What that
+    // is worth here is the scan, which commits the whole library in batches,
+    // and the listening log, which commits on every track boundary. The most a
+    // crash can cost is the last few seconds of play history — the library
+    // itself is rebuilt by the next scan from the files, which are the truth.
+    sqlite3_exec(impl_->db, "PRAGMA synchronous=NORMAL;", nullptr, nullptr, nullptr);
     sqlite3_exec(impl_->db,
         "DELETE FROM albums WHERE rowid NOT IN "
         "(SELECT MIN(rowid) FROM albums GROUP BY name, artist);",
@@ -592,6 +625,97 @@ void Db::clearEqAssignment(const std::string& deviceKey) {
     sqlite3_bind_text(stmt, 1, deviceKey.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_step(stmt);
     sqlite3_finalize(stmt);
+}
+
+// ── Bluetooth codecs (bluetooth_codecs) ─────────────────────────────────────
+// Per-device output state, keyed by MAC, sitting beside eq_assignments for the
+// same reason: a pair of headphones has both a codec and a frequency response,
+// and both belong to the pair rather than to the phone.
+
+void Db::saveBtCodec(const std::string& mac, const BtCodecPref& pref) {
+    if (!impl_->db || mac.empty()) return;
+    const char* sql =
+        "INSERT INTO bluetooth_codecs "
+        "(mac, device_name, codec, sample_rate, bits, channel_mode, ldac_quality, updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(mac) DO UPDATE SET "
+        "device_name=excluded.device_name, codec=excluded.codec, "
+        "sample_rate=excluded.sample_rate, bits=excluded.bits, "
+        "channel_mode=excluded.channel_mode, ldac_quality=excluded.ldac_quality, "
+        "updated_at=excluded.updated_at;";
+    sqlite3_stmt* stmt = nullptr;
+    sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, mac.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, pref.deviceName.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 3, pref.codec);
+    sqlite3_bind_int(stmt, 4, pref.sampleRate);
+    sqlite3_bind_int(stmt, 5, pref.bits);
+    sqlite3_bind_int(stmt, 6, pref.channelMode);
+    sqlite3_bind_int(stmt, 7, pref.ldacQuality);
+    sqlite3_bind_int64(stmt, 8, (sqlite3_int64)time(nullptr));
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+void Db::clearBtCodec(const std::string& mac) {
+    if (!impl_->db) return;
+    const char* sql = "DELETE FROM bluetooth_codecs WHERE mac = ?;";
+    sqlite3_stmt* stmt = nullptr;
+    sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, mac.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+bool Db::loadBtCodec(const std::string& mac, BtCodecPref& out) {
+    if (!impl_->db || mac.empty()) return false;
+    const char* sql =
+        "SELECT device_name, codec, sample_rate, bits, channel_mode, ldac_quality "
+        "FROM bluetooth_codecs WHERE mac = ?;";
+    sqlite3_stmt* stmt = nullptr;
+    sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, mac.c_str(), -1, SQLITE_TRANSIENT);
+    bool found = false;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        auto* n = (const char*)sqlite3_column_text(stmt, 0);
+        out.mac         = mac;
+        out.deviceName  = n ? n : "";
+        out.codec       = sqlite3_column_int(stmt, 1);
+        out.sampleRate  = sqlite3_column_int(stmt, 2);
+        out.bits        = sqlite3_column_int(stmt, 3);
+        out.channelMode = sqlite3_column_int(stmt, 4);
+        out.ldacQuality = sqlite3_column_int(stmt, 5);
+        found = true;
+    }
+    sqlite3_finalize(stmt);
+    return found;
+}
+
+std::vector<BtCodecPref> Db::loadBtCodecs() {
+    std::vector<BtCodecPref> out;
+    if (!impl_->db) return out;
+    const char* sql =
+        "SELECT mac, device_name, codec, sample_rate, bits, channel_mode, ldac_quality "
+        "FROM bluetooth_codecs ORDER BY device_name ASC, mac ASC;";
+    sqlite3_stmt* stmt = nullptr;
+    sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr);
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        auto col = [&](int i) -> std::string {
+            auto* s = (const char*)sqlite3_column_text(stmt, i);
+            return s ? s : "";
+        };
+        BtCodecPref p;
+        p.mac         = col(0);
+        p.deviceName  = col(1);
+        p.codec       = sqlite3_column_int(stmt, 2);
+        p.sampleRate  = sqlite3_column_int(stmt, 3);
+        p.bits        = sqlite3_column_int(stmt, 4);
+        p.channelMode = sqlite3_column_int(stmt, 5);
+        p.ldacQuality = sqlite3_column_int(stmt, 6);
+        out.push_back(std::move(p));
+    }
+    sqlite3_finalize(stmt);
+    return out;
 }
 
 // ── Headphone inventory (eq_headphones) ─────────────────────────────────────

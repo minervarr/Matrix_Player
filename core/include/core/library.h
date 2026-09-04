@@ -103,6 +103,20 @@ std::string resolveArtPath(const std::string& folderPath);
 void parseAlbumFolder(const std::string& folderPath,
                       const std::string& rootPath, Album& album);
 
+// Prefer the ALBUM TAG over the folder-derived displayName whenever every
+// tagged track agrees on one. Folder names in this library carry encoding
+// damage (mangled UTF-8, substituted characters) that the embedded metadata
+// does not; `name` stays the stable key and only the display string switches.
+//
+// Call it AFTER parseAlbumFolder(), which is what sets the folder-derived
+// name this may replace. It exists as a function because there are two callers
+// and they must not drift: the scan (buildAlbums) and the DB restore in
+// PlayerWindow's constructor. When only the scan applied it, a restored
+// library rendered every album as its raw folder hash until the scan finished
+// and replaced it — invisible on a library whose folders are already titled,
+// and glaring on one whose folders are download ids.
+void applyMetaAlbumName(Album& album);
+
 void purgeStaleFiles(std::vector<Album>& albums, int& removedCount);
 
 // Recursive directory-tree watcher with a ~500ms coalescing debounce.

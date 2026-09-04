@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Bar B's Prev glyph: UiIcon::Prev in gui/src/player_view.cc, same 36-unit
+     grid, same coordinates - a bar at the left and a triangle pointing into
+     it. Authored rather than borrowed from android.R.drawable so the
+     notification reads as this app's transport and not the platform's. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="36"
+    android:viewportHeight="36"
+    android:tint="?android:attr/colorControlNormal">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M6,10h3v16h-3z M27,8L14,18L27,28z" />
+</vector>
