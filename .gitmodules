@@ -16,3 +16,6 @@
 [submodule "libs/firstparty/archive_engine"]
 	path = framework/archive_engine
 	url = https://github.com/minervarr/archive_engine
+[submodule "assets/fonts"]
+	path = assets/fonts
+	url = https://github.com/minervarr/fonts
