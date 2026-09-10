@@ -1456,6 +1456,42 @@ private:
     int64_t btSettleUntilMs_ = 0;
     static constexpr int64_t kBtSettleMs = 4000;
 
+    // ── The ONE timer, and who currently needs it ───────────────────────────
+    //
+    // AndroidHost::startTimer keeps a single timerfd and remembers the id
+    // without honouring it ("one timer fd; the id is remembered, not
+    // honoured"), and stopTimer ignores its id argument outright. So a second
+    // TimerId would not be a second timer — it would silently re-point the
+    // first, and asking for one while music plays would take the seek tick
+    // away from the transport.
+    //
+    // Two things want it now: playback (250 ms, the seek clock) and the Audio
+    // Settings panel (see pollBtRoute). updateTimerNeed() computes the union
+    // and is called from every edge of both, so neither can stop a timer the
+    // other is still using.
+    bool timerRunning_ = false;
+    void updateTimerNeed();
+
+    // Re-ask the platform which A2DP sink is connected, while the Audio
+    // Settings panel is open.
+    //
+    // Belt AND braces, deliberately. The push path exists — BluetoothCodecManager
+    // broadcasts and onServiceConnected both call nativeOnA2dpReady, which posts
+    // AppEvent::BtRouteChanged — but a panel that fails to notice headphones
+    // switching on is the one thing this section must not do, and every link in
+    // that chain (a system broadcast, a Binder proxy that arrives
+    // asynchronously, a delayed post, an eventfd) can fail quietly and
+    // separately. A poll while the panel is on screen cannot.
+    //
+    // Bounded on purpose: only while that one panel is open, and only every
+    // kBtPollTicks'th tick, so it is one Binder round trip a second and none at
+    // all the rest of the time. connectedDevice() only — capability() and
+    // selectableCodecs() are the expensive pair, and onBtRouteChanged() re-asks
+    // those once, when the MAC has actually changed.
+    void pollBtRoute();
+    int  btPollTick_ = 0;
+    static constexpr int kBtPollTicks = 4;   // 4 x 250 ms
+
     // Consecutive 250 ms ticks with the decoder stopped AND the output drained.
     // A track change shows that shape for an instant; the end of the music
     // holds it. Only the second one may end the OS media session — see the

@@ -363,6 +363,10 @@ void ArtWindow::renderIfDirty() {
     if (pendingFrames_ == 0) return;
     drawFrame();
     pendingFrames_--;
+    // After the decrement, never inside drawFrame(): markDirty() assigns rather
+    // than increments, so the line above would cancel it. Same reasoning, and
+    // the same bug, as PlayerWindow::run().
+    if (msdfFont_.hasMisses()) markDirty();
 }
 
 void ArtWindow::drawFrame() {
@@ -417,11 +421,4 @@ void ArtWindow::drawFrame() {
     }
     renderer_->draw(frameCurves_, /*overlay_rotation_deg=*/0, frameImages_, {}, msdfQuads_,
                     frameShapes_);
-
-    // Arm the frame that will bake what this one asked for and did not have.
-    // renderIfDirty() returns as soon as pendingFrames_ hits zero, so a miss
-    // recorded here is otherwise never serviced and the glyph stays absent
-    // rather than being one frame late. Same reasoning, and the same two-line
-    // shape, as the tail of PlayerWindow::drawFrame().
-    if (msdfFont_.hasMisses()) markDirty();
 }

@@ -925,7 +925,14 @@ void PlayerWindow::bakeGlyphMisses() {
     if (msdfFont_.bakeMisses() > 0) {
         renderer_->initMsdf(msdfFont_);
         runGlyphBaker();
-        markDirty();          // redraw now that the glyphs exist
+        // No markDirty() here, and its absence is the honest version. This runs
+        // at the TOP of drawFrame(), so the frame about to be built already has
+        // the cells — there is nothing to redraw. The call that used to sit
+        // here could never have worked anyway: markDirty() ASSIGNS
+        // pendingFrames_ = 1 and run() decrements it the moment drawFrame()
+        // returns, so anything armed from inside a frame is erased by that
+        // frame's own consumption. The re-arm that matters is in run(), after
+        // the decrement, and it keys on hasMisses() rather than on this bake.
     }
 }
 
@@ -1004,7 +1011,33 @@ void PlayerWindow::run() {
         // them recreates the window, so the app destroys and rebuilds its
         // Renderer during startup. drawFrame() dereferences renderer_ on its
         // second line and does not check.
-        if (renderer_ && pendingFrames_ > 0) { drawFrame(); pendingFrames_--; }
+        if (renderer_ && pendingFrames_ > 0) {
+            drawFrame();
+            pendingFrames_--;
+
+            // ── Arm the frame that will BAKE what this one could not draw ────
+            //
+            // AFTER the decrement, and that is the entire point. markDirty()
+            // ASSIGNS pendingFrames_ = 1, so anything that calls it from inside
+            // drawFrame() is undone by the line above — including
+            // bakeGlyphMisses()'s own "redraw now that the glyphs exist", which
+            // has therefore never once taken effect.
+            //
+            // What that cost: RasterFont bakes on demand, and layoutByKey()
+            // returns the pen UNCHANGED for a cell it does not have — so a
+            // glyph that has not been baked is not a blank box, it is a letter
+            // that is simply absent, with the ones around it closed up over it.
+            // "LDAC" draws as "LAC", "SBC" as "SC", "Forget" as "orget",
+            // "990 kbps" as "9". The design says that costs ONE frame; without
+            // a second frame ever being armed it cost forever, and every tap
+            // that changed a label rolled the dice again on whichever cells
+            // happened to exist by then.
+            //
+            // hasMisses() cannot spin: bakeMisses() clears the record, and a
+            // cell no face can serve goes to unservable_, which recordMiss()
+            // then refuses to re-record.
+            if (msdfFont_.hasMisses()) markDirty();
+        }
         // ArtWindow is a second window on this same thread with its own
         // Renderer — no second message pump, so drive its frame here too.
         if (artWin_.isVisible()) artWin_.renderIfDirty();
@@ -1255,7 +1288,6 @@ void PlayerWindow::drawFrame() {
                                        (int)renderer_->height() });
         renderer_->draw(frameCurves_, /*overlay_rotation_deg=*/0, frameImages_,
                         frameImagesFg_, msdfQuads_, frameShapes_);
-        if (msdfFont_.hasMisses()) markDirty();   // see the tail of this function
         return;
     }
 
@@ -2475,23 +2507,6 @@ void PlayerWindow::drawFrame() {
     }
 
     renderer_->draw(frameCurves_, /*overlay_rotation_deg=*/0, frameImages_, frameImagesFg_, msdfQuads_, frameShapes_);
-
-    // This frame asked the glyph cache for cells it did not have, and drew
-    // NOTHING for them — RasterFont::layoutByKey returns the pen unchanged on a
-    // miss, so the letters are simply absent, with no gap and no tofu box to
-    // notice. bakeGlyphMisses() at the top of the next frame will fill them,
-    // but only if there IS a next frame, and run() blocks in pump() the moment
-    // pendingFrames_ reaches zero. Arming one here is what closes that loop.
-    //
-    // Without it the miss is not "one frame late" (which is the contract
-    // RasterFont::hasMisses() states) but permanent until something unrelated
-    // repaints: a word appearing for the first time at a size no type role
-    // enumerates comes out with letters missing, and a different subset each
-    // time, as taps repaint and bake a few more cells. The Bluetooth codec
-    // panel showed it worst — "Adaptive" as "ptie", then "Aptive"; "32-bit" as
-    // "2" — because its labels are the last strings in the app to be drawn and
-    // several of them appear at a shrink-fitted size nothing else uses.
-    if (msdfFont_.hasMisses()) markDirty();
 }
 
 // ── Layout ───────────────────────────────────────────────────────────────────
@@ -4607,6 +4622,7 @@ void PlayerWindow::toggleBitperfectMode() {
 
 void PlayerWindow::closeActivePanel() {
     activePanel_ = SettingsPanel::None;
+    updateTimerNeed();   // ...and stops watching, unless playback still needs it
     // The panel is what held the focused field, so the keyboard goes with it.
     // syncKeyboard() reads activePanel_, hence after the assignment.
     eqSearchFocused_ = false;
@@ -5087,6 +5103,8 @@ void PlayerWindow::onAudioSettings() {
     asHoverModeRow_ = -1;
 #endif
     activePanel_ = SettingsPanel::AudioSettings;
+    btPollTick_ = 0;
+    updateTimerNeed();   // the panel watches the route while it is on screen
     // The other moment: an association may have been granted, or headphones
     // connected, since this panel was last on screen.
     onBtRouteChanged();        // which headphones, and what is on the wire
@@ -7492,7 +7510,7 @@ void PlayerWindow::onPlay(StartCause cause) {
     fflush(stdout);
 
     startGaplessCoordinator(callbackI32, capturedOutSr, capturedDacCh);
-    host_->startTimer((int)TimerId::SeekUpdate, 250);
+    updateTimerNeed();   // playback wants the tick; the panel may want it too
 
     // Audio is really flowing now, so tell the OS. Deliberately HERE and not at
     // the top of onPlay(): every early return above this line leaves nothing
@@ -7657,8 +7675,9 @@ void PlayerWindow::onStop() {
     nextDecoder_.close();
     active_ = &decoder_;
     nextAlbum_ = nextTrack_ = -1;
-    host_->stopTimer((int)TimerId::SeekUpdate);
     isPlaying_ = false;
+    // AFTER isPlaying_ drops, because that flag is half of what it reads.
+    updateTimerNeed();   // ...but only if the Audio Settings panel is not using it
     playedFrames_.store(0);
     displayTrackStartFrame_ = 0;
     { std::lock_guard<std::mutex> lk(boundariesMu_); boundaries_.clear(); }
@@ -8212,7 +8231,39 @@ void PlayerWindow::onHostReady() {
     commitAddFolder(root);
 }
 
+// The union of everyone who needs the single timer. Idempotent, so every call
+// site can just say "recompute" on any edge without tracking who else is using
+// it. 250 ms is the seek clock's rate and the panel poll divides it down.
+void PlayerWindow::updateTimerNeed() {
+    const bool want = isPlaying_ ||
+                      activePanel_ == SettingsPanel::AudioSettings;
+    if (want == timerRunning_) return;
+    timerRunning_ = want;
+    if (want) host_->startTimer((int)TimerId::SeekUpdate, 250);
+    else      host_->stopTimer((int)TimerId::SeekUpdate);
+}
+
+void PlayerWindow::pollBtRoute() {
+    if (++btPollTick_ < kBtPollTicks) return;
+    btPollTick_ = 0;
+
+    // The MAC is the cheap question, and the only one that decides whether the
+    // expensive ones are worth asking. onBtRouteChanged() re-reads the active
+    // config, the capability and the selectable list, clears asBtEditLoaded_ so
+    // the controls re-seed from the pair that just arrived, and invalidates.
+    const bt_codec::Device now = bt_codec::connectedDevice();
+    if (now.mac == btDevice_.mac) return;
+    printf("[BT] route poll: '%s' -> '%s'\n",
+           btDevice_.mac.c_str(), now.mac.c_str());
+    fflush(stdout);
+    onBtRouteChanged();
+}
+
 void PlayerWindow::onTimer(int /*timerId*/) {
+    // Before the isPlaying_ gate: the panel is usually open with nothing
+    // playing, which is exactly when headphones get switched on.
+    if (activePanel_ == SettingsPanel::AudioSettings) pollBtRoute();
+
     if (!isPlaying_) return;
 
     if (output_ && output_->hasFaulted()) {

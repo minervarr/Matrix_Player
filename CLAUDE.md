@@ -1608,6 +1608,15 @@ silent-handover claim.
   `onBtRouteChanged()` also clears `asBtEditLoaded_` on a real MAC change, so a
   panel already on screen re-seeds its codec/rate/depth buttons instead of
   redrawing the heading over controls seeded from the empty route.
+  **And the panel POLLS as well** (`pollBtRoute()`, once a second while it is
+  the active panel), because the push path has four separate places to fail
+  quietly — a system broadcast, an async Binder proxy, a delayed post, an
+  eventfd — and it did fail: headphones switched on in front of an open panel
+  still read "no Bluetooth headphones connected" until it was closed and
+  reopened. Note the constraint that shapes this: `AndroidHost` keeps **one
+  timerfd** and `stopTimer` ignores its id, so this is NOT a second timer —
+  `updateTimerNeed()` computes the union of "playback wants the seek tick" and
+  "the Audio Settings panel is open" and drives that single timer from both.
 - **Setting an A2DP codec drops the link, so playback waits for it.**
   `applySavedBtCodec()` arms `btSettleUntilMs_` (4 s) whenever a request is
   actually SENT, and `onPlay()` refuses inside that window with the reason on
@@ -1674,21 +1683,41 @@ scan root comes from the launch intent's `scan_root` extra, handed once to
 `PlayerWindow::commitAddFolder()`, after which the ordinary incremental scan,
 folder watch and `.streamer` sidecar are the desktop's own code.
 
-**A frame that MISSES a glyph must arm the next one.** `RasterFont` bakes on
+**A frame that MISSES a glyph must arm the next one, AFTER the decrement.** `RasterFont` bakes on
 demand and `layoutByKey()` returns the pen UNCHANGED for a cell it does not
 have — so a missing glyph is not a tofu box, it is a letter that silently is
 not there, with no gap where it was. The contract
 (`raster_font.hh`, "Misses, and why they are the mechanism") is that this costs
 *one frame*: `bakeGlyphMisses()` fills them at the top of the next
-`drawFrame()`. But `run()` is render-on-demand and blocks in `pump()` the
-moment `pendingFrames_` hits zero, so the frame that RECORDS the misses has to
-ask for that next frame or it never comes. Both `PlayerWindow::drawFrame()` and
-`ArtWindow::drawFrame()` end with `if (msdfFont_.hasMisses()) markDirty();` for
-exactly that reason. Without it, text appearing for the first time at a size no
-type role enumerates renders with letters missing — a DIFFERENT subset each
-time, as unrelated taps repaint and bake a few more cells. It was found as
-"Adaptive" drawn as `ptie`, then `Aptive`, and `32-bit` drawn as `2`, in the
-Bluetooth codec panel; nothing about that panel was wrong.
+`drawFrame()`. But `run()` is render-on-demand and blocks in `pump()` the moment
+`pendingFrames_` hits zero, so the frame that RECORDS the misses has to ask for
+that next frame or it never comes.
+
+**`markDirty()` ASSIGNS `pendingFrames_ = 1`, and `run()` decrements right after
+`drawFrame()` returns — so anything that calls it from INSIDE a frame is
+erased.** That is why the re-arm lives in `run()` and in
+`ArtWindow::renderIfDirty()`, both immediately *after* `pendingFrames_--`:
+
+```cpp
+drawFrame();
+pendingFrames_--;
+if (msdfFont_.hasMisses()) markDirty();   // never inside drawFrame()
+```
+
+A first attempt put it at the end of `drawFrame()` and changed nothing on the
+device, which is also the reason `bakeGlyphMisses()`'s own
+"redraw now that the glyphs exist" had never once taken effect.
+
+Without this, text appearing for the first time renders with letters missing —
+a DIFFERENT subset each time. The cell key includes a **sub-pixel phase**
+(`cellkey::kPhaseCount`, three of them), so the same letter at the same size is
+a different cell at a different pen position: changing a label re-rolls which of
+its glyphs exist. Observed as `LDAC` drawn `LAC`, `SBC` drawn `SC`, `Forget`
+drawn `orget`, `990 kbps` drawn `9`, complete after reopening the panel and
+broken again on the next tap. Nothing about that panel was wrong.
+
+`hasMisses()` cannot spin: `bakeMisses()` clears the record, and a cell no face
+can serve goes to `unservable_`, which `find()` then refuses to re-record.
 
 **It is a `RasterFont`, not MTSDF, on BOTH platforms.** `Canvas::useMsdf()`,
 `Renderer::initMsdf()` and the `.msdf.cache` filename all keep the name from
