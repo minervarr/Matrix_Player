@@ -1259,7 +1259,7 @@ page exists to be read **while something is playing**, which a panel would make
 impossible by swallowing the space bar. One enum serves both, because they
 differ only in what they draw.
 
-Three things here will bite whoever adds the third scene:
+Four things here will bite whoever adds the third scene:
 
 1. **A scene REPLACES the content; it never floats over it.** The renderer
    records background images → the vector layer → foreground images → **glyphs
@@ -1269,14 +1269,27 @@ Three things here will bite whoever adds the third scene:
    it, don't float over it" rule bar A's search and AutoEQ list follow. An
    earlier attempt at the artist photo as a floating overlay failed on exactly
    this and is why `ArtWindow` was built.
-2. **The art scene owns its own texture.** `transportArtTex_` is baked to the
+2. **A texture handle is not enough — the SIZE is state too.** `drawArtOverlay()`
+   guards on `overlayArtTex_ != kInvalidTexture && overlayArtTexW_ > 0 &&
+   overlayArtTexH_ > 0` and then divides the box by those two. `onArtDecoded()`
+   zeroes them before uploading and must set them from the result
+   (`r.w`/`r.h`, which for `ImageFit::kContain` are already the contain-fit
+   DRAWN size, not the file's native size). It did not, so the guard could
+   never pass: the scene showed **"No artwork" on every platform** with a
+   perfectly good picture already on the GPU. The decode was never the
+   suspect and never at fault — `[Art] …/cover.jpg -> 720x720` was in the log
+   the whole time, which is the line to check first if this screen ever looks
+   empty again. `ui_capture` has no state for this scene (the synthetic
+   fixtures carry no cover art), so nothing caught it; it is the one screen
+   with no headless capture behind it.
+3. **The art scene owns its own texture.** `transportArtTex_` is baked to the
    thumbnail's pixels and is unusable full size. The scene reuses
    `ArtWindow::loadArtTexture()`'s recipe — `ImageFit::kContain` + `mips=false`
    + a `floor()`ed 1:1 blit — so the CPU resamples once and no GPU filter ever
    scales it. `releaseOverlayArtTexture()` clears the cache KEY with the handle;
    `onSurfaceLost()` calls it and deliberately keeps `overlayArtPath_`, because
    GPU state dies and CPU state survives.
-3. **`ArtWindow` still exists and is still right.** It is a second top-level
+4. **`ArtWindow` still exists and is still right.** It is a second top-level
    window for a second MONITOR, which is why the Android branch declines it and
    why the thumbnail's touch used to vanish on a phone. It is now offered as
    *Second screen* from inside the scene, gated on `ArtWindow::isSupported()` —

@@ -3158,9 +3158,24 @@ void PlayerWindow::onArtDecoded() {
             if (overlayArtTex_ != kInvalidTexture) renderer_->destroy_texture(overlayArtTex_);
             overlayArtTex_ = kInvalidTexture;
             overlayArtTexW_ = overlayArtTexH_ = 0;
-            if (!r.rgba.empty())
+            if (!r.rgba.empty()) {
                 overlayArtTex_ = renderer_->create_texture(r.rgba.data(), (uint32_t)r.w,
                                                            (uint32_t)r.h, /*mips=*/false);
+                // The SIZE, and not only the handle. Without these two the
+                // scene could never draw anything: drawArtOverlay() guards on
+                // `overlayArtTexW_ > 0 && overlayArtTexH_ > 0` and divides the
+                // box by them, so a texture whose dimensions stayed at the zero
+                // set three lines above is indistinguishable from no texture at
+                // all — and the fullscreen view fell through to its "No
+                // artwork" branch every time, on every platform, with a
+                // perfectly good picture already uploaded to the GPU.
+                //
+                // r.w/r.h are the CONTAIN-FIT DRAWN size (decodeImageScaled
+                // resamples to exactly that for ImageFit::kContain), which is
+                // what the 1:1 blit below needs — not the file's native size.
+                overlayArtTexW_ = r.w;
+                overlayArtTexH_ = r.h;
+            }
             // The KEY is the "resolved" record: set whether or not the decode
             // landed, so drawArtOverlay's per-frame no-op check treats this
             // path+box as done even when there is nothing to show (a file that
