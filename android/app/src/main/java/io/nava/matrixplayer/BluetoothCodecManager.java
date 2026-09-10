@@ -105,8 +105,36 @@ public final class BluetoothCodecManager {
 
     private static final BluetoothProfile.ServiceListener sProfileListener =
             new BluetoothProfile.ServiceListener() {
-                @Override public void onServiceConnected(int profile, BluetoothProfile proxy) {
-                    if (profile == BluetoothProfile.A2DP) sProxy = (BluetoothA2dp) proxy;
+                @Override
+                @SuppressLint("MissingPermission")
+                public void onServiceConnected(int profile, BluetoothProfile proxy) {
+                    if (profile != BluetoothProfile.A2DP) return;
+                    sProxy = (BluetoothA2dp) proxy;
+
+                    // Tell native about headphones that were ALREADY connected.
+                    //
+                    // The broadcast below only ever fires on a CHANGE, and
+                    // getProfileProxy is asynchronous — so a pair connected
+                    // before this app launched (the ordinary case: you put your
+                    // headphones on, then open the player) produced no event at
+                    // all, and every query before this callback landed answered
+                    // "nothing connected" because sProxy was still null. The
+                    // Audio Settings panel read that once, when it opened, and
+                    // then had no reason to ask again; closing and reopening it
+                    // was the only way to see the truth.
+                    //
+                    // No APPLY_DELAY_MS here. That delay exists because a
+                    // connection in progress is still negotiating; this is a
+                    // link that finished connecting some time ago.
+                    try {
+                        List<BluetoothDevice> connected = sProxy.getConnectedDevices();
+                        if (connected != null && !connected.isEmpty()) {
+                            BluetoothDevice d = connected.get(0);
+                            nativeOnA2dpReady(d.getAddress(), safeName(d));
+                        }
+                    } catch (Exception e) {
+                        Log.w(TAG, "could not enumerate connected A2DP devices", e);
+                    }
                 }
                 @Override public void onServiceDisconnected(int profile) {
                     if (profile == BluetoothProfile.A2DP) sProxy = null;

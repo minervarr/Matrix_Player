@@ -277,8 +277,17 @@ bool EqProfileStore::load(const std::string& jsonPath) {
         fprintf(stderr, "[EQ][ERROR] Failed to open %s\n", jsonPath.c_str());
         return false;
     }
+    return loadFromMemory(text.data(), text.size(), jsonPath);
+}
 
-    JsonReader r(text.data(), text.data() + text.size());
+bool EqProfileStore::loadFromMemory(const char* data, size_t size,
+                                    const std::string& label) {
+    if (!data || size == 0) {
+        fprintf(stderr, "[EQ][ERROR] %s is empty\n", label.c_str());
+        return false;
+    }
+
+    JsonReader r(data, data + size);
     profiles_.clear();
 
     bool ok = r.expect('[');
@@ -292,7 +301,7 @@ bool EqProfileStore::load(const std::string& jsonPath) {
     }
 
     if (!ok) {
-        fprintf(stderr, "[EQ][ERROR] JSON parse error in %s\n", jsonPath.c_str());
+        fprintf(stderr, "[EQ][ERROR] JSON parse error in %s\n", label.c_str());
         profiles_.clear();
         return false;
     }
@@ -312,7 +321,7 @@ bool EqProfileStore::load(const std::string& jsonPath) {
                 });
         });
 
-    printf("[EQ] Loaded %zu profiles from %s\n", profiles_.size(), jsonPath.c_str());
+    printf("[EQ] Loaded %zu profiles from %s\n", profiles_.size(), label.c_str());
     return true;
 }
 

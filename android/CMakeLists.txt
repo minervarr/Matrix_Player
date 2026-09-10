@@ -331,3 +331,18 @@ target_link_options(matrix_player_android PRIVATE -u ANativeActivity_onCreate)
 include(${REPO_ROOT}/cmake/MatrixFonts.cmake)
 matrix_copy_shipped_fonts(matrix_player_android ${REPO_ROOT}
                           ${MATRIX_ANDROID_SHADER_DIR}/../fonts)
+
+# The AutoEQ catalogue, staged as an APK asset for the same reason the faces
+# are: PlayerWindow::create() reads it through Host::dataReader(), and on this
+# platform that reader is AAssetManager. exeDir() is "" here, so the name it
+# asks for IS "eq_profiles.json" at the assets root.
+#
+# Without this the phone shipped no catalogue at all — every launch logged
+# "[EQ][ERROR] Failed to open eq_profiles.json", the EQ panel's All Profiles
+# tab was empty and its search box had nothing to match. The desktop copies the
+# same file next to the executable (gui/CMakeLists.txt); this is that step for
+# the APK. ~4.8 MB of JSON, which deflates to about a fifth of that in the zip.
+add_custom_command(TARGET matrix_player_android POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${REPO_ROOT}/eq_profiles.json
+        ${MATRIX_ANDROID_SHADER_DIR}/../eq_profiles.json)

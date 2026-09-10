@@ -24,6 +24,15 @@ struct EqProfile {
 class EqProfileStore {
 public:
     bool load(const std::string& jsonPath);
+
+    // The same parse, over bytes somebody else read. Android has no file to
+    // open: eq_profiles.json ships inside the APK, so it arrives through
+    // Host::dataReader() as a buffer, exactly the way the typefaces do. `label`
+    // is only what the error lines name, so the two callers report the same way.
+    //
+    // core/ stays free of the reader: this takes plain bytes and knows nothing
+    // about where they came from.
+    bool loadFromMemory(const char* data, size_t size, const std::string& label);
     const std::vector<EqProfile>& getAll() const { return profiles_; }
     const EqProfile* findByKey(const std::string& name,
                                const std::string& source,

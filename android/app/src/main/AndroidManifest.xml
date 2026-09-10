@@ -102,8 +102,17 @@
              change or a density change would each kill playback outright. The
              app already redraws from scratch on APP_CMD_CONFIG_CHANGED, so
              absorbing them costs nothing. -->
+        <!-- MatrixPlayerActivity, not android.app.NativeActivity: it is a
+             three-line subclass of app_shell's AppShellActivity, and it is what
+             gives this app an input method. NativeActivity has no focusable
+             view, so there was nothing for the IME to attach to and neither
+             search box could be typed into. See MatrixPlayerActivity.java.
+
+             android.app.lib_name below is unchanged and still required — the
+             superclass is a NativeActivity, and that meta-data is how it finds
+             the library to dlopen. -->
         <activity
-            android:name="android.app.NativeActivity"
+            android:name=".MatrixPlayerActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density|fontScale|locale|layoutDirection|touchscreen|colorMode"

@@ -183,6 +183,16 @@ public:
     void onHostExposed() override;          // window newly visible/uncovered — just mark a frame dirty
     void onKeyDownPortable(int keyCode) override;      // key::* space (keys.hh) — shared key handling
     void onCharPortable(uint32_t codepoint) override;  // search-box text entry
+
+    // The OTHER way text arrives, and the only one a phone has. An input
+    // method is not a stream of key presses: it composes, and while it is
+    // composing the PLATFORM owns the field's contents — so this carries the
+    // whole string every time rather than one codepoint, and replaces what the
+    // focused box held instead of appending to it. Desktop hosts never call it
+    // (they have a real keyboard and feed onCharPortable); Android never calls
+    // onCharPortable. Both boxes are served here, chosen the same way
+    // onCharPortable chooses: activePanel_ first, then the focus flags.
+    void onTextEditPortable(const std::string& text, size_t cursorByte) override;
     void onHotkey(int hotkeyId) override;              // Alt+F/J/C/U/G/H/L — see hotkey_ids.hh
     void adaptToCurrentMonitor() override;             // WM_DISPLAYCHANGE/WM_WINDOWPOSCHANGED re-fit
     void shutdown() override;      // teardown before the window/renderer die (was WM_DESTROY)
@@ -406,6 +416,24 @@ private:
     // what collapses the filter letters, and closing it takes the query back.
     void openSearch();
     void closeSearch();
+
+    // Raise or drop the on-screen keyboard to match whichever text field is
+    // focused right now. IDEMPOTENT on purpose — it remembers what it last
+    // asked for, so every call site that can change focus may call it
+    // unconditionally without anyone tracking edges. A desktop Host implements
+    // showKeyboard()/hideKeyboard() as no-ops, so this costs nothing there and
+    // needs no #ifdef.
+    void syncKeyboard();
+
+    // What syncKeyboard() last asked the host for, so it can tell a real
+    // change from a repeat.
+    bool keyboardUp_ = false;
+
+    // Which box the IME is currently attached to, so onTextEditPortable()
+    // cannot write a composition into a field that lost focus while the
+    // keystroke was in flight between Android's UI thread and this one.
+    enum class ImeTarget { None, LibrarySearch, EqSearch };
+    ImeTarget imeTarget_ = ImeTarget::None;
     // Bar A draws and hit-tests itself from plain values (bar_a.hh), shared
     // verbatim with Android. All that is left here is building those values
     // out of this app's state, and translating the pick back into the integer
@@ -1408,6 +1436,25 @@ private:
     // apply over, forever, with no audio the whole time. See the two guards in
     // applySavedBtCodec(). The panel's own Apply does not consult this.
     std::string btAutoAppliedMac_;
+
+    // steady_clock ms until which the A2DP link is expected to be renegotiating,
+    // 0 when it is not. Set whenever a codec request is actually SENT.
+    //
+    // Setting a codec is not a property write: the stack drops the link and
+    // builds it again, and for two or three seconds there is no transport to
+    // carry audio. Starting a track inside that window is the failure the
+    // listener reported as "the first time I open the app nothing plays, and
+    // after I close it and open it again everything works" — first launch is
+    // exactly when the saved configuration differs from whatever the stack
+    // negotiated on connect, so it is the one launch that sends a request at
+    // all; every later one matches and returns early at guard 1.
+    //
+    // A deadline rather than a callback: the applied verdict, the disconnect
+    // and the reconnect all arrive as the same BtRouteChanged event, so none of
+    // them identifies itself as the end of the renegotiation. A window that
+    // expires on its own cannot get stuck.
+    int64_t btSettleUntilMs_ = 0;
+    static constexpr int64_t kBtSettleMs = 4000;
 
     // Consecutive 250 ms ticks with the decoder stopped AND the output drained.
     // A track change shows that shape for an instant; the end of the music

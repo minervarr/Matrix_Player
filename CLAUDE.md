@@ -1483,9 +1483,34 @@ refused `create()` as permanent — which keeps nine call sites in
 backend, in ALSA's and WASAPI's role, over `ae::AAudioSink`. Two things differ
 from the ALSA adapter and both are AAudio's doing: there is **no device list**
 (the system owns the route and moves it when headphones are plugged in), and
-the stream is **always 16-bit**, so `strictBitperfect` on a deeper source is
-refused outright and `deviceMaxBits` is stated as 16 — which is what makes the
-signal-chain readout say "truncated" instead of claiming bit-perfect.
+the stream is **always 16-bit**, so `deviceMaxBits` is stated as 16.
+
+**`AAudioOutput` refuses `strictBitperfect` OUTRIGHT** — not just a deeper
+source, not just a granted rate that differs: every request, always. Two
+independent reasons, either one fatal: `AAudioSink` opens
+`AAUDIO_SHARING_MODE_SHARED`, so every sample crosses AudioFlinger's mixer and
+its volume stage (measured on a moto g06: mixer thread at 48000 Hz, `PCM_FLOAT`
+processing, so a 44.1 kHz stream is resampled downstream of anything this app
+can see); and when the route is Bluetooth — on a phone, the common case — what
+leaves the device is SBC/AAC/aptX/LDAC, all of them **lossy encoders**, LDAC at
+990 kbps included.
+
+It used to refuse only those two specific mismatches, so a 16/44.1 track the
+phone happened to grant at 44.1 passed every check and lit the `BITPERFECT`
+badge over a lossy LDAC link — the exact opposite of what `BtOutput` says about
+the same headphones on Linux (`gui/src/os/bt_output.cc:61`), because Android
+reaches A2DP through AAudio and `MATRIX_HAVE_BLUETOOTH` is Linux-only.
+
+**One rule now, on all three platforms: if the path is not sample-exact, say so
+and do not play it.** `onPlay()` also refuses a source deeper than the device
+rather than playing it truncated and labelling it `ALTERED` — that case used to
+play, which made bit-perfect mean "exact, or near enough" while a rate mismatch
+three lines away aborted. On a phone, bit-perfect therefore plays through USB or
+AOAS and nowhere else. The BLUETOOTH section of the signal-chain page
+(`drawSignalChain`) is where the codec, rate, depth and bitrate are named, in
+the warning colour, with "Re-encoded by the Bluetooth stack after everything
+above." It only appears when `btDevice_` is populated — see the route-refresh
+note below.
 
 ### The AOAS relay backend (`AudioBackend::Aoas`, `gui/src/os/aoas_output.hh/.cc`)
 
@@ -1555,10 +1580,41 @@ silent-handover claim.
 
 ### What is still missing on the phone, and is not hidden
 
-- **No keyboard.** `onCharPortable()` is never fed, so the guided-search box can
-  be seen and not typed into. The IME is separate work.
+- ~~**No keyboard.**~~ **Done.** The activity is
+  `MatrixPlayerActivity extends io.nava.appshell.AppShellActivity` (three
+  lines, `android/app/src/main/java/`), named in the manifest and compiled
+  from `framework/app_shell/platform/android/java` — added to `sourceSets` in
+  `android/app/build.gradle`. `onCharPortable()` is STILL never fed on this
+  platform and never will be: an input method is not a stream of key presses,
+  so text arrives whole through `AppView::onTextEditPortable()`, which
+  `PlayerWindow` implements for both search boxes. `syncKeyboard()` raises and
+  drops the IME from the focus flags; a back gesture that dismisses the
+  keyboard arrives as `key::Escape` and is caught in BOTH key handlers so it
+  blurs the field instead of closing the panel or the search.
+  The one part deliberately not wired: `Host::keyboardInset()`. Bar A and the
+  EQ panel's field both sit at the TOP of their layout, so neither is covered;
+  the list under the field is, and scrolls.
 - **It will look identical and touch worse.** Hover exists, and the rail's
   letters are sized for a mouse. That is a design pass, not a seam problem.
+- **The A2DP route must be PUSHED at the app, not polled.** `onBtRouteChanged()`
+  is the only refresher, and `BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED`
+  fires on a CHANGE — so headphones already connected when the app launched
+  produced no event at all, and `getProfileProxy` being asynchronous meant every
+  query before its callback answered "nothing connected". The Audio Settings
+  panel read that once, on open, and had no reason to ask again: closing and
+  reopening it was the only way to see the truth, and the signal chain's whole
+  BLUETOOTH section stayed hidden. `BluetoothCodecManager.onServiceConnected`
+  now enumerates `getConnectedDevices()` and fires `nativeOnA2dpReady` itself.
+  `onBtRouteChanged()` also clears `asBtEditLoaded_` on a real MAC change, so a
+  panel already on screen re-seeds its codec/rate/depth buttons instead of
+  redrawing the heading over controls seeded from the empty route.
+- **Setting an A2DP codec drops the link, so playback waits for it.**
+  `applySavedBtCodec()` arms `btSettleUntilMs_` (4 s) whenever a request is
+  actually SENT, and `onPlay()` refuses inside that window with the reason on
+  screen. This only ever fires on the FIRST launch after the saved codec and the
+  negotiated one diverge — every later launch matches and returns at guard 1 —
+  which is why it presented as "the first time I open the app nothing plays,
+  and after I close it and open it again everything works".
 - **libjpeg-turbo is not built for the NDK** (its CMake refuses
   `add_subdirectory`), so JPEG art decodes through `img_decode_kit`'s
   `stb_image` fallback. Its one known cost is aspect distortion when the decode
@@ -1569,7 +1625,9 @@ silent-handover claim.
 ```bash
 cd android && VULKAN_SDK=/opt/shader-slang sh gradlew assembleDebug --no-daemon
 # SUCCESSFUL is not enough — check the APK carries its assets, and the app:
-unzip -l app/build/outputs/apk/debug/app-arm64-v8a-debug.apk | grep -c "assets/fonts/"   # 69
+unzip -l app/build/outputs/apk/debug/app-arm64-v8a-debug.apk | grep -c "assets/fonts/"   # 11
+# ...and the AutoEQ catalogue, or the EQ panel lists nothing (see below):
+unzip -l app/build/outputs/apk/debug/app-arm64-v8a-debug.apk | grep -c "assets/eq_profiles.json"  # 1
 nm -DC app/build/intermediates/cxx/*/*/obj/arm64-v8a/libmatrix_player_android.so \
   | grep -c 'PlayerWindow::'                                                             # 143
 ```
@@ -1615,6 +1673,22 @@ read without a Java `onActivityResult` override — see its own comment). The
 scan root comes from the launch intent's `scan_root` extra, handed once to
 `PlayerWindow::commitAddFolder()`, after which the ordinary incremental scan,
 folder watch and `.streamer` sidecar are the desktop's own code.
+
+**A frame that MISSES a glyph must arm the next one.** `RasterFont` bakes on
+demand and `layoutByKey()` returns the pen UNCHANGED for a cell it does not
+have — so a missing glyph is not a tofu box, it is a letter that silently is
+not there, with no gap where it was. The contract
+(`raster_font.hh`, "Misses, and why they are the mechanism") is that this costs
+*one frame*: `bakeGlyphMisses()` fills them at the top of the next
+`drawFrame()`. But `run()` is render-on-demand and blocks in `pump()` the
+moment `pendingFrames_` hits zero, so the frame that RECORDS the misses has to
+ask for that next frame or it never comes. Both `PlayerWindow::drawFrame()` and
+`ArtWindow::drawFrame()` end with `if (msdfFont_.hasMisses()) markDirty();` for
+exactly that reason. Without it, text appearing for the first time at a size no
+type role enumerates renders with letters missing — a DIFFERENT subset each
+time, as unrelated taps repaint and bake a few more cells. It was found as
+"Adaptive" drawn as `ptie`, then `Aptive`, and `32-bit` drawn as `2`, in the
+Bluetooth codec panel; nothing about that panel was wrong.
 
 **It is a `RasterFont`, not MTSDF, on BOTH platforms.** `Canvas::useMsdf()`,
 `Renderer::initMsdf()` and the `.msdf.cache` filename all keep the name from

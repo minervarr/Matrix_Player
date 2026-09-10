@@ -76,6 +76,20 @@ android {
             // UnsatisfiedLinkError the moment anyone touches it is still not
             // worth shipping.
             java.exclude '**/ArchiveEngine.java'
+
+            // app_shell ships a Java half for the one thing native Android
+            // code cannot do for itself: hold a focusable view for an input
+            // method. AppShellActivity owns the off-screen EditText, the
+            // TextWatcher and the InputMethodManager calls; MatrixPlayerActivity
+            // is the three-line subclass this app names in its manifest.
+            //
+            // Sources rather than an AAR, same as archive_engine above and for
+            // the same reason: every first-party dependency in this tree
+            // arrives as sources built into the app, with no publishing step in
+            // between. The native half (os/activity_bridge.cc) is already
+            // linked via app_shell_android — only the Java half was missing,
+            // which is why showKeyboard() was a silent no-op.
+            java.srcDirs += '../../framework/app_shell/platform/android/java'
         }
     }
 

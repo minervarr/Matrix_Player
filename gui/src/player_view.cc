@@ -558,8 +558,31 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
     // and the first real reader is applyDeviceEq() at track start.
     //
     // See ensureEqProfiles() for the rule that makes this safe.
+    //
+    // Through dataReader(), not through a path, and for exactly the reason the
+    // typefaces above go the same way: on Android there is no file to open —
+    // eq_profiles.json is an entry inside the APK. exeDir() is "" there, so
+    // `exeDir + "eq_profiles.json"` WAS the asset name and was handed to an
+    // ifstream that could never find it. Every Android launch logged
+    // "[EQ][ERROR] Failed to open eq_profiles.json" and the catalogue was
+    // empty, so the EQ panel's All Profiles tab listed nothing and its search
+    // box had nothing to search. Same bytes on the desktop, where the reader
+    // is an ordinary file read rooted at exeDir().
+    //
+    // The read happens on this thread: both hosts' readers are stateless per
+    // call (AAssetManager_open is documented thread-safe; the desktop one
+    // opens its own ifstream), and the typeface reads above have already
+    // finished on the calling thread before this one starts.
     eqProfilesThread_ = std::thread([this, exeDir] {
-        eqProfiles_.load(exeDir + "eq_profiles.json");
+        const std::string name = exeDir + "eq_profiles.json";
+        AssetReader& loader = host_->dataReader();
+        std::vector<uint8_t> bytes;
+        if (!loader.read(name.c_str(), bytes) || bytes.empty()) {
+            fprintf(stderr, "[EQ][ERROR] Failed to read %s\n", name.c_str());
+            return;
+        }
+        eqProfiles_.loadFromMemory(reinterpret_cast<const char*>(bytes.data()),
+                                   bytes.size(), name);
     });
 
     setupWatchers();
@@ -1232,6 +1255,7 @@ void PlayerWindow::drawFrame() {
                                        (int)renderer_->height() });
         renderer_->draw(frameCurves_, /*overlay_rotation_deg=*/0, frameImages_,
                         frameImagesFg_, msdfQuads_, frameShapes_);
+        if (msdfFont_.hasMisses()) markDirty();   // see the tail of this function
         return;
     }
 
@@ -2451,6 +2475,23 @@ void PlayerWindow::drawFrame() {
     }
 
     renderer_->draw(frameCurves_, /*overlay_rotation_deg=*/0, frameImages_, frameImagesFg_, msdfQuads_, frameShapes_);
+
+    // This frame asked the glyph cache for cells it did not have, and drew
+    // NOTHING for them — RasterFont::layoutByKey returns the pen unchanged on a
+    // miss, so the letters are simply absent, with no gap and no tofu box to
+    // notice. bakeGlyphMisses() at the top of the next frame will fill them,
+    // but only if there IS a next frame, and run() blocks in pump() the moment
+    // pendingFrames_ reaches zero. Arming one here is what closes that loop.
+    //
+    // Without it the miss is not "one frame late" (which is the contract
+    // RasterFont::hasMisses() states) but permanent until something unrelated
+    // repaints: a word appearing for the first time at a size no type role
+    // enumerates comes out with letters missing, and a different subset each
+    // time, as taps repaint and bake a few more cells. The Bluetooth codec
+    // panel showed it worst — "Adaptive" as "ptie", then "Aptive"; "32-bit" as
+    // "2" — because its labels are the last strings in the app to be drawn and
+    // several of them appear at a shrink-fitted size nothing else uses.
+    if (msdfFont_.hasMisses()) markDirty();
 }
 
 // ── Layout ───────────────────────────────────────────────────────────────────
@@ -4062,6 +4103,7 @@ void PlayerWindow::handleClick(int x, int y) {
         // suggestion row with nowhere to draw it.
         searchFocused_ = searchOpen_ && ptInRect(rcSearch_, x, y) != 0;
         if (searchFocused_ != wasFocused) {
+            syncKeyboard();   // a phone has no keyboard until this box asks
             // Focus decides whether the suggestion row exists at all, so the
             // list is rebuilt on both edges: filled on focus (offering the
             // whole menu before a single letter is typed), dropped on blur.
@@ -4565,6 +4607,10 @@ void PlayerWindow::toggleBitperfectMode() {
 
 void PlayerWindow::closeActivePanel() {
     activePanel_ = SettingsPanel::None;
+    // The panel is what held the focused field, so the keyboard goes with it.
+    // syncKeyboard() reads activePanel_, hence after the assignment.
+    eqSearchFocused_ = false;
+    syncKeyboard();
     // Swapping headphones is a hot action, not a trip into configuration: the
     // quick-switcher borrows the settings overlay to show the profile list, so
     // closing has to give the previous view back. Without this, Escape leaves
@@ -4746,7 +4792,7 @@ void PlayerWindow::onPanelClick(int x, int y) {
         if (ptInRect(eqCloseRc_, x, y)) { closeActivePanel(); return; }
         bool wasFocused = eqSearchFocused_;
         eqSearchFocused_ = ptInRect(eqSearchRc_, x, y);
-        if (eqSearchFocused_ != wasFocused) invalidate();
+        if (eqSearchFocused_ != wasFocused) { syncKeyboard(); invalidate(); }
         if (eqSearchFocused_) return;
 
         if (ptInRect(eqTabMine_, x, y) || ptInRect(eqTabAll_, x, y)) {
@@ -5309,6 +5355,49 @@ void PlayerWindow::seedBtEditFromDevice() {
     } else {
         return;   // nothing to seed from yet; try again next frame
     }
+
+    // ── The seed must be ONE bit, and a real one ────────────────────────────
+    //
+    // sampleRate and bits are AOSP bitmasks, and both label functions switch on
+    // a single bit — so anything else falls through to "" and the button draws
+    // EMPTY. Two values reach here that are not single bits: a BtCodecPref that
+    // has never been written defaults both fields to 0 (core/include/core/db.h),
+    // and a config read back from a stack that reported a CAPABILITY rather
+    // than a selection carries a union such as 0xF (44.1|48|88.2|96) or 0x7
+    // (16|24|32).
+    //
+    // A blank button is only half the damage. handleBluetoothCodecClick()
+    // searches its list for the current value and leaves idx at 0 when it finds
+    // nothing, so the first tap lands on entry ONE — 48 kHz, or 24-bit — and
+    // the first entry can never be reached by tapping at all.
+    //
+    // Falling back to what is actually running, then to the lowest bit of a
+    // union, then to the CD case, in that order: each step is a narrower claim
+    // than the one before it, and the last is the only one that invents
+    // anything.
+    const auto oneBit = [](int v) { return v != 0 && (v & (v - 1)) == 0; };
+    const auto lowestBit = [](int v) { return v & -v; };
+
+    if (!oneBit(asBtEdit_.sampleRate)) {
+        asBtEdit_.sampleRate =
+            oneBit(btActive_.sampleRate) ? btActive_.sampleRate
+          : asBtEdit_.sampleRate         ? lowestBit(asBtEdit_.sampleRate)
+                                         : bt_codec::kRate44100;
+    }
+    if (!oneBit(asBtEdit_.bits)) {
+        asBtEdit_.bits =
+            oneBit(btActive_.bits) ? btActive_.bits
+          : asBtEdit_.bits         ? lowestBit(asBtEdit_.bits)
+                                   : bt_codec::kBits16;
+    }
+    if (asBtEdit_.channelMode == 0) asBtEdit_.channelMode = bt_codec::kStereo;
+    // ldacQualityLabel() switches on 0..3 and blanks on anything else. The
+    // Java side already folds AOSP's 1000-based constants down (activeConfig),
+    // but a row saved before it did so would still be out of range.
+    if (asBtEdit_.ldacQuality < bt_codec::kLdac990 ||
+        asBtEdit_.ldacQuality > bt_codec::kLdacAdaptive)
+        asBtEdit_.ldacQuality = bt_codec::kLdac990;
+
     asBtEditLoaded_ = true;
 }
 
@@ -5657,6 +5746,7 @@ void PlayerWindow::onEqSettings() {
     eqBitperfectActive_ = bitperfectMode_.load();
     eqSearch_.clear();
     eqSearchFocused_ = false;
+    syncKeyboard();              // the panel opens with nothing focused
     eqSelectedRow_ = -1;
     eqHoverRow_ = -1;
     eqScrollY_ = 0;
@@ -6633,6 +6723,7 @@ void PlayerWindow::openSearch() {
     searchFocused_ = true;
     eqListOpen_    = false;      // two unfurled things at once is a mess
     refreshSuggestions();        // offer the whole menu before a letter is typed
+    syncKeyboard();              // opening it IS focusing it
     recalcLayout();
     invalidate();
 }
@@ -6648,6 +6739,7 @@ void PlayerWindow::closeSearch() {
     searchQuery_.clear();
     searchChips_.clear();
     searchSuggest_.clear();
+    syncKeyboard();
     markSearchEmptyDirty();
     rebuildGridIndices();
     gridScrollY_ = 0;
@@ -6835,6 +6927,36 @@ void PlayerWindow::onPlay(StartCause cause) {
     // Same rule, and it matters more here: a stale chain would keep a whole
     // page of confident numbers about a track that stopped playing.
     chain_ = SignalChain{};
+
+    // ── Do not start into a Bluetooth link that is being rebuilt ────────────
+    //
+    // applySavedBtCodec() has just asked the stack for a codec, and that drops
+    // the A2DP transport and negotiates a new one. A track started now opens an
+    // output onto a route that disappears underneath it a second or two later:
+    // the stream is gone, writes fail from then on, and what the listener sees
+    // is a track that will not play and a clock frozen where it started. It
+    // then works perfectly on the next launch, because by then the saved codec
+    // IS what the link is running and no request is sent at all — which is
+    // exactly the "only the first time I open the app" shape this was reported
+    // with.
+    //
+    // Refused, with the reason on screen, rather than started and lost. The
+    // window is a few seconds and closes by itself.
+    if (btSettleUntilMs_ > 0) {
+        const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (now < btSettleUntilMs_) {
+            audioNotice_ = "Bluetooth is switching codec \xE2\x80\x94 the link is "
+                           "reconnecting. Press play again in a moment.";
+            printf("[Audio] holding play: A2DP renegotiating for %lld more ms\n",
+                   (long long)(btSettleUntilMs_ - now));
+            fflush(stdout);
+            invalidate();
+            return;
+        }
+        btSettleUntilMs_ = 0;
+    }
+
     Track t;
     {
         std::lock_guard<std::mutex> lk(albumsMu_);
@@ -6870,7 +6992,28 @@ void PlayerWindow::onPlay(StartCause cause) {
     nextDecoder_.close();
     active_ = &decoder_;
 
-    if (!decoder_.open(t.filePath)) return;
+    // The one failure in this whole function that used to say NOTHING: no
+    // notice, no state change, no repaint. isPlaying_ is still false here and
+    // seekTotalMs_ is not set until a few lines below, so from the outside a
+    // track that could not be opened is indistinguishable from a tap that never
+    // registered — the clock simply keeps whatever it last showed. That is
+    // exactly what "I press a track and nothing happens, the duration is
+    // frozen" looks like, and it is the likeliest thing to hit on a phone,
+    // where a file can be listed by MediaStore and still not be openable
+    // (a storage grant that landed after this process was forked, a card
+    // pulled, a path rewritten under us).
+    //
+    // Decoder::open already logs which file and why. This puts it on screen,
+    // the same way every other audio failure here does.
+    if (!decoder_.open(t.filePath)) {
+        audioNotice_ = "Could not open this track \xE2\x80\x94 the file may be "
+                       "missing, unreadable, or in a format this build cannot "
+                       "decode.";
+        printf("[Play][ERROR] decoder refused '%s'\n", t.filePath.c_str());
+        fflush(stdout);
+        invalidate();
+        return;
+    }
 
     // Stats before the UI state: beginTrackStats() banks the OUTGOING track,
     // and that needs seekPosMs_ as it stands now — it is zeroed a few lines
@@ -7019,6 +7162,40 @@ void PlayerWindow::onPlay(StartCause cause) {
 #endif
     printf("[Audio] device max bit depth: %d\n", deviceMaxBits);
     fflush(stdout);
+
+    // ── Bit-perfect mode does not play a truncated source ────────────────────
+    //
+    // This is the one loss bit-perfect mode used to accept and merely LABEL: a
+    // source deeper than the device, which configure() relaxes rather than
+    // failing (UsbAudioDriver's "Relax: match rate, prefer highest bit depth",
+    // and the USB adapter never passes the strict flag down at all). The track
+    // played, the badge read ALTERED, and the readout explained itself — but it
+    // played, which made bit-perfect mode mean "exact, or near enough" while a
+    // rate mismatch a few lines above aborted outright. Two rules for one
+    // switch.
+    //
+    // Now it refuses, the same as the rate case, because the listener asked for
+    // one rule: if the path is not bit-perfect, say so and do not play it. The
+    // reported depth is the one the device actually took, so this catches a DAC
+    // that accepted 24 bits for a 32-bit file just as it catches AAudio's 16.
+    if (isBitperfect && deviceMaxBits < active_->bitsPerSample()) {
+        const int fileBits = active_->bitsPerSample();
+        printf("[Bitperfect][ERROR] %d-bit source, %d-bit device — aborting\n",
+               fileBits, deviceMaxBits);
+        fflush(stdout);
+        audioNotice_ = std::to_string(fileBits) + "-bit source cannot be played "
+                       "bit-perfect on a " + std::to_string(deviceMaxBits) +
+                       "-bit output — switch to Reference EQ to play it.";
+        bpState_  = BpState::Degraded;
+        bpDetail_ = std::to_string(fileBits) + "-bit source truncated to " +
+                    std::to_string(deviceMaxBits) + "-bit device";
+        chain_ = SignalChain{};   // nothing played, so describe nothing
+        invalidate();
+        output_->stop();
+        active_->stop();
+        isPlaying_ = false;
+        return;
+    }
 
     // ── Report what the chain ACTUALLY achieves, never what was merely asked ──
     // Everything needed is known only here: the negotiated rate and the device's
@@ -7905,6 +8082,20 @@ void PlayerWindow::onBtRouteChanged() {
     asBtCap_  = bt_codec::capability();
     asBtSelectable_ = bt_codec::selectableCodecs();
 
+    // The panel's own controls are seeded ONCE, from whatever was connected
+    // when it opened (seedBtEditFromDevice, guarded by this flag). Dropping the
+    // guard here is what lets a panel that is already on screen re-seed itself
+    // when headphones arrive: without it the section redrew its heading and its
+    // device name while the codec, rate and depth buttons still showed the
+    // state of the empty route they were seeded from — which reads as the panel
+    // half-updating, and was the reason closing and reopening it was the only
+    // way to see the truth.
+    //
+    // Only on a genuine route CHANGE. An apply() verdict also lands here, and
+    // re-seeding then would throw away an edit the listener has made and not
+    // yet applied.
+    if (was.mac != btDevice_.mac) asBtEditLoaded_ = false;
+
     if (btDevice_.empty()) {
         btNotice_.clear();
         chain_.btCodec.clear();
@@ -7996,6 +8187,12 @@ void PlayerWindow::applySavedBtCodec() {
                     " for " + btDevice_.name + ".";
         return;
     }
+    // Sent. The link now goes down and comes back — see btSettleUntilMs_ — and
+    // onPlay() holds off until it has, rather than starting a track into a
+    // transport that is about to vanish under it.
+    btSettleUntilMs_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now().time_since_epoch()).count()
+                     + kBtSettleMs;
     btNotice_.clear();
 }
 
@@ -8821,9 +9018,96 @@ void PlayerWindow::onPanelChar(uint32_t codepoint) {
     invalidate();
 }
 
+// ── The on-screen keyboard ───────────────────────────────────────────────────
+//
+// Two text fields, one keyboard, and a platform that only raises it when asked.
+// The rule is simply "whatever is focused owns the IME", which is why this is
+// derived from the focus flags rather than driven from the taps that set them:
+// a tap that blurs a field and a tap that focuses the other one then need no
+// coordination, and neither does the Escape that blurs without a tap at all.
+//
+// Seeding matters. show_keyboard() hands Java the field's CURRENT contents,
+// because while an input method composes it owns the buffer — raise it empty
+// over a box that already says "bjork" and the first composed syllable replaces
+// the word instead of extending it.
+void PlayerWindow::syncKeyboard() {
+    const ImeTarget want =
+        (activePanel_ == SettingsPanel::EqSettings && eqSearchFocused_) ? ImeTarget::EqSearch
+      : (activePanel_ == SettingsPanel::None && searchOpen_ && searchFocused_) ? ImeTarget::LibrarySearch
+      : ImeTarget::None;
+
+    if (want == imeTarget_ && (want != ImeTarget::None) == keyboardUp_) return;
+
+    imeTarget_ = want;
+    if (want == ImeTarget::None) {
+        if (keyboardUp_) { host_->hideKeyboard(); keyboardUp_ = false; }
+        return;
+    }
+    const std::string& seed =
+        (want == ImeTarget::EqSearch) ? eqSearch_ : searchQuery_;
+    host_->showKeyboard(seed, seed.size());   // cursor at the end
+    keyboardUp_ = true;
+}
+
+// An input method reports the WHOLE field, not a keystroke. So this assigns
+// rather than appends, and every edit — a letter, a backspace, a word the IME
+// replaced wholesale, a paste — arrives the same way and needs no separate
+// case. onCharPortable() stays exactly as it was for the desktop; the two never
+// run on one platform.
+//
+// cursorByte is accepted and not stored: neither box draws a caret POSITION
+// (drawSearchField puts a bar at the end of the text), so keeping it would be
+// state nothing reads. Java owns the real cursor while composing.
+void PlayerWindow::onTextEditPortable(const std::string& text, size_t cursorByte) {
+    (void)cursorByte;
+
+    // Aimed at the field that had focus when the keyboard went up, never at
+    // whatever has it now: these arrive from Android's UI thread through a
+    // slot that pump() drains, so a tap that moved focus can land between the
+    // keystroke and its delivery.
+    switch (imeTarget_) {
+    case ImeTarget::EqSearch:
+        if (activePanel_ != SettingsPanel::EqSettings || !eqSearchFocused_) return;
+        if (text == eqSearch_) return;
+        eqSearch_ = text;
+        eqRefilter();
+        eqScrollY_ = 0;
+        invalidate();
+        return;
+
+    case ImeTarget::LibrarySearch: {
+        if (!searchOpen_ || !searchFocused_) return;
+        if (text == searchQuery_) return;
+        searchQuery_ = text;
+        refreshSuggestions();
+        rebuildGridIndices();
+        gridScrollY_ = 0;
+        recalcLayout();
+        invalidate();
+        return;
+    }
+
+    case ImeTarget::None:
+    default:
+        return;
+    }
+}
+
 bool PlayerWindow::onPanelKeyDown(int keyCode) {
     if (activePanel_ == SettingsPanel::None) return false;
     if (keyCode == key::Escape) {
+        // A dismissed input method arrives here as an Escape (AndroidHost's
+        // drainActivity() maps it), and a back gesture aimed at the KEYBOARD
+        // must not also close the panel behind it — that would take away the
+        // profile list the listener was about to read. Blur the field, drop the
+        // keyboard, and stop. A second Escape, with no keyboard up, closes the
+        // panel as it always did.
+        if (keyboardUp_) {
+            eqSearchFocused_ = false;
+            syncKeyboard();
+            invalidate();
+            return true;
+        }
         closeActivePanel();
         return true;
     }
@@ -9029,6 +9313,21 @@ void PlayerWindow::onKeyDownPortable(int keyCode) {
         if (isPlaying_) onStop(); else if (currentAlbum_ >= 0) onPlay();
         return;
     case key::Escape:
+        // On a phone this Escape is usually not a key at all: AndroidHost turns
+        // a dismissed input method into one (drainActivity), so a back gesture
+        // aimed at the KEYBOARD arrives here. Taking it as navigation would
+        // close the search box and throw away what was typed — one gesture
+        // doing two things, the second of them destructive. Drop the caret and
+        // stop; a second Escape, with no keyboard up, navigates as it always
+        // did. onPanelKeyDown() guards the panel case the same way.
+        if (keyboardUp_) {
+            searchFocused_ = false;
+            syncKeyboard();
+            refreshSuggestions();   // the suggestion row exists only while focused
+            recalcLayout();
+            invalidate();
+            return;
+        }
         goBack();
         return;
     }

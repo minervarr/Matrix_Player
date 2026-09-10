@@ -520,12 +520,38 @@ static std::vector<Track> parseTracksParallel(const std::vector<PendingParse>& f
         futures.push_back(std::async(std::launch::async, [&files, start, end]() {
             std::vector<Track> tracks;
             tracks.reserve(end - start);
-            for (size_t j = start; j < end; j++)
-                tracks.push_back(files[j].flac
-                                     ? quickParseFLAC(files[j].path, files[j].size,
-                                                      files[j].mtime)
-                                     : quickParseWAV(files[j].path, files[j].size,
-                                                     files[j].mtime));
+            for (size_t j = start; j < end; j++) {
+                Track t = files[j].flac
+                              ? quickParseFLAC(files[j].path, files[j].size,
+                                               files[j].mtime)
+                              : quickParseWAV(files[j].path, files[j].size,
+                                              files[j].mtime);
+                // A file that could not be OPENED is not a track.
+                //
+                // Both parsers build the Track first — path, and a title from
+                // the stem — and only then try the file, so a failure to open
+                // it falls straight through to a return with sampleRate,
+                // channels, bitDepth and durationMs all still zero. Admitting
+                // that put a row in the library that looks like music, lists
+                // as its filename with no duration, and dead-ends in
+                // Decoder::open when it is tapped.
+                //
+                // It is not hypothetical on a phone: MediaStore answers over
+                // Binder and will happily name a file this process cannot open
+                // — a storage grant that landed after the process was forked,
+                // a card pulled, a path rewritten under us. Every one of those
+                // produces exactly this shape.
+                //
+                // Keyed on sampleRate because it is the one field neither
+                // parser can leave zero on success: a stream with no sample
+                // rate is not decodable by anything downstream either.
+                if (t.sampleRate <= 0) {
+                    fprintf(stderr, "[Scan][WARN] unreadable, skipping: %s\n",
+                            files[j].path.c_str());
+                    continue;
+                }
+                tracks.push_back(std::move(t));
+            }
             return tracks;
         }));
     }
