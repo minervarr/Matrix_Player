@@ -2685,7 +2685,12 @@ void PlayerWindow::recalcLayout() {
     // any text painted earlier. An overlay dropdown here renders as the
     // sidebar's nav labels showing straight through it — seen, not guessed.
     rcChips_ = { 0, 0, 0, 0 };
-    if (!settingsOpen_ && !trackPanelOpen_) {
+    // ...and not while a full-page SCENE owns the content area either. The
+    // chip strip belongs to the grid it filters; carving its height off
+    // rcGrid_.top while the signal chain or the artwork is up stole 58-104 px
+    // from a page that has nothing to do with the search, and did it invisibly
+    // -- the strip is not drawn there, so the space simply went missing.
+    if (!settingsOpen_ && !trackPanelOpen_ && overlay_ == ContentOverlay::None) {
         int rowH = (int)metrics_.space(46.0f);
         int rows = (searchChips_.empty() ? 0 : 1)
                  + ((searchFocused_ && !searchSuggest_.empty()) ? 1 : 0);
@@ -4440,10 +4445,15 @@ void PlayerWindow::onMouseWheel(int x, int y, int delta) {
     if (!settingsOpen_ && overlay_ == ContentOverlay::AlbumArt) return;
     if (!settingsOpen_ && overlay_ != ContentOverlay::None && ptInRect(rcGrid_, x, y)) {
         if (overlay_ == ContentOverlay::SignalChain) {
-            // scContentH_ is measured by the draw; the clamp there heals a
-            // stale value in one frame (same contract as the album view).
-            const int viewH = rcGrid_.bottom - rcGrid_.top;
-            scScrollY_ = std::clamp(scScrollY_ - delta, 0, std::max(0, scContentH_ - viewH));
+            // Both numbers are measured BY the draw (the clamp there heals a
+            // stale value in one frame, same contract as the album view) --
+            // and crucially the viewport is the draw's own, not rcGrid_'s.
+            // rcGrid_ is taller by the page header, so using it made this
+            // ceiling 91*scale px lower than the draw's and the bottom of the
+            // page unreachable; when the content landed between the two the
+            // page would not scroll at all. See scViewH_.
+            scScrollY_ = (int)clampScroll((float)(scScrollY_ - delta),
+                                          (float)scContentH_, (float)scViewH_);
             invalidate();
         }
         return;
@@ -4470,10 +4480,16 @@ void PlayerWindow::onMouseWheel(int x, int y, int delta) {
         return;
     }
 
-    if (!trackPanelOpen_ && ptInRect(rcGrid_, x, y)) {
-        gridScrollY_ -= delta;
+    // !settingsOpen_ for the same reason every branch above it has it: the
+    // Settings page is drawn INTO rcGrid_, so without this the wheel scrolled
+    // the album grid hidden behind it -- and the listener came back to a
+    // library sitting somewhere they never put it. That is exactly the failure
+    // the comment at the top of this function describes and this branch was
+    // the one place still open to it.
+    if (!settingsOpen_ && !trackPanelOpen_ && ptInRect(rcGrid_, x, y)) {
         int gridH = rcGrid_.bottom - rcGrid_.top;
-        gridScrollY_ = std::clamp(gridScrollY_, 0, std::max(0, gridTotalHeight_ - gridH));
+        gridScrollY_ = (int)clampScroll((float)(gridScrollY_ - delta),
+                                        (float)gridTotalHeight_, (float)gridH);
         invalidate();
     }
 }
@@ -8496,6 +8512,55 @@ void PlayerWindow::drawSignalChain(Canvas& canvas, const LayoutRect& area) {
     const float lineH   = metrics_.space(30.0f);
     float y = c.y + pad - (float)scScrollY_;
 
+    // ── The value column, and why anything here wraps at all ────────────────
+    //
+    // Every row used to be emitted at a fixed x with no width budget, on the
+    // assumption that one row is one line. Several of these values come from
+    // OUTSIDE the app and have no length limit worth trusting: an AutoEQ
+    // profile name (69 characters in the shipped catalogue, ~103 once its
+    // preamp/biquad suffix is added), btNotice_ (a fixed 76-character sentence
+    // plus a headphone name the listener can rename to anything), a device name
+    // that is a UAC descriptor string, an ALSA device string, or a BlueZ object
+    // path. The clip is pixel-exact per glyph, so the overflow was not even an
+    // ellipsis -- the text was sliced mid-letter at the edge with nothing on
+    // screen saying it had been cut. In portrait this column holds about 46
+    // characters.
+    const float valueW = std::max(metrics_.space(60.0f),
+                                  c.w - pad - labelW - pad);
+
+    // Rebuild the wrap cache when the width changes or when any string that
+    // can vary has. See the members' comment for why this is a signature and
+    // not a dirty flag.
+    std::string sig = chain_.valid ? "1" : "0";
+    sig += '\x1f'; sig += chain_.eqProfile;
+    sig += '\x1f'; sig += chain_.deviceName;
+    sig += '\x1f'; sig += chain_.wire;
+    sig += '\x1f'; sig += chain_.btDevice;
+    sig += '\x1f'; sig += chain_.btDetail;
+    sig += '\x1f'; sig += chain_.backend;
+    sig += '\x1f'; sig += chain_.codec;
+    sig += '\x1f'; sig += btNotice_;
+    sig += '\x1f'; sig += bpDetail_;
+    if (scWrapW_ != valueW || scWrapSig_ != sig) {
+        scWrapped_.clear();
+        scWrapW_   = valueW;
+        scWrapSig_ = sig;
+    }
+    size_t wrapIdx = 0;
+    // Wrapped lines for the next value, built once and then reused. The rows
+    // are visited in the same order every frame, so the running index is a
+    // stable key -- and the cache is cleared whole whenever that order could
+    // have changed.
+    auto linesFor = [&](const std::string& str, float size,
+                        FontStyle style) -> const std::vector<std::string>& {
+        if (wrapIdx >= scWrapped_.size()) {
+            scWrapped_.emplace_back();
+            wrapText(canvas, str, valueW, size, style, scWrapped_.back());
+            if (scWrapped_.back().empty()) scWrapped_.back().push_back(str);
+        }
+        return scWrapped_[wrapIdx++];
+    };
+
     auto section = [&](const char* title) {
         y += metrics_.space(SP_MD);
         canvas.textStyled(title, c.x + pad, y, metrics_.text.caption,
@@ -8504,20 +8569,32 @@ void PlayerWindow::drawSignalChain(Canvas& canvas, const LayoutRect& area) {
     };
     // label + value on one row; an empty label continues the previous one, so
     // a stage's detail lines up under its own text rather than under its name.
+    // A value too long for the column runs on to further lines in the SAME
+    // column, so continuation text stays under the value and never under the
+    // label -- a hanging indent, which is what makes a wrapped row still read
+    // as one row.
     auto row = [&](const std::string& label, const std::string& value, ColorRef clr) {
         if (value.empty()) return;
+        const std::vector<std::string>& lines =
+            linesFor(value, metrics_.text.body, FontStyle::Roman);
         if (!label.empty())
             canvas.textStyled(label, c.x + pad, y, metrics_.text.body,
                               toColor(CLR_TEXT_SECONDARY), FontStyle::Roman);
-        canvas.textStyled(value, c.x + pad + labelW, y, metrics_.text.body,
-                          toColor(clr), FontStyle::Roman);
-        y += lineH;
+        for (const std::string& ln : lines) {
+            canvas.textStyled(ln, c.x + pad + labelW, y, metrics_.text.body,
+                              toColor(clr), FontStyle::Roman);
+            y += lineH;
+        }
     };
     auto note = [&](const std::string& s, ColorRef clr) {
         if (s.empty()) return;
-        canvas.textStyled(s, c.x + pad + labelW, y, metrics_.text.secondary,
-                          toColor(clr), FontStyle::Italic);
-        y += lineH;
+        const std::vector<std::string>& lines =
+            linesFor(s, metrics_.text.secondary, FontStyle::Italic);
+        for (const std::string& ln : lines) {
+            canvas.textStyled(ln, c.x + pad + labelW, y, metrics_.text.secondary,
+                              toColor(clr), FontStyle::Italic);
+            y += lineH;
+        }
     };
 
     const SignalChain& s = chain_;
@@ -8682,13 +8759,22 @@ void PlayerWindow::drawSignalChain(Canvas& canvas, const LayoutRect& area) {
     }
 
     canvas.clearClip();
+    // y has accumulated one lineH per DRAWN line, so this is the real height
+    // now that a row can be more than one line -- it was a count of rows.
     scContentH_ = (int)(y + scScrollY_ - c.y + pad);
     // Same self-healing clamp the album view uses, and for the same reason:
     // the height is measured BY the draw, so recalcLayout() only ever sees the
     // previous frame's value.
     const int viewH  = content.bottom - content.top;
+    scViewH_ = viewH;   // published for the wheel handler -- see the member
     const int capped = (int)clampScroll((float)scScrollY_, (float)scContentH_, (float)viewH);
     if (capped != scScrollY_) { scScrollY_ = capped; markDirty(); }
+
+    // The affordance every other scrolling surface already draws (design system
+    // 8.8). It draws nothing when the content fits, so it is called
+    // unconditionally -- and its absence here was half of why a page that could
+    // not be scrolled also gave no hint that there was anything to scroll to.
+    panels::drawScrollbar(canvas, content, scContentH_, scScrollY_, metrics_.scale);
 
     panels::drawButton(canvas, rcScClose_, "Close", hoverScClose_, metrics_.text.body);
 }

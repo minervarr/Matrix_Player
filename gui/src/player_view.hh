@@ -978,8 +978,38 @@ private:
     void drawSignalChain(Canvas& canvas, const LayoutRect& area);
     int  scScrollY_ = 0;
     int  scContentH_ = 0;      // measured by the draw, like albumViewContentH_
+    // The viewport the draw actually laid out into, PUBLISHED for the wheel.
+    //
+    // Not rcGrid_'s height: drawSignalChain lays out into what
+    // panels::drawHeader returns, which is rcGrid_ minus its 91*scale header.
+    // The wheel handler used rcGrid_ and so computed a maximum 91 px SMALLER
+    // than the draw's, and the draw's clampScroll can only lower a too-large
+    // offset -- it never raises the wheel's ceiling. When the laid-out height
+    // landed between the two the page refused to scroll at all while still
+    // having content below the fold, which is every rotated phone: 629 px of
+    // content area against a ~663 px page. Publishing the measured height, the
+    // way scContentH_ already works, means there is one number and no way for
+    // the two to disagree -- and no second copy of that 91.0f, which only
+    // panels::drawHeader knows.
+    int  scViewH_ = 0;
     LayoutRect rcScClose_{};
     bool hoverScClose_ = false;
+
+    // Word-wrap cache for the signal chain's value column.
+    //
+    // drawSignalChain runs on every frame; wrapText is O(n^2) with an
+    // allocation per codepoint, so wrapping there unconditionally would put
+    // that cost on every repaint. Keyed on the wrap WIDTH and on a signature of
+    // the strings that can actually change, so it rebuilds when the window
+    // resizes or the track changes and is a vector lookup the rest of the time.
+    //
+    // The signature rather than a dirty flag on purpose: the rows come from
+    // chain_, btNotice_ and bpDetail_, which are written from half a dozen
+    // places, and a flag that one of them forgets to set is a cache that
+    // silently draws the previous track's text.
+    float                                 scWrapW_ = -1.0f;
+    std::string                           scWrapSig_;
+    std::vector<std::vector<std::string>> scWrapped_;
     void closeOverlay();
     void drawArtOverlay(Canvas& canvas, const LayoutRect& area);
     void releaseOverlayArtTexture();
