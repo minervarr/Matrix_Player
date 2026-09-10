@@ -164,6 +164,7 @@ const char* kStates[] = {
     "32-audio-settings",
     "33-eq-settings",
     "34-eq-all-profiles",
+    "3b-interface",
     "35-folder-picker",
     "36-playlists",
     "37-playlists-heavy-rotation",

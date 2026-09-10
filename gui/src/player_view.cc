@@ -592,6 +592,14 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
     // Load audio mode
     bitperfectMode_.store(db_.loadSetting("audio_mode") == "bitperfect");
 
+    // Scroll direction, one per input kind. Defaults are each platform's own
+    // norm, so an empty database behaves exactly as the app always has: a
+    // finger drags the content with it, a wheel keeps the traditional sense.
+    // Stored as the string "1" so that a missing key -- which loadSetting
+    // returns as "" -- IS the default, the same trick audio_mode uses.
+    scrollInvertTouch_ = db_.loadSetting("scroll_invert_touch") == "1";
+    scrollInvertWheel_ = db_.loadSetting("scroll_invert_wheel") == "1";
+
     // Load audio backend. Default (nothing saved yet) is WASAPI Exclusive on
     // Windows / ALSA on Linux — never USB. USB is bit-perfect and the primary
     // path once chosen, but probing for it unconditionally on a fresh install
@@ -1642,11 +1650,12 @@ void PlayerWindow::drawFrame() {
             { rcSettingsManage_,    "Manage Music Folders",  1 },
             { rcSettingsAudio_,     "Audio Output Settings", 2 },
             { rcSettingsEq_,        "EQ / AutoEQ Profiles",  3 },
-            { rcSettingsBitperfect_, modeLabel,              4 },
+            { rcSettingsInterface_, "Interface",             4 },
+            { rcSettingsBitperfect_, modeLabel,              5 },
         };
         for (auto& item : items) {
             Rect r = toRect(item.rc);
-            bool isActiveModeRow = (item.idx == 4 && bp);
+            bool isActiveModeRow = (item.idx == 5 && bp);
             // Hover fills the box (below the border so the outline stays crisp).
             if (hoverSettingsItem_ == item.idx && !isActiveModeRow)
                 canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
@@ -2959,7 +2968,7 @@ void PlayerWindow::recalcLayout() {
     // the row height, and each only as far as it actually has to go. At every
     // size where today's rhythm already fits, neither branch is entered.
     {
-        const int kSettRows = 5;
+        const int kSettRows = 6;
         const int avail = std::max(0, rcGrid_.bottom - settPad - settTop);
         if (kSettRows * rowH + (kSettRows - 1) * rowGap > avail) {
             rowGap = std::max(0, (avail - kSettRows * rowH) / (kSettRows - 1));
@@ -2976,7 +2985,8 @@ void PlayerWindow::recalcLayout() {
     rcSettingsManage_     = settRow(1);
     rcSettingsAudio_      = settRow(2);
     rcSettingsEq_         = settRow(3);
-    rcSettingsBitperfect_ = settRow(4);
+    rcSettingsInterface_  = settRow(4);
+    rcSettingsBitperfect_ = settRow(5);
 
     // Put the anchor tile back at the top-left, now that gridCols_ and
     // gridTotalHeight_ are final, and clamp — because the new grid may be
@@ -3903,7 +3913,8 @@ int PlayerWindow::settingsHitTest(int x, int y) const {
     if (ptInRect(rcSettingsManage_, x, y)) return 1;
     if (ptInRect(rcSettingsAudio_, x, y)) return 2;
     if (ptInRect(rcSettingsEq_, x, y)) return 3;
-    if (ptInRect(rcSettingsBitperfect_, x, y)) return 4;
+    if (ptInRect(rcSettingsInterface_, x, y)) return 4;
+    if (ptInRect(rcSettingsBitperfect_, x, y)) return 5;
     return -1;
 }
 
@@ -4354,7 +4365,8 @@ void PlayerWindow::handleClick(int x, int y) {
         if (sett == 1) onManageFolders();
         if (sett == 2) onAudioSettings();
         if (sett == 3) onEqSettings();
-        if (sett == 4) toggleBitperfectMode();
+        if (sett == 4) onInterfaceSettings();
+        if (sett == 5) toggleBitperfectMode();
         return;
     }
 }
@@ -4425,6 +4437,34 @@ void PlayerWindow::onLButtonDblClk(int x, int y) {
     }
 }
 
+// ── Scrolling: the direction, decided once ───────────────────────────────────
+//
+// Every consumer below moves its offset by scrollDelta(delta) and bounds it
+// with scrollTo(). Nothing else applies a sign, and nothing else re-derives a
+// maximum -- which is the whole point, because the sign used to be written out
+// at eight separate sites and the maximum at eight more.
+//
+// The base sense is SUBTRACTIVE: a positive delta lowers the offset. That is
+// what makes a finger moving down the screen (Android sends the finger's own
+// displacement) carry the content down with it, and a wheel pushed away from
+// the listener (+120 on both desktops) move the view up. The two conventions
+// already agree once expressed this way, which is why the app needs no idea
+// which one it is holding -- until somebody wants it reversed, and then it
+// needs to know exactly that, because reversing both from one flag gets one of
+// them wrong. Hence Host::inputIsTouch().
+int PlayerWindow::scrollDelta(int rawDelta) const {
+    const bool invert = host_ && host_->inputIsTouch() ? scrollInvertTouch_
+                                                       : scrollInvertWheel_;
+    return invert ? -rawDelta : rawDelta;
+}
+
+// The bounds, through the one clamp the engine already ships and already
+// tests (framework/vk_canvas/core/layout.hh). Content shorter than the view
+// cannot scroll; the offset never goes above the top or past the bottom.
+int PlayerWindow::scrollTo(int offset, int delta, int contentH, int viewH) {
+    return (int)clampScroll((float)(offset - delta), (float)contentH, (float)viewH);
+}
+
 // x,y are client-relative (the host converts from whatever coordinate space
 // its own wheel event delivers — Windows' WM_MOUSEWHEEL is screen-relative
 // and gets ScreenToClient()'d in windows_host.cc before calling this;
@@ -4435,6 +4475,11 @@ void PlayerWindow::onMouseWheel(int x, int y, int delta) {
     // arrive is the moment the stroke stopped being a tap. Disarming here is
     // what keeps a scroll that started on an album tile from opening it.
     pressArmed_ = false;
+
+    // The one place a raw host delta becomes a scroll. Everything below --
+    // including onPanelWheel, and including Android's fling, which arrives
+    // through this same entry point -- works in the app's own sense from here.
+    delta = scrollDelta(delta);
 
     if (activePanel_ != SettingsPanel::None) { onPanelWheel(x, y, delta); return; }
     // A scene owns the content area, so the wheel stops here rather than
@@ -4452,8 +4497,7 @@ void PlayerWindow::onMouseWheel(int x, int y, int delta) {
             // ceiling 91*scale px lower than the draw's and the bottom of the
             // page unreachable; when the content landed between the two the
             // page would not scroll at all. See scViewH_.
-            scScrollY_ = (int)clampScroll((float)(scScrollY_ - delta),
-                                          (float)scContentH_, (float)scViewH_);
+            scScrollY_ = scrollTo(scScrollY_, delta, scContentH_, scViewH_);
             invalidate();
         }
         return;
@@ -4461,10 +4505,8 @@ void PlayerWindow::onMouseWheel(int x, int y, int delta) {
     if (trackPanelOpen_ && !settingsOpen_ && ptInRect(rcTrackPanel_, x, y)) {
         // The album view scrolls as one page; its content height is
         // measured by the draw block (albumViewContentH_).
-        trackScrollY_ -= delta;
         int panelH = rcTrackPanel_.bottom - rcTrackPanel_.top;
-        trackScrollY_ = std::clamp(trackScrollY_, 0,
-                                   std::max(0, albumViewContentH_ - panelH));
+        trackScrollY_ = scrollTo(trackScrollY_, delta, albumViewContentH_, panelH);
         invalidate();
         return;
     }
@@ -4475,7 +4517,7 @@ void PlayerWindow::onMouseWheel(int x, int y, int delta) {
         plKind_ != PlaylistKind::None && ptInRect(rcGrid_, x, y)) {
         int listH = plListArea_.bottom - plListArea_.top;
         int contentH = (int)plEntries_.size() * plRowH_;
-        plScrollY_ = std::clamp(plScrollY_ - delta, 0, std::max(0, contentH - listH));
+        plScrollY_ = scrollTo(plScrollY_, delta, contentH, listH);
         invalidate();
         return;
     }
@@ -4488,8 +4530,7 @@ void PlayerWindow::onMouseWheel(int x, int y, int delta) {
     // the one place still open to it.
     if (!settingsOpen_ && !trackPanelOpen_ && ptInRect(rcGrid_, x, y)) {
         int gridH = rcGrid_.bottom - rcGrid_.top;
-        gridScrollY_ = (int)clampScroll((float)(gridScrollY_ - delta),
-                                        (float)gridTotalHeight_, (float)gridH);
+        gridScrollY_ = scrollTo(gridScrollY_, delta, gridTotalHeight_, gridH);
         invalidate();
     }
 }
@@ -4689,6 +4730,10 @@ void PlayerWindow::drawActivePanel(Canvas& canvas, const LayoutRect& area) {
         drawFolderPicker(canvas, area);
         closeRc = &fpCloseRc_; hoverClose = fpHoverClose_;
         break;
+    case SettingsPanel::Interface:
+        drawInterfaceSettings(canvas, area);
+        closeRc = &isCloseRc_; hoverClose = isHoverClose_;
+        break;
     case SettingsPanel::None:
         break;
     }
@@ -4760,6 +4805,12 @@ void PlayerWindow::onPanelMouseMove(int x, int y) {
         bool ha = ptInRect(fpBtnCancel_, x, y); if (ha != fpHoverCancel_) { fpHoverCancel_ = ha; changed = true; }
         int row = hitTestListRows(fpListRows_, x, y);
         if (row != fpHoverRow_) { fpHoverRow_ = row; changed = true; }
+        break;
+    }
+    case SettingsPanel::Interface: {
+        bool hc = ptInRect(isCloseRc_, x, y); if (hc != isHoverClose_) { isHoverClose_ = hc; changed = true; }
+        int row = ptInRect(isRowTouch_, x, y) ? 0 : (ptInRect(isRowWheel_, x, y) ? 1 : -1);
+        if (row != isHoverRow_) { isHoverRow_ = row; changed = true; }
         break;
     }
     case SettingsPanel::None:
@@ -4893,6 +4944,25 @@ void PlayerWindow::onPanelClick(int x, int y) {
         if (row >= 0) { eqSelectedRow_ = row; invalidate(); }
         return;
     }
+    case SettingsPanel::Interface: {
+        if (ptInRect(isCloseRc_, x, y)) { closeActivePanel(); return; }
+        // Written the moment it is touched. There is no Apply on this page --
+        // a direction is felt, not configured, so it takes effect on the very
+        // next scroll and the listener can flick the list to check.
+        if (ptInRect(isRowTouch_, x, y)) {
+            scrollInvertTouch_ = !scrollInvertTouch_;
+            db_.saveSetting("scroll_invert_touch", scrollInvertTouch_ ? "1" : "0");
+            invalidate();
+            return;
+        }
+        if (ptInRect(isRowWheel_, x, y)) {
+            scrollInvertWheel_ = !scrollInvertWheel_;
+            db_.saveSetting("scroll_invert_wheel", scrollInvertWheel_ ? "1" : "0");
+            invalidate();
+            return;
+        }
+        return;
+    }
     case SettingsPanel::FolderPicker: {
         if (ptInRect(fpCloseRc_, x, y) || ptInRect(fpBtnCancel_, x, y)) { closeActivePanel(); return; }
         if (ptInRect(fpBtnSelect_, x, y)) {
@@ -4921,14 +4991,14 @@ void PlayerWindow::onPanelWheel(int x, int y, int delta) {
     case SettingsPanel::ManageFolders: {
         int listH = mfListArea_.bottom - mfListArea_.top;
         int contentH = (int)((float)mfRoots_.size() * panelRowH());
-        mfScrollY_ = std::clamp(mfScrollY_ - delta, 0, std::max(0, contentH - listH));
+        mfScrollY_ = scrollTo(mfScrollY_, delta, contentH, listH);
         invalidate();
         return;
     }
     case SettingsPanel::EqSettings: {
         int listH = eqListArea_.bottom - eqListArea_.top;
         int contentH = (int)((float)eqFilteredIndices_.size() * panelRowH());
-        eqScrollY_ = std::clamp(eqScrollY_ - delta, 0, std::max(0, contentH - listH));
+        eqScrollY_ = scrollTo(eqScrollY_, delta, contentH, listH);
         invalidate();
         return;
     }
@@ -4936,7 +5006,7 @@ void PlayerWindow::onPanelWheel(int x, int y, int delta) {
         int rowCount = (int)fpEntries_.size() + (fpHasParent_ ? 1 : 0);
         int listH = fpListArea_.bottom - fpListArea_.top;
         int contentH = (int)((float)rowCount * panelRowH());
-        fpScrollY_ = std::clamp(fpScrollY_ - delta, 0, std::max(0, contentH - listH));
+        fpScrollY_ = scrollTo(fpScrollY_, delta, contentH, listH);
         invalidate();
         return;
     }
@@ -4963,10 +5033,12 @@ void PlayerWindow::onPanelWheel(int x, int y, int delta) {
         }
         int listH = asDeviceListArea_.bottom - asDeviceListArea_.top;
         int contentH = (int)((float)rowCount * panelRowH());
-        asDeviceScrollY_ = std::clamp(asDeviceScrollY_ - delta, 0, std::max(0, contentH - listH));
+        asDeviceScrollY_ = scrollTo(asDeviceScrollY_, delta, contentH, listH);
         invalidate();
         return;
     }
+    case SettingsPanel::Interface:
+        // Nothing to scroll: two rows and a sentence, sized to fit.
     case SettingsPanel::None:
         (void)x; (void)y;
         return;
@@ -5292,8 +5364,8 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
             // one is the whole reason this backend can fail, so it is named
             // where the choice is made.
             std::string label = d.name;
-            if (!d.connected)  label += "  â not connected";
-            else if (d.busy)   label += "  â in use by another app";
+            if (!d.connected)  label += "  — not connected";
+            else if (d.busy)   label += "  — in use by another app";
             labels.push_back(std::move(label));
         }
         float listH = listHeightFor(std::max(1, (int)labels.size()));
@@ -5313,7 +5385,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
 
         // The one thing this backend is not, stated where it is chosen rather
         // than left to the signal chain to reveal after a track has started.
-        canvas.textStyled("SBC is a lossy encode â this route can never be bit-perfect.",
+        canvas.textStyled("SBC is a lossy encode — this route can never be bit-perfect.",
                           c.x + pad, y, metrics_.text.body, toColor(CLR_WARNING), FontStyle::Italic);
         y += metrics_.text.body * 1.8f;
         canvas.textStyled("Release the device in your sound server first; only one app can stream to it.",
@@ -5731,7 +5803,7 @@ void PlayerWindow::applyAudioSettingsPanel() {
         btDevicePath_ = path;
         output_ = std::make_unique<BtOutput>(btDevicePath_);
         if (path.empty())
-            audioNotice_ = "No Bluetooth device chosen â pick a pair of headphones "
+            audioNotice_ = "No Bluetooth device chosen — pick a pair of headphones "
                            "in Audio Settings.";
     }
 #endif
@@ -5830,6 +5902,17 @@ void PlayerWindow::eqRefilter() {
         eqFilteredIndices_.push_back(i);
     }
     if (eqSelectedRow_ >= (int)eqFilteredIndices_.size()) eqSelectedRow_ = -1;
+    // ...and the SCROLL, for the same reason. The list can shrink under an
+    // offset that was valid a moment ago -- searching, switching tabs, or
+    // removing the row that made it long. widgets::drawScrollList clips rather
+    // than clamping, so a stranded offset does not render as a short list, it
+    // renders as an EMPTY one: a panel that looks broken rather than scrolled.
+    // Two of the four callers already reset this by hand and the Remove path
+    // did not; doing it here means none of them has to remember.
+    const int listH = eqListArea_.bottom - eqListArea_.top;
+    eqScrollY_ = (int)clampScroll((float)eqScrollY_,
+                                  (float)eqFilteredIndices_.size() * panelRowH(),
+                                  (float)listH);
 }
 
 // The saved row eqSelectedRow_ points at, or nullptr — the bridge between the
@@ -8501,6 +8584,76 @@ void PlayerWindow::releaseOverlayArtTexture() {
 // still in scope. Nothing is recomputed here and nothing is guessed: a field
 // left at zero means the backend does not publish it, and the row is dropped
 // rather than filled with something plausible.
+// ── Interface: how the app behaves, not what it plays ────────────────────────
+//
+// The first settings panel that is not about a device or a folder. It exists
+// because a scrolling preference has nowhere else to go: the other four pages
+// are each about one piece of hardware or one directory, and the Settings page
+// itself has no scroll of its own and should not grow a column of toggles.
+void PlayerWindow::onInterfaceSettings() {
+    panelFromSidebar_ = false;
+    isHoverRow_   = -1;
+    isHoverClose_ = false;
+    activePanel_  = SettingsPanel::Interface;
+    updateTimerNeed();
+    invalidate();
+}
+
+void PlayerWindow::drawInterfaceSettings(Canvas& canvas, const LayoutRect& area) {
+    LayoutRect content = panels::drawHeader(canvas, area, "Interface",
+                                            metrics_.scale, metrics_.text.header, isCloseRc_);
+    Rect c = toRect(content);
+
+    const float pad  = metrics_.space(SP_LG);
+    const float rowH = panelRowH();
+    float y = c.y + pad;
+
+    canvas.textStyled("Scrolling", c.x + pad, y, metrics_.text.body,
+                      toColor(CLR_TEXT_DIM), FontStyle::Bold);
+    y += rowH;
+
+    // Two toggles, not one, and the reason is worth stating on screen as well
+    // as in the code: a finger and a wheel start from opposite conventions, so
+    // a single "reverse scrolling" switch is necessarily wrong on one of them.
+    // Each row says which direction it currently means rather than making the
+    // listener reason about the word "invert".
+    struct Row { LayoutRect* rc; bool on; const char* title; const char* onS; const char* offS; };
+    const Row rows[] = {
+        { &isRowTouch_, scrollInvertTouch_, "Touch",
+          "Reversed — the content moves against your finger",
+          "Natural — the content follows your finger" },
+        { &isRowWheel_, scrollInvertWheel_, "Mouse wheel",
+          "Reversed — wheel away scrolls down",
+          "Traditional — wheel away scrolls up" },
+    };
+    for (int i = 0; i < 2; i++) {
+        LayoutRect rc = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + rowH) };
+        *rows[i].rc = rc;
+        if (isHoverRow_ == i)
+            canvas.rect((float)rc.left, (float)rc.top, (float)(rc.right - rc.left),
+                        (float)(rc.bottom - rc.top), toColor(CLR_HOVER), UI_CORNER_RADIUS);
+        widgets::ToggleStyle st;
+        st.onColor   = toColor(CLR_ACCENT);
+        st.offColor  = toColor(CLR_SEPARATOR);
+        st.knobColor = toColor(CLR_TEXT_PRIMARY);
+        widgets::drawToggle(canvas, toRect(rc), rows[i].on, rows[i].title, st);
+        y += rowH;
+        // The state in words, under the switch, in the value colour the rest of
+        // the app uses for a setting's current reading.
+        canvas.textStyled(rows[i].on ? rows[i].onS : rows[i].offS,
+                          c.x + pad + metrics_.space(SP_MD), y, metrics_.text.secondary,
+                          toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        y += rowH * 0.9f;
+    }
+
+    y += rowH * 0.5f;
+    canvas.textStyled("Flicking a list throws it, and it slows to a stop on its own.",
+                      c.x + pad, y, metrics_.text.secondary,
+                      toColor(CLR_TEXT_DIM), FontStyle::Italic);
+
+    panels::drawButton(canvas, isCloseRc_, "Close", isHoverClose_, metrics_.text.body);
+}
+
 void PlayerWindow::drawSignalChain(Canvas& canvas, const LayoutRect& area) {
     LayoutRect content = panels::drawHeader(canvas, area, "Signal chain",
                                             metrics_.scale, metrics_.text.header, rcScClose_);
@@ -9854,6 +10007,11 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
     if (state == "33-eq-settings") {
         click(rcNavSettings_); drawFrame();
         click(rcSettingsEq_);
+        return true;
+    }
+    if (state == "3b-interface") {
+        click(rcNavSettings_); drawFrame();
+        click(rcSettingsInterface_);
         return true;
     }
     if (state == "34-eq-all-profiles") {

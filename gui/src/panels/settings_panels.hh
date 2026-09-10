@@ -25,7 +25,13 @@ enum class FontStyle : unsigned char;
 // browsing music. While Playlists was in here you could not click Singles,
 // could not click Settings, and could not press Space to stop the music. It is
 // a top-level section now (PlayerWindow::NavSection).
-enum class SettingsPanel { None, ManageFolders, AudioSettings, EqSettings, FolderPicker };
+// Interface is the first member of this enum that is NOT about audio devices
+// or files. It earns its place by the rule stated above it: it is a page for
+// CONFIGURING, it wants the whole content area, and while it is up every event
+// should reach it and nothing else. A scrolling preference has nowhere else to
+// live -- the other four are each about one piece of hardware or one folder.
+enum class SettingsPanel { None, ManageFolders, AudioSettings, EqSettings, FolderPicker,
+                           Interface };
 
 // The scrollable/selectable text row list these panels used to draw with a
 // local panels::drawRowList (+ rowRect/hitTestRows) now comes from the

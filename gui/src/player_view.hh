@@ -414,6 +414,38 @@ private:
     // there is no EQ to pick a profile for.
     // Search is a STATE of bar A, not just a focused text box: opening it is
     // what collapses the filter letters, and closing it takes the query back.
+    // ── Scrolling: one rule, one place ──────────────────────────────────────
+    //
+    // Every scroll surface used to restate the same two decisions itself --
+    // which way a delta moves the content (`- delta`, written out eight times)
+    // and where the offset is allowed to stop. Eight copies of a rule is eight
+    // chances for one of them to be wrong, and one of them was: the signal
+    // chain clamped against the wrong viewport and could not be scrolled at
+    // all when rotated. These two put the rule in one readable place.
+    //
+    // scrollDelta() applies the DIRECTION and nothing else: it turns a host's
+    // raw wheel delta into "how far the content should move", honouring the
+    // preference for whichever input this host has. scrollTo() then applies
+    // the BOUNDS through clampScroll(), which already exists and is already
+    // pinned by layout_test.
+    int  scrollDelta(int rawDelta) const;
+    static int scrollTo(int offset, int delta, int contentH, int viewH);
+
+    // Reverse the direction, per input kind, because touch and a wheel start
+    // from opposite conventions and one flag would necessarily be wrong on
+    // one of them. Defaults are each platform's norm: a finger drags the
+    // content with it, a wheel keeps the traditional sense. Persisted as
+    // "scroll_invert_touch" / "scroll_invert_wheel".
+    bool scrollInvertTouch_ = false;
+    bool scrollInvertWheel_ = false;
+
+    // The Interface panel: how the app behaves rather than what it plays.
+    void onInterfaceSettings();
+    void drawInterfaceSettings(Canvas& canvas, const LayoutRect& area);
+    LayoutRect isCloseRc_{}, isRowTouch_{}, isRowWheel_{};
+    bool isHoverClose_ = false;
+    int  isHoverRow_ = -1;
+
     void openSearch();
     void closeSearch();
 
@@ -616,6 +648,7 @@ private:
     LayoutRect rcSettingsManage_       = {};
     LayoutRect rcSettingsAudio_        = {};
     LayoutRect rcSettingsEq_           = {};
+    LayoutRect rcSettingsInterface_    = {};
     LayoutRect rcSettingsBitperfect_   = {};
 
     // ── Settings panels state (Phase 7) ──────────────────────────────────
