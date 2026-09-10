@@ -4795,6 +4795,7 @@ void PlayerWindow::onPanelMouseMove(int x, int y) {
         bool hr = ptInRect(eqBtnRemove_, x, y); if (hr != eqHoverRemove_) { eqHoverRemove_ = hr; changed = true; }
         bool htm = ptInRect(eqTabMine_, x, y); if (htm != eqHoverTabMine_) { eqHoverTabMine_ = htm; changed = true; }
         bool hta = ptInRect(eqTabAll_, x, y); if (hta != eqHoverTabAll_) { eqHoverTabAll_ = hta; changed = true; }
+        bool htr = ptInRect(eqTabRecommended_, x, y); if (htr != eqHoverTabRecommended_) { eqHoverTabRecommended_ = htr; changed = true; }
         int row = hitTestListRows(eqListRows_, x, y);
         if (row != eqHoverRow_) { eqHoverRow_ = row; changed = true; }
         break;
@@ -4893,6 +4894,14 @@ void PlayerWindow::onPanelClick(int x, int y) {
         if (eqSearchFocused_ != wasFocused) { syncKeyboard(); invalidate(); }
         if (eqSearchFocused_) return;
 
+        if (ptInRect(eqTabRecommended_, x, y)) {
+            eqRecommendedOnly_ = !eqRecommendedOnly_;
+            eqSelectedRow_ = -1;   // the row indices mean something else now
+            eqScrollY_ = 0;
+            eqRefilter();
+            invalidate();
+            return;
+        }
         if (ptInRect(eqTabMine_, x, y) || ptInRect(eqTabAll_, x, y)) {
             bool mine = ptInRect(eqTabMine_, x, y);
             if (mine != eqShowMine_) {
@@ -5873,6 +5882,7 @@ void PlayerWindow::onEqSettings() {
     eqScrollY_ = 0;
     eqHoverClose_ = eqHoverAssign_ = eqHoverClear_ = false;
     eqHoverTabAll_ = eqHoverTabMine_ = eqHoverPin_ = eqHoverRemove_ = false;
+    eqHoverTabRecommended_ = false;
     // Opens on whichever tab has something to show: jumping a listener with a
     // saved set straight into 5000 catalogue entries buries the four rows they
     // actually use.
@@ -5899,6 +5909,21 @@ void PlayerWindow::eqRefilter() {
         std::string nameLower = all[i].name;
         for (auto& ch : nameLower) ch = (char)std::tolower((unsigned char)ch);
         if (!needle.empty() && nameLower.find(needle) == std::string::npos) continue;
+        // One row per model: keep the first of each run of the same name.
+        //
+        // The catalogue is sorted (name, rank), so the first row of a name IS
+        // the highest-ranked measurement of it -- the same one AutoEq's own
+        // website shows, verified against its results/README.md for all 6032
+        // models. This is deliberately the same shape as the take-first that
+        // site uses rather than anything cleverer: the ordering already carries
+        // the decision, so the filter only has to not undo it.
+        //
+        // Never applied to My Drivers: that view is the listener's own saved
+        // rows, and hiding one because a better measurement of the same model
+        // exists would hide a profile they are actually using.
+        if (eqRecommendedOnly_ && !eqShowMine_ && !eqFilteredIndices_.empty() &&
+            all[eqFilteredIndices_.back()].name == all[i].name)
+            continue;
         eqFilteredIndices_.push_back(i);
     }
     if (eqSelectedRow_ >= (int)eqFilteredIndices_.size()) eqSelectedRow_ = -1;
@@ -5970,11 +5995,18 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     // block stays a pure switcher, with no room for a per-row × at space(277).
     {
         float tabH = metrics_.space(52.0f);
-        auto tabRects = panels::layoutButtonRow(content, pad, 2, metrics_.space(200.0f),
+        // Three now: the two views, plus which measurements the catalogue view
+        // shows. The third is only meaningful over the catalogue -- My Drivers
+        // is the listener's own saved rows and never collapses -- so it is
+        // drawn inactive there rather than hidden, because a control that
+        // appears and disappears as you change tabs is harder to find than one
+        // that is simply not lit.
+        auto tabRects = panels::layoutButtonRow(content, pad, 3, metrics_.space(200.0f),
                                                 metrics_.space(SP_SM), metrics_.space(panels::kMinActionBtnW),
                                                 (int)y, (int)tabH, /*alignRight=*/false);
         eqTabMine_ = tabRects[0];
         eqTabAll_  = tabRects[1];
+        eqTabRecommended_ = tabRects[2];
         auto tab = [&](const LayoutRect& rc, const char* label, bool active, bool hovered) {
             Rect r = toRect(rc);
             // Accent = state, hover = neutral (UI_DESIGN_SYSTEM.md §1.4).
@@ -5995,6 +6027,8 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
         };
         tab(eqTabMine_, "My Drivers", eqShowMine_,  eqHoverTabMine_);
         tab(eqTabAll_,  "All Profiles",  !eqShowMine_, eqHoverTabAll_);
+        tab(eqTabRecommended_, eqRecommendedOnly_ ? "Best only" : "Every source",
+            !eqShowMine_ && eqRecommendedOnly_, eqHoverTabRecommended_);
         y += tabH + metrics_.space(SP_SM);
     }
 
@@ -6013,6 +6047,16 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     for (int idx : eqFilteredIndices_) {
         std::string label = all[idx].name;
         if (!all[idx].form.empty()) label += "  (" + all[idx].form + ")";
+        // WHICH measurement, once more than one of a model can be on screen.
+        // Without it the All view is unreadable: 3036 rows of the old
+        // catalogue shared an identical label with another row, so searching
+        // "hd 650" gave twelve results of which six were indistinguishable and
+        // picking between them was guesswork. AutoEq's own list says
+        // "by <source>" / "on <rig>" for exactly this reason.
+        if (!eqRecommendedOnly_ || eqShowMine_) {
+            label += "  Â·  " + all[idx].source;
+            if (!all[idx].rig.empty()) label += " / " + all[idx].rig;
+        }
         // In the saved view, say which rows are pinned — pinned is the one
         // property that changes what Remove and the prune will do to a row.
         if (eqShowMine_) {

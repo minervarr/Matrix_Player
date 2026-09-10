@@ -223,6 +223,8 @@ bool readProfile(JsonReader& r, EqProfile& p) {
     p.name.clear();
     p.source.clear();
     p.form.clear();
+    p.rig.clear();
+    p.rank = 0;
     p.preamp = 0.0;
     p.filters.clear();
 
@@ -235,6 +237,10 @@ bool readProfile(JsonReader& r, EqProfile& p) {
         if      (key == "name")   { if (!r.readString(p.name))    return false; }
         else if (key == "source") { if (!r.readString(p.source))  return false; }
         else if (key == "form")   { if (!r.readString(p.form))    return false; }
+        else if (key == "rig")    { if (!r.readString(p.rig))     return false; }
+        else if (key == "rank")   { double d = 0.0;
+                                    if (!r.readNumber(d)) return false;
+                                    p.rank = (int)d; }
         else if (key == "preamp") { if (!r.readNumber(p.preamp))  return false; }
         else if (key == "filters") {
             if (!r.expect('[')) return false;
@@ -306,19 +312,34 @@ bool EqProfileStore::loadFromMemory(const char* data, size_t size,
         return false;
     }
 
+    // Name first, then RANK, then source.
+    //
+    // The generator already emits exactly this order, and the second key is
+    // the load-bearing one: "the first row of a name is the recommended
+    // measurement" is what the panel's Recommended view relies on, and a sort
+    // on the name alone would have discarded it and left whichever of a
+    // model's dozen measurements the comparison happened to settle on.
+    // Source last so the order is total and the same file always loads the
+    // same way.
+    //
+    // ASCII fold, locale-independent: the C locale's tolower did exactly this,
+    // and nothing here should start depending on a locale.
+    const auto lower = [](unsigned char c) {
+        return (c >= 'A' && c <= 'Z') ? (unsigned char)(c + 32) : c;
+    };
+    const auto nameLess = [&lower](const std::string& x, const std::string& y) {
+        return std::lexicographical_compare(
+            x.begin(), x.end(), y.begin(), y.end(),
+            [&lower](char a, char b) {
+                return lower((unsigned char)a) < lower((unsigned char)b);
+            });
+    };
     std::sort(profiles_.begin(), profiles_.end(),
-        [](const EqProfile& a, const EqProfile& b) {
-            return std::lexicographical_compare(
-                a.name.begin(), a.name.end(), b.name.begin(), b.name.end(),
-                [](char x, char y) {
-                    // ASCII fold, locale-independent: the C locale's tolower
-                    // did exactly this, and nothing here should start
-                    // depending on a locale.
-                    const auto lower = [](unsigned char c) {
-                        return (c >= 'A' && c <= 'Z') ? (unsigned char)(c + 32) : c;
-                    };
-                    return lower((unsigned char)x) < lower((unsigned char)y);
-                });
+        [&nameLess](const EqProfile& a, const EqProfile& b) {
+            if (nameLess(a.name, b.name)) return true;
+            if (nameLess(b.name, a.name)) return false;
+            if (a.rank != b.rank) return a.rank < b.rank;
+            return a.source < b.source;
         });
 
     printf("[EQ] Loaded %zu profiles from %s\n", profiles_.size(), label.c_str());
@@ -330,6 +351,15 @@ const EqProfile* EqProfileStore::findByKey(const std::string& name,
                                            const std::string& form) const {
     for (const EqProfile& p : profiles_) {
         if (p.name == name && p.source == source && p.form == form)
+            return &p;
+    }
+    // The form moved under us -- a regenerated catalogue, or a row saved before
+    // the generator learned to split the rig out of it. The pair is still
+    // unambiguous in practice (a source measures a given model once per rig,
+    // and the rig is not part of the saved key), so this recovers the
+    // assignment instead of silently dropping the listener's profile.
+    for (const EqProfile& p : profiles_) {
+        if (p.name == name && p.source == source)
             return &p;
     }
     return nullptr;

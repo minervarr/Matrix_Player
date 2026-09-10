@@ -769,6 +769,17 @@ private:
     // the saved headphones. Pinning and removing live only here — the sidebar
     // stays a pure switcher, with no room for a per-row × at 277px wide.
     bool eqShowMine_ = false;
+    // One row per headphone, showing the measurement AutoEq itself recommends,
+    // instead of every measurement anyone has published of it.
+    //
+    // Default ON, which is what autoeq.app does (its dropdown keeps the first
+    // of each repeated label, and that switch defaults to true). Off shows the
+    // catalogue whole -- nothing is ever removed from the data, only from the
+    // default view, because "which measurement" is a real question for someone
+    // who owns a rig or disagrees with a target.
+    bool eqRecommendedOnly_ = true;
+    LayoutRect eqTabRecommended_ = {};
+    bool eqHoverTabRecommended_ = false;
     LayoutRect eqTabAll_ = {}, eqTabMine_ = {}, eqBtnPin_ = {}, eqBtnRemove_ = {};
     bool eqHoverTabAll_ = false, eqHoverTabMine_ = false;
     bool eqHoverPin_ = false, eqHoverRemove_ = false;

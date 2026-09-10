@@ -486,7 +486,7 @@ exactly how it went unnoticed until an MP3 misnamed `.flac` surfaced it on a
 phone. The generated `config.h` for both linux and android IS committed; only
 the sources are fetched.
 
-**Tests**: there is no ctest/gtest framework, but there are ten assert-based
+**Tests**: there is no ctest/gtest framework, but there are eleven assert-based
 pure-logic test executables, built **Debug-only** (see the bottom of
 `gui/CMakeLists.txt` and of `core/CMakeLists.txt`) and run directly. Convention
 matches `framework/vk_canvas/core/tests/*.cc`: plain `assert()`, `#undef NDEBUG`
@@ -505,6 +505,7 @@ scripts/linux/build.sh --debug
 ./build/linux_debug/core/facets_test       # guided search: suggestions, counts, empty reasons
 ./build/linux_debug/core/streamer_db_test  # where the foreign .streamer/library.db is looked for
 ./build/linux_debug/core/scan_source_test  # the media index and the walk must agree
+./build/linux_debug/gui/scroll_test        # scroll direction + bounds, one rule for eight surfaces
 ```
 
 `scan_source_test` is the one that would otherwise need a phone. The scan takes
@@ -668,6 +669,47 @@ These things are load-bearing and easy to undo by accident:
    behind its back — which is the only reason `rangeFor()`'s "last seven days"
    can be asserted to land on an exact local midnight. Range presets belong
    there and not in the GUI, where nothing can test them.
+
+## The AutoEQ catalogue (`eq_profiles.json`, `tools/eq_index/`)
+
+8850 profiles over **6033 headphone models**, generated from an AutoEq checkout
+by `tools/eq_index/build_eq_index.py` — which lives here now precisely because
+a 5 MB shipped asset whose generator was in a different project is an asset
+nobody can reproduce or check.
+
+**A model has several measurements and the app shows one, the same one
+autoeq.app shows.** AutoEq ranks its sources by measured unit-to-unit standard
+deviation in a 50-entry list, `ResultPath.priorities`
+(`dbtools/update_result_indexes.py`), with oratory1990 first in all three form
+factors; its website emits its JSON in that order and its dropdown keeps the
+first of each repeated label. We read that list **out of the AutoEq checkout**
+rather than copying it, stamp each profile with its `rank`, and emit the file
+sorted `(name, rank)`. So the first row of a name IS the recommended
+measurement, `eqRefilter()`'s Best-only view is a take-first-of-run, and
+nothing sorts 8850 entries at startup. Verified against AutoEq's own
+`results/README.md`: **6032 of 6032 models agree.**
+
+Three things here are load-bearing:
+
+1. **Nothing is hidden from the DATA, only from the default view.** `Best only`
+   toggles to `Every source`, which is what the website's `all` button does —
+   "which measurement" is a real question for someone who owns a rig or
+   disagrees with a target. In that view the row label gains `· <source>` and
+   the rig, because otherwise it is unreadable: 3036 rows of the old catalogue
+   shared an identical on-screen label with another row.
+2. **The rig is part of the directory name and must be split out of it.** AutoEq
+   stores `results/<source>/<rig> <form>/<model>/` — `711 in-ear`,
+   `HMS II.3 over-ear`. The previous generator looked for a path component that
+   was exactly a form, so 2827 profiles (33%) shipped with **no form at all**,
+   and two rigs of one form collided onto one key where whichever sorted first
+   won — AutoEq's accuracy ranking silently replaced by alphabetical order.
+   `split_form_rig()` does what AutoEq's own `ResultPath.__init__` does.
+3. **`(name, source, form)` is a PERSISTED key** — `eq_assignments` and
+   `eq_headphones` store it — so restoring those missing forms changed it for
+   every crinacle/Rtings/HypetheSonics row. `findByKey` therefore falls back to
+   `(name, source)`, which recovers a listener's saved profile instead of
+   dropping it, and makes the next catalogue update non-breaking. Do not remove
+   that fallback.
 
 ## Driver AutoEQ profiles (`eq_headphones`)
 
