@@ -239,9 +239,21 @@ settings rows.
 - Track panel: when an album is open it **replaces** the grid (same rect), bg
   `CLR_BG_TRACKPANEL`; settings are full-page overlays in the same area.
 
-**Grid tiles:** columns from a `space(250)` target pitch (clamped 2–8),
-`gridArtSize_ = max(space(80), gridW/cols − space(30))`; square art + centered
-title + artist.
+**Grid tiles:** `grid::computeShape()` (`gui/src/grid_layout.hh`, pinned by
+`grid_layout_test`). Columns are the NEAREST whole number of `space(250)`
+target pitches (clamped 2–8) — never the floor, which turned a 720 px portrait
+screen's 2.69 into 2 columns and 6 tiles while the same area sideways held 10.
+Rows are the nearest whole number of natural row heights, and the row pitch is
+then stretched or trimmed so **whole rows fill the height exactly**; the art is
+bounded by both its column and its row, so the text band under it always fits
+inside its own row. Square art + centered title + artist · year.
+
+**The grid scrolls by whole rows and never animates.** `scrollGridRows()`
+tracks the input continuously (`grid::RowScroll`) but `gridScrollY_` is only
+ever a whole number of rows: a row changes after 0.2 of a row's travel and then
+once per row, a wheel notch is one row, and the host's kinetic throw still
+decides how far a flick carries. No partial row is drawn — `lastRow` is exactly
+`firstRow + gridRows_ − 1`.
 
 **Row heights** (three, by context): `kPanelRowH 44` (settings list rows — note
 it is passed *bare*, never pre-scaled, so it keeps the number 44),
@@ -434,15 +446,14 @@ decides what is reachable in one click, and "what I touched last" is not the
 same question as "what I actually use".
 
 ### 8.2 Album grid
-**The two margins are equal by construction, not by hand.** `gridPadX_` is the
-only authored pad; `recalcLayout()` resolves it through `space()` into
-`gridPadXpx_`, and the TOP pad is *derived* from it by `gridTopPad()`
-(`ui_metrics.hh`, pure and pinned by `ui_metrics_test`): a tile is centered in
-its cell, so the visible left margin is the pad PLUS half the cell's leftover
-slack, which the vertical axis has no equivalent of. Setting the two to the same
-number measured equal and looked wrong — the first row bled against the window
-edge while the sidebar beside it had air. There is deliberately no independent
-vertical knob; changing `gridPadX_` moves both.
+**One authored pad, on all four edges.** `gridPadX_` is the only authored pad;
+`recalcLayout()` resolves it through `space()` into `gridPadXpx_` and takes it
+off the top and bottom of the grid as well as the sides. Inside that, each row
+is stretched to a whole-rows pitch and its art + text are centred in it, so
+`gridPadYpx_` is the pad plus that centring offset — it plays the part
+`gridTopPad()` used to (the pad plus half the cell's horizontal slack), and the
+visible top margin is never less than the side margin. There is deliberately no
+independent vertical knob; changing `gridPadX_` moves both.
 
 Layout, drawing AND hit-testing all read the resolved `gridPadXpx_` /
 `gridPadYpx_` / `gridStepX_`. They used to disagree — layout passed the authored

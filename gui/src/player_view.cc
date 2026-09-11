@@ -25,6 +25,7 @@
 #include <soxr.h>
 #include "core/dsp/dither.h"   // ae::TpdfQuantizer — Reference EQ output stage
 #include "core/facets.h"       // facets::albumYear — Album carries no year field
+#include "grid_layout.hh"  // the grid's shape and its row-snapped scroll
 
 static int pickOutputRate(int inRate, const std::vector<int>& supported) {
     for (int r : supported)
@@ -1453,10 +1454,12 @@ void PlayerWindow::drawFrame() {
         } else {
             canvas.setClip(g.x, g.y, g.w, g.h);
             int tileStepX = gridStepX_;   // resolved in recalcLayout()
-            int tileStepY = gridTileSize_ + gridRowGap_;
+            int tileStepY = gridStepY_;   // whole rows -- see grid_layout.hh
             int firstRow = std::max(0, gridScrollY_ / tileStepY);
-            int gridH = rcGrid_.bottom - rcGrid_.top;
-            int lastRow = (gridScrollY_ + gridH) / tileStepY + 1;
+            // Exactly the rows on screen, and never the one below them. The
+            // old `+ 1` drew a partial row by design; a whole-row grid has
+            // none, and drawing it anyway would put a sliver back.
+            int lastRow = firstRow + gridRows_ - 1;
 
             // Warm the rows just outside the viewport, one above and one
             // below. Covers are only ever decoded for a tile being DRAWN, so
@@ -2547,7 +2550,7 @@ void PlayerWindow::recalcLayout() {
     // Only the tile-COUNT changing was ever guarded, by resetting to 0 after
     // rebuildGridIndices() (search, section switch, filter, rescan).
     const int anchorTile = gridAnchorTile(gridScrollY_,
-                                          gridTileSize_ + gridRowGap_,
+                                          gridStepY_,
                                           gridCols_);
 
     // The usable rectangle, which is the window minus whatever the hardware
@@ -2726,31 +2729,43 @@ void PlayerWindow::recalcLayout() {
     const int artMargin  = (int)metrics_.space((float)kGridArtMargin);
 
     gridPadXpx_ = (int)metrics_.space((float)gridPadX_);
-    int gridW = rcGrid_.right - rcGrid_.left - gridPadXpx_ * 2;
-    int desiredCols = std::clamp(gridW / tilePitch, 2, 8);
-    while (desiredCols > 1 && (gridW / desiredCols) - artMargin < minArtSize) desiredCols--;
-    gridCols_ = std::max(1, desiredCols);
 
-    int newGridArtSize = std::max(minArtSize, gridW / gridCols_ - artMargin);
-    if (newGridArtSize != gridArtSize_) {
-        // Tile size changed (resize, monitor change, panel open/close) — cached
+    // Tile text block height from the ACTUAL text sizes (two title lines +
+    // artist + breathing room) -- see gridRowGap_'s comment in the header.
+    // Computed FIRST now, because the grid's shape needs it: a row has to be
+    // tall enough for its art AND this band, or its byline is the thing cut.
+    gridRowGap_ = (int)(titleArtistAdvance(metrics_.text.body) * 2.0f
+                        + metrics_.text.secondary * 1.35f + metrics_.space(29.41f));
+
+    // -- The grid's shape: the nearest column count, and whole rows ---------
+    //
+    // See grid_layout.hh for the two defects this replaces. In short: the
+    // column count used to be FLOORED, which turned a 720 px portrait screen
+    // into 2 columns and 6 tiles while the same area sideways held 10; and
+    // rows were stacked at a fixed height until the viewport ran out, so the
+    // last row on screen was a fraction whose artist and year were cut off.
+    // Now whole rows fill the height exactly, and the art is sized to fit
+    // both its column and its row. The side pad applies top and bottom too,
+    // so the air around the grid is one number on all four edges.
+    const int usableW = rcGrid_.right - rcGrid_.left - gridPadXpx_ * 2;
+    const int usableH = rcGrid_.bottom - rcGrid_.top - gridPadXpx_ * 2;
+    const grid::Shape shape = grid::computeShape(usableW, usableH, tilePitch,
+                                                 artMargin, gridRowGap_, minArtSize);
+    gridCols_ = shape.cols;
+    if (shape.art != gridArtSize_) {
+        // Tile size changed (resize, monitor change, panel open/close) -- cached
         // art was decoded for the old size, so it must reload at the new one.
-        gridArtSize_ = newGridArtSize;
+        gridArtSize_ = shape.art;
         clearGridArtTexCache();
     }
     gridTileSize_ = gridArtSize_ + artMargin;
-
-    // Cell stride, resolved once. The draw block and gridHitTest() both used
-    // to recompute this from raw pads and disagree with the line above.
-    gridStepX_ = gridCols_ > 1 ? gridW / gridCols_ : gridTileSize_;
-
-    // Derived, not authored — see gridTopPad()'s comment in ui_metrics.hh.
-    gridPadYpx_ = gridTopPad(gridPadXpx_, gridStepX_, gridArtSize_);
-
-    // Tile text block height from the ACTUAL text sizes (two title lines +
-    // artist + breathing room) — see gridRowGap_'s comment in the header.
-    gridRowGap_ = (int)(titleArtistAdvance(metrics_.text.body) * 2.0f
-                        + metrics_.text.secondary * 1.35f + metrics_.space(29.41f));
+    gridStepX_    = shape.cellW;
+    gridStepY_    = shape.pitch;
+    gridRows_     = shape.rows;
+    // The first row's art top. It used to be gridTopPad() -- the side pad plus
+    // half the cell's horizontal slack -- and is now the side pad plus the
+    // centring offset inside a stretched row, which plays the same part.
+    gridPadYpx_   = gridPadXpx_ + shape.artOffsetY;
 
     // Track rows likewise scale with their text.
     trackRowHeight_ = (int)metrics_.space(SP_XL);
@@ -2761,7 +2776,14 @@ void PlayerWindow::recalcLayout() {
     int tileCount = (navSection_ == NavSection::Playlists)
                         ? 3 : (int)gridIndices_.size();
     int albumRows = (tileCount + gridCols_ - 1) / gridCols_;
-    gridTotalHeight_ = albumRows * (gridTileSize_ + gridRowGap_) + gridPadYpx_;
+    // The scroll extent in WHOLE rows. clampScroll() caps an offset at
+    // gridTotalHeight_ minus the viewport, so this makes that cap exactly
+    // maxRow pitches: the bottom of the library is a row boundary like every
+    // other stop. It was not before -- the old extent added the top pad once
+    // more, so the last legal offset landed a few pixels past a boundary and
+    // the final screen of any library began with a cut row.
+    const int maxRow = std::max(0, albumRows - gridRows_);
+    gridTotalHeight_ = maxRow * gridStepY_ + (rcGrid_.bottom - rcGrid_.top);
 
     // ── Bar B (the transport), in whichever orientation ─────────────────────
     //
@@ -2998,7 +3020,7 @@ void PlayerWindow::recalcLayout() {
     // one core/tests/layout_test.cc already pins for the past-the-bottom case
     // — this bug was a missing call, not missing arithmetic.
     gridScrollY_ = gridScrollForAnchor(anchorTile,
-                                       gridTileSize_ + gridRowGap_, gridCols_);
+                                       gridStepY_, gridCols_);
     gridScrollY_ = (int)clampScroll((float)gridScrollY_,
                                     (float)gridTotalHeight_,
                                     (float)(rcGrid_.bottom - rcGrid_.top));
@@ -3832,7 +3854,7 @@ int PlayerWindow::gridHitTest(int x, int y) const {
     if (x < rcGrid_.left || x >= rcGrid_.right || y < rcGrid_.top || y >= rcGrid_.bottom)
         return -1;
     int tileStepX = gridStepX_;
-    int tileStepY = gridTileSize_ + gridRowGap_;
+    int tileStepY = gridStepY_;
 
     int col = (x - rcGrid_.left - gridPadXpx_) / tileStepX;
     int row = (y - rcGrid_.top - gridPadYpx_ + gridScrollY_) / tileStepY;
@@ -4465,6 +4487,45 @@ int PlayerWindow::scrollTo(int offset, int delta, int contentH, int viewH) {
     return (int)clampScroll((float)(offset - delta), (float)contentH, (float)viewH);
 }
 
+// -- The album grid scrolls by whole rows, and never animates ---------------
+//
+// Two positions, on purpose. gridRowScroll_ follows the input continuously --
+// the finger's own pixels on a touch screen, and on a desktop one wheel notch
+// scaled to exactly one row -- so the host's kinetic throw still decides how
+// FAR a flick carries, untouched. gridScrollY_ is where the grid snaps, always
+// a whole number of rows; it is the only thing drawn or hit-tested. There is
+// no in-between frame: the offset is one row or the next.
+//
+// It is also the cheapest version there is. A slow drag that has not crossed
+// a threshold changes nothing on screen, so it asks for no frame at all --
+// invalidate() only runs when the row actually changes.
+void PlayerWindow::scrollGridRows(int delta) {
+    const int pitch = gridStepY_;
+    if (pitch <= 0) return;
+    const int gridH  = rcGrid_.bottom - rcGrid_.top;
+    const int maxRow = std::max(0, (gridTotalHeight_ - gridH) / pitch);
+
+    // Something else moved the grid since the last scroll -- a reset to the
+    // top, a resize re-anchoring it, a search shortening the list. The input
+    // position is then meaningless; restart it from where the grid now sits,
+    // at rest, so the next movement is measured from here.
+    if (gridScrollY_ != gridRowScroll_.row * pitch) {
+        gridRowScroll_      = grid::RowScroll{};
+        gridRowScroll_.row  = gridScrollY_ / pitch;
+        gridRowScroll_.free = (float)(gridRowScroll_.row * pitch);
+    }
+
+    // One notch is +/-120 on both desktops, so pitch/120 makes it one row.
+    // A touchpad's small continuous deltas then add up to rows in proportion.
+    // The sign: a positive delta LOWERS the offset (see scrollDelta()), and
+    // scrollRows() counts toward the end as positive.
+    const float perUnit = host_->inputIsTouch() ? 1.0f : (float)pitch / 120.0f;
+    if (!grid::scrollRows(gridRowScroll_, -(float)delta * perUnit, pitch, maxRow))
+        return;
+    gridScrollY_ = gridRowScroll_.row * pitch;
+    invalidate();
+}
+
 // x,y are client-relative (the host converts from whatever coordinate space
 // its own wheel event delivers — Windows' WM_MOUSEWHEEL is screen-relative
 // and gets ScreenToClient()'d in windows_host.cc before calling this;
@@ -4528,11 +4589,8 @@ void PlayerWindow::onMouseWheel(int x, int y, int delta) {
     // library sitting somewhere they never put it. That is exactly the failure
     // the comment at the top of this function describes and this branch was
     // the one place still open to it.
-    if (!settingsOpen_ && !trackPanelOpen_ && ptInRect(rcGrid_, x, y)) {
-        int gridH = rcGrid_.bottom - rcGrid_.top;
-        gridScrollY_ = scrollTo(gridScrollY_, delta, gridTotalHeight_, gridH);
-        invalidate();
-    }
+    if (!settingsOpen_ && !trackPanelOpen_ && ptInRect(rcGrid_, x, y))
+        scrollGridRows(delta);
 }
 
 // ── Prev / Next ──────────────────────────────────────────────────────────────
@@ -6353,7 +6411,7 @@ void PlayerWindow::drawPlaylistGrid(Canvas& canvas, const LayoutRect& area) {
     canvas.setClip(g.x, g.y, g.w, g.h);
 
     const int tileStepX = gridStepX_;
-    const int tileStepY = gridTileSize_ + gridRowGap_;
+    const int tileStepY = gridStepY_;
 
     for (int i = 0; i < 3; i++) {
         int col = i % gridCols_, row = i / gridCols_;
@@ -6399,7 +6457,7 @@ int PlayerWindow::playlistTileHitTest(int x, int y) const {
     if (x < rcGrid_.left || x >= rcGrid_.right || y < rcGrid_.top || y >= rcGrid_.bottom)
         return -1;
     const int tileStepX = gridStepX_;
-    const int tileStepY = gridTileSize_ + gridRowGap_;
+    const int tileStepY = gridStepY_;
     int col = (x - rcGrid_.left - gridPadXpx_) / tileStepX;
     int row = (y - rcGrid_.top - gridPadYpx_ + gridScrollY_) / tileStepY;
     if (col < 0 || col >= gridCols_ || row < 0) return -1;
@@ -9931,7 +9989,7 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
     // while it draws, so there is nothing stored to click — the same math the
     // draw and the hit-test share (see drawPlaylistGrid/playlistTileHitTest).
     auto clickPlaylistTile = [&](int i) {
-        int tileStepX = gridStepX_, tileStepY = gridTileSize_ + gridRowGap_;
+        int tileStepX = gridStepX_, tileStepY = gridStepY_;
         int col = i % gridCols_, row = i / gridCols_;
         int x = rcGrid_.left + gridPadXpx_ + col * tileStepX
                 + (tileStepX - gridArtSize_) / 2 + gridArtSize_ / 2;

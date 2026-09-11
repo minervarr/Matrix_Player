@@ -20,6 +20,7 @@
 #include "audio_output.h"
 #include "ui_orientation.hh"
 #include "rail_layout.hh"
+#include "grid_layout.hh"
 #include "bar_a.hh"
 #include "img_decode.hh"
 #ifdef _WIN32
@@ -430,6 +431,9 @@ private:
     // pinned by layout_test.
     int  scrollDelta(int rawDelta) const;
     static int scrollTo(int offset, int delta, int contentH, int viewH);
+    // The album grid's own scroll: whole rows only, no animation, one wheel
+    // notch = one row on a desktop, the finger's own travel on a touch screen.
+    void scrollGridRows(int delta);
 
     // Reverse the direction, per input kind, because touch and a wheel start
     // from opposite conventions and one flag would necessarily be wrong on
@@ -838,6 +842,18 @@ private:
     int gridPadXpx_ = 24;
     int gridPadYpx_ = 16;
     int gridStepX_  = 0;    // cell stride incl. margins; was recomputed twice
+    // Row pitch and visible row count, from grid::computeShape() -- see
+    // grid_layout.hh. Whole rows fill the viewport exactly, so every site that
+    // needs the vertical stride reads gridStepY_ and none of them re-derive it.
+    int gridStepY_  = 0;
+    int gridRows_   = 1;
+    // Where the INPUT is, continuously, plus the row it has snapped to and the
+    // direction it last moved (grid::RowScroll). gridScrollY_ is always
+    // rowScroll.row * gridStepY_ -- a whole number of rows -- and it is the
+    // only offset anything draws or hit-tests with. Keeping the two apart is
+    // what lets the host's kinetic throw keep deciding how far a flick goes
+    // while the grid itself only ever shows whole rows. See scrollGridRows().
+    grid::RowScroll gridRowScroll_;
 
     // Sidebar search box — live-filters the album grid. gridIndices_ is the
     // single indirection: tile position → albums_ index. Draw loop and

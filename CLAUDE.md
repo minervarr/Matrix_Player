@@ -486,7 +486,7 @@ exactly how it went unnoticed until an MP3 misnamed `.flac` surfaced it on a
 phone. The generated `config.h` for both linux and android IS committed; only
 the sources are fetched.
 
-**Tests**: there is no ctest/gtest framework, but there are eleven assert-based
+**Tests**: there is no ctest/gtest framework, but there are twelve assert-based
 pure-logic test executables, built **Debug-only** (see the bottom of
 `gui/CMakeLists.txt` and of `core/CMakeLists.txt`) and run directly. Convention
 matches `framework/vk_canvas/core/tests/*.cc`: plain `assert()`, `#undef NDEBUG`
@@ -506,6 +506,7 @@ scripts/linux/build.sh --debug
 ./build/linux_debug/core/streamer_db_test  # where the foreign .streamer/library.db is looked for
 ./build/linux_debug/core/scan_source_test  # the media index and the walk must agree
 ./build/linux_debug/gui/scroll_test        # scroll direction + bounds, one rule for eight surfaces
+./build/linux_debug/gui/grid_layout_test   # the grid's shape (whole rows) and its row-snapped scroll
 ```
 
 `scan_source_test` is the one that would otherwise need a phone. The scan takes

@@ -40,6 +40,7 @@ set(MATRIX_PLAYER_PORTABLE_SOURCES
     src/player_view.cc
     src/art_view.cc
     src/rail_layout.cc
+    src/grid_layout.cc
     src/bar_a.cc
     src/ui_icons.cc
     src/ui_icons_draw.cc
@@ -324,6 +325,15 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         target_compile_options(scroll_test PRIVATE -Wall)
     endif()
 
+    # grid_layout_test -- the album grid's shape (whole rows, nearest column
+    # count) and its row-snapped scroll. Links the REAL src/grid_layout.cc,
+    # which is pure arithmetic with no Canvas, same as rail_layout_test.
+    add_executable(grid_layout_test src/grid_layout_test.cc src/grid_layout.cc)
+    target_include_directories(grid_layout_test PRIVATE src)
+    if(NOT MSVC)
+        target_compile_options(grid_layout_test PRIVATE -Wall)
+    endif()
+
     add_executable(ui_text_test src/ui_text_test.cc)
     target_include_directories(ui_text_test PRIVATE src ${CMAKE_SOURCE_DIR}/framework/app_shell)
     if(NOT WIN32)
@@ -378,6 +388,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
             src/art_view.cc
             src/bar_a.cc
             src/rail_layout.cc
+            src/grid_layout.cc
             src/ui_icons.cc
             src/ui_icons_draw.cc
             # player_view.cc calls the media_session.hh seam; the capture tool

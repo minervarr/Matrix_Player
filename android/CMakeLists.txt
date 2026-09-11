@@ -263,6 +263,7 @@ add_library(matrix_player_android SHARED
     ${MATRIX_GUI_SRC}/panels/settings_panels.cc
     ${MATRIX_GUI_SRC}/bar_a.cc
     ${MATRIX_GUI_SRC}/rail_layout.cc
+    ${MATRIX_GUI_SRC}/grid_layout.cc
     ${MATRIX_GUI_SRC}/ui_icons.cc
     ${MATRIX_GUI_SRC}/ui_icons_draw.cc
     ${MATRIX_GUI_SRC}/os/aaudio_output.cc
