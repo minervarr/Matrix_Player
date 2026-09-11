@@ -41,6 +41,8 @@ set(MATRIX_PLAYER_PORTABLE_SOURCES
     src/art_view.cc
     src/rail_layout.cc
     src/grid_layout.cc
+    src/terminus_glyph.cc
+    src/terminus_glyph_draw.cc
     src/bar_a.cc
     src/ui_icons.cc
     src/ui_icons_draw.cc
@@ -334,6 +336,15 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         target_compile_options(grid_layout_test PRIVATE -Wall)
     endif()
 
+    # terminus_glyph_test -- the baked Terminus glyph and its run-length rects.
+    # Links the REAL src/terminus_glyph.cc; the Canvas half is a separate TU
+    # (terminus_glyph_draw.cc), same split as ui_icons.cc / ui_icons_draw.cc.
+    add_executable(terminus_glyph_test src/terminus_glyph_test.cc src/terminus_glyph.cc)
+    target_include_directories(terminus_glyph_test PRIVATE src ${CMAKE_SOURCE_DIR}/framework/app_shell)
+    if(NOT MSVC)
+        target_compile_options(terminus_glyph_test PRIVATE -Wall)
+    endif()
+
     add_executable(ui_text_test src/ui_text_test.cc)
     target_include_directories(ui_text_test PRIVATE src ${CMAKE_SOURCE_DIR}/framework/app_shell)
     if(NOT WIN32)
@@ -389,6 +400,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
             src/bar_a.cc
             src/rail_layout.cc
             src/grid_layout.cc
+            src/terminus_glyph.cc
+            src/terminus_glyph_draw.cc
             src/ui_icons.cc
             src/ui_icons_draw.cc
             # player_view.cc calls the media_session.hh seam; the capture tool
