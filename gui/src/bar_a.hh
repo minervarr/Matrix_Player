@@ -39,13 +39,10 @@ enum class BarAItem {
     None = 0,
     Filter,       // index = a RailLetter (kRailAlbums .. kRailRemixes)
     Playlists,
-    Search,       // the letter that OPENS search -- never the open field
+    Search,       // the Find cell that OPENS search -- never the open field
     SearchClose,
     Settings,
-    EqNone,       // the discreet x meaning "no profile"
-    EqName,       // the active profile's name; touching it unfurls the list
-    EqRow,        // index = row within BarAModel::eqRows
-    EqMore,       // "Search more..."
+    EqBox,        // the active profile's name; touching it opens the EqSwitcher
 };
 
 struct BarAPick {
@@ -58,16 +55,6 @@ inline bool operator==(const BarAPick& a, const BarAPick& b) {
 }
 inline bool operator!=(const BarAPick& a, const BarAPick& b) { return !(a == b); }
 
-// One row of the unfurled AutoEQ list. `rc` comes from railListRow(); which
-// profile it is, and whether that profile is on trial, is application data the
-// caller resolves -- this layer only paints a name.
-struct BarAEqRow {
-    LayoutRect  rc{};
-    std::string name;
-    bool        active = false;
-    bool        trial  = false;   // picked but not yet earned its 60 seconds
-};
-
 // Everything bar A needs to draw itself, as values. Nothing here is a pointer
 // into application state that could change between the layout pass and the
 // paint, which is the whole point.
@@ -79,8 +66,8 @@ struct BarAModel {
 
     bool searchOpen     = false;
     bool searchFocused  = false;
-    bool eqListOpen     = false;
     bool settingsActive = false;
+    bool eqSwitcherOpen = false;   // the box reads as selected while its scene is up
 
     std::string searchQuery;
 
@@ -95,9 +82,6 @@ struct BarAModel {
     bool        eqNone      = true;   // no profile is selected
     bool        eqTentative = false;  // selected, not yet credited
     std::string eqName;
-
-    std::vector<BarAEqRow> eqRows;    // empty unless the list is unfurled
-    LayoutRect             eqMore{};  // "Search more...", if a row was left for it
 
     // What the pointer is over. Android leaves this None and nothing else
     // changes: the shared code never asks which platform it is on.

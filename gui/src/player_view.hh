@@ -1121,16 +1121,12 @@ private:
     // click on Settings. The static_assert below is what makes that a build
     // error rather than a mystery in the UI.
     static constexpr int kSidebarSettingsHit  = 6;  // the Settings row
-    static constexpr int kSidebarHpMoreHit    = 7;  // the AutoEQ block's "Search more…"
     static constexpr int kSidebarPlaylistsHit = 8;  // the Playlists row
-    static constexpr int kSidebarHpNoneHit    = 9;  // the AutoEQ block's "No AutoEQ"
-    static constexpr int kSidebarSearchHit    = 10; // the search letter
+    static constexpr int kSidebarSearchHit    = 10; // the Find cell
     static constexpr int kSidebarSearchCloseHit = 11; // its close cell, while open
-    static constexpr int kSidebarEqBoxHit     = 12; // the AutoEQ box's name (unfurls)
-    static constexpr int kSidebarEqNoneHit    = 13; // the AutoEQ box's X (= no profile)
+    static constexpr int kSidebarEqBoxHit     = 12; // the AutoEQ box (opens the EqSwitcher)
     static_assert(kSidebarSettingsHit > (int)AlbumTypeFilter::Live,
                   "sidebarHitTest sentinels must start above the last AlbumTypeFilter");
-    static constexpr int kSidebarHpRowBase   = 100;  // + row index within hpRows_
 
     // ── Playlists ───────────────────────────────────────────────────────────
     // Three generated lists, each of which IS its query (core/db.h) — nothing
@@ -1745,21 +1741,6 @@ private:
     // statsMsHeard_ counts the TRACK, not the profile. Without this baseline a
     // swap 3 minutes into a track would credit the new profile immediately.
     int64_t eqCreditBaselineMs_  = 0;
-    // Computed during draw, read by hit-test — same contract as eqListRows_.
-    struct HpRow { LayoutRect rc; int headphoneIdx; };  // -1 = the on-trial row
-    std::vector<HpRow> hpRows_;
-    LayoutRect hpNoneRc_ = {};   // "No AutoEQ" — the off position of the switch
-    LayoutRect hpMoreRc_ = {};
-    LayoutRect eqNameRc_ = {};   // the AutoEQ box's name — click unfurls the list
-    // The AutoEQ box's list is UNFURLED, not clamped: it runs from the box to
-    // the far end of bar A and shows the saved list WHOLE. The old four-row cap
-    // and the sidebar block's height budget are gone with it — they existed
-    // only because three rows had to fit under Settings. With a typical inventory of
-    // about seven pairs, showing them all and letting the eye travel beats
-    // scrolling. Ordering (pinned, then most-used, then most-recent) and the
-    // 60-second credit gate are untouched: those decide WHICH profiles exist,
-    // not how many fit.
-    bool eqListOpen_ = false;
 
     FolderWatcher        watcher_;
     std::thread          scanThread_;

@@ -2621,49 +2621,11 @@ void PlayerWindow::recalcLayout() {
         ri.orient      = curOrientation_;
         ri.bitPerfect  = bitperfectMode_.load();
         ri.searchOpen  = searchOpen_;
-        ri.eqListOpen  = eqListOpen_;
         ri.cell        = barThickness;              // square by default
         ri.eqBoxExtent = (int)metrics_.space(300.0f);
         ri.pad         = (int)metrics_.space(10.0f);
         ri.gap         = (int)metrics_.space(16.0f);
         rail_ = computeRailLayout(ri);
-    }
-    // ── The AutoEQ box's hit model ──────────────────────────────────────────
-    //
-    // Built HERE, in the layout pass, not during the draw. It used to be the
-    // other way round: drawEqBox() wrote hpRows_/hpNoneRc_/hpMoreRc_/eqNameRc_
-    // and the hit-test read them a frame later — the "computed during draw,
-    // read by hit-test" contract this file uses in several places. That
-    // contract is exactly what stops a draw function from being a pure
-    // function of plain values, which is what bar A has to become to be
-    // shared with Android.
-    //
-    // Which profile a row IS still belongs here rather than in rail_layout.cc:
-    // that is app data (eqHeadphones_, the on-trial profile), not geometry.
-    hpRows_.clear();
-    hpNoneRc_ = rail_.eqNone;
-    eqNameRc_ = rail_.eqName;
-    hpMoreRc_ = {};
-    if (rail_.eqBox.right <= rail_.eqBox.left) {
-        // No box: nothing to unfurl FROM. Closing it here rather than in the
-        // draw is the point — an open/closed flag is state, and a paint pass
-        // has no business writing state.
-        eqListOpen_ = false;
-    } else if (eqListOpen_) {
-        const int rowLen = (int)metrics_.space(52.0f);
-        const int cap    = railListCapacity(rail_.eqList, curOrientation_, rowLen);
-        int row = 0;
-        // The on-trial profile heads the list: it is what the listener just
-        // picked, so hiding it to preserve a saved row would hide the one thing
-        // they are looking for. -1 marks it (see HpRow).
-        if (eqCurrentTentative_ && !eqCurrent_.name.empty() && row < cap)
-            hpRows_.push_back({ railListRow(rail_.eqList, curOrientation_, rowLen, row++), -1 });
-        for (int i = 0; i < (int)eqHeadphones_.size() && row < cap; i++)
-            hpRows_.push_back({ railListRow(rail_.eqList, curOrientation_, rowLen, row++), i });
-        // "Search more…" earns the last slot it can: without it there is no
-        // route from the switcher to the full catalogue.
-        if (row < cap)
-            hpMoreRc_ = railListRow(rail_.eqList, curOrientation_, rowLen, row++);
     }
 
     // The existing hit-testing and drawing read these rects by name, so the
@@ -4264,27 +4226,17 @@ void PlayerWindow::handleClick(int x, int y) {
     // Sidebar
     if (ptInRect(rcSidebar_, x, y)) {
         int nav = sidebarHitTest(x, y);
-        // The headphone sentinels MUST be tested before the `nav >= 0` branch
-        // below, which casts whatever it gets into an AlbumTypeFilter.
-        if (nav >= kSidebarHpRowBase) {
-            int i = nav - kSidebarHpRowBase;
-            if (i < (int)hpRows_.size()) {
-                int hp = hpRows_[i].headphoneIdx;
-                // -1 is the on-trial row: already applied, so clicking it is a
-                // no-op rather than a pointless re-assign that would restart
-                // its minute and make the row impossible to ever promote.
-                if (hp >= 0 && hp < (int)eqHeadphones_.size()) {
-                    const auto& h = eqHeadphones_[hp];
-                    selectEqProfile({ h.name, h.source, h.form });
-                }
-            }
-            eqListOpen_ = false;       // a pick closes the list, like any menu
-        } else if (nav == kSidebarEqBoxHit) {
-            // The name is the handle: touching it unfurls the saved list, and
-            // touching it again puts it away.
-            eqListOpen_ = !eqListOpen_;
-            recalcLayout();
-            invalidate();
+        // The sentinels MUST be tested before the `nav >= 0` branch below,
+        // which casts whatever it gets into an AlbumTypeFilter.
+        if (nav == kSidebarEqBoxHit) {
+            // Until the EqSwitcher scene lands, the box opens the EQ Settings
+            // panel -- the route "Search more..." used to take.
+            onEqSettings();            // clears panelFromSidebar_, as openers do
+            // The panel only draws under settingsOpen_, so borrow it — but the
+            // listener never asked to BE in Settings, and closeActivePanel()
+            // has to hand the view back rather than strand them there.
+            settingsOpen_     = true;
+            panelFromSidebar_ = true;
             return;
         } else if (nav == kSidebarSearchHit) {
             openSearch();
@@ -4292,18 +4244,6 @@ void PlayerWindow::handleClick(int x, int y) {
         } else if (nav == kSidebarSearchCloseHit) {
             closeSearch();
             return;
-        } else if (nav == kSidebarHpNoneHit) {
-            clearEqProfile();
-            eqListOpen_ = false;
-        } else if (nav == kSidebarHpMoreHit) {
-            onEqSettings();            // clears panelFromSidebar_, as openers do
-            // The panel only draws under settingsOpen_, so borrow it — but the
-            // listener never asked to BE in Settings, and closeActivePanel()
-            // has to hand the view back rather than strand them there.
-            // trackPanelOpen_ is left alone on purpose: if they were reading an
-            // album, that is where Escape should return them.
-            settingsOpen_     = true;
-            panelFromSidebar_ = true;
         } else if (nav == kSidebarPlaylistsHit) {
             // The seven content rows all obey one rule: a click takes you to
             // that section's ROOT — its grid of tiles — from wherever you are,
@@ -6955,7 +6895,6 @@ void PlayerWindow::openSearch() {
     if (searchOpen_) return;
     searchOpen_    = true;
     searchFocused_ = true;
-    eqListOpen_    = false;      // two unfurled things at once is a mess
     refreshSuggestions();        // offer the whole menu before a letter is typed
     syncKeyboard();              // opening it IS focusing it
     recalcLayout();
@@ -7001,7 +6940,6 @@ BarAModel PlayerWindow::barAModel() const {
 
     m.searchOpen     = searchOpen_;
     m.searchFocused  = searchFocused_;
-    m.eqListOpen     = eqListOpen_;
     m.settingsActive = settingsOpen_;
     m.searchQuery    = searchQuery_;
 
@@ -7025,22 +6963,6 @@ BarAModel PlayerWindow::barAModel() const {
     m.eqTentative = eqCurrentTentative_;
     m.eqName      = eqCurrent_.name;
 
-    // Which profile a row IS stays app data. The on-trial profile heads the
-    // list and leads: while it is showing, a saved row with the same name is
-    // NOT the active one, or two rows would light up at once.
-    const bool trialLeads = eqCurrentTentative_ && !eqCurrent_.name.empty();
-    m.eqRows.reserve(hpRows_.size());
-    for (const HpRow& hr : hpRows_) {
-        const bool trial = (hr.headphoneIdx < 0);
-        BarAEqRow row;
-        row.rc     = hr.rc;
-        row.name   = trial ? eqCurrent_.name : eqHeadphones_[hr.headphoneIdx].name;
-        row.trial  = trial;
-        row.active = trial ? true : (!trialLeads && row.name == eqCurrent_.name);
-        m.eqRows.push_back(std::move(row));
-    }
-    m.eqMore = hpMoreRc_;
-
     m.hovered = sidebarHitToPick(hoverSidebarItem_);
     return m;
 }
@@ -7051,7 +6973,6 @@ BarAModel PlayerWindow::barAModel() const {
 // which is exactly the coupling the shared layer must not inherit.
 BarAPick PlayerWindow::sidebarHitToPick(int nav) {
     if (nav < 0) return {};
-    if (nav >= kSidebarHpRowBase) return { BarAItem::EqRow, nav - kSidebarHpRowBase };
     switch (nav) {
         case (int)AlbumTypeFilter::Album:       return { BarAItem::Filter, kRailAlbums };
         case (int)AlbumTypeFilter::Ep:          return { BarAItem::Filter, kRailEps };
@@ -7063,9 +6984,7 @@ BarAPick PlayerWindow::sidebarHitToPick(int nav) {
         case kSidebarSettingsHit:     return { BarAItem::Settings, -1 };
         case kSidebarSearchHit:       return { BarAItem::Search, -1 };
         case kSidebarSearchCloseHit:  return { BarAItem::SearchClose, -1 };
-        case kSidebarHpNoneHit:       return { BarAItem::EqNone, -1 };
-        case kSidebarEqBoxHit:        return { BarAItem::EqName, -1 };
-        case kSidebarHpMoreHit:       return { BarAItem::EqMore, -1 };
+        case kSidebarEqBoxHit:        return { BarAItem::EqBox, -1 };
         default:                      return {};
     }
 }
@@ -7082,14 +7001,11 @@ int PlayerWindow::pickToSidebarHit(const BarAPick& p) {
                 case kRailRemixes:      return (int)AlbumTypeFilter::Remix;
                 default:                return -1;
             }
-        case BarAItem::EqRow:       return kSidebarHpRowBase + p.index;
         case BarAItem::Playlists:   return kSidebarPlaylistsHit;
         case BarAItem::Settings:    return kSidebarSettingsHit;
         case BarAItem::Search:      return kSidebarSearchHit;
         case BarAItem::SearchClose: return kSidebarSearchCloseHit;
-        case BarAItem::EqNone:      return kSidebarHpNoneHit;
-        case BarAItem::EqName:      return kSidebarEqBoxHit;
-        case BarAItem::EqMore:      return kSidebarHpMoreHit;
+        case BarAItem::EqBox:       return kSidebarEqBoxHit;
         case BarAItem::None:        return -1;
     }
     return -1;
@@ -10189,9 +10105,6 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
         return true;
     }
 
-    // The AutoEQ switcher unfurled. Reached the way a listener reaches it —
-    // by clicking the box's name — so the capture exercises the real toggle
-    // and the real row layout, not a flag set from outside.
     // Bar B's left label, which is otherwise never drawn by a capture: nothing
     // plays in a screenshot session (RequestPlay is swallowed on purpose), so
     // currentAlbum_ stays -1 and the label renders as an em dash. Pinning the
@@ -10216,21 +10129,6 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
         if (found < 0) return false;
         currentAlbum_ = displayAlbum_ = found;
         currentTrack_ = displayTrack_ = trk;
-        return true;
-    }
-
-    if (state == "43-autoeq-unfurled") {
-        // States run in sequence and the search ones come first, so this has to
-        // put the bar back: with search open there IS no AutoEQ box (see
-        // computeRailLayout), and the capture would silently report the state
-        // as unreachable rather than as broken.
-        closeSearch();
-        // The box's rects are computed during DRAW (the same contract hpRows_
-        // has always used), so the frame has to happen before the click —
-        // the draw-then-click order the EQ tabs and playlist tiles need too.
-        drawFrame();
-        if (eqNameRc_.right <= eqNameRc_.left) return false;
-        click(eqNameRc_);
         return true;
     }
 

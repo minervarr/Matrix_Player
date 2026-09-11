@@ -5,8 +5,8 @@
 // ── Where everything in bar A goes ───────────────────────────────────────────
 //
 // Bar A is the navigation half of the two-bar frame: the six release-type
-// filters plus Playlists as single letters, the search letter, Settings, and
-// the AutoEQ quick-switcher. Bar B (the transport) is laid out elsewhere.
+// filters plus Playlists as single letters, the Find cell, Settings, and the
+// AutoEQ box. Bar B (the transport) is laid out elsewhere.
 //
 // PURE. No Canvas, no Host, no theme, no metrics — just rectangles from
 // rectangles, so rail_layout_test can assert every position without a window.
@@ -30,29 +30,31 @@
 //
 // ── The order along it ───────────────────────────────────────────────────────
 //
-//   near [ Settings ][ AutoEQ box ] · · · gap · · · [ Search ][ letters ] far
+//   near [ Settings ][ Find ][ AutoEQ box ] · · · gap · · · [ letters ] far
 //
-// Settings is pinned at the very near end and NEVER moves. That is not a
-// stylistic choice: opening search must not cost what the listener already
-// typed, so Settings has to stay reachable and in place while the filter
-// letters collapse around it. Anything else on that end would push Settings
-// when it appeared or vanished.
+// RARE cells together at the near end, FREQUENT cells alone at the far end,
+// with the gap between them. Find used to be the cell right beside Albums, the
+// same size as a filter letter, so a slightly-off tap on Albums opened search
+// -- and opening search collapses every letter. It is now two cells and a gap
+// away from the nearest filter.
 //
-// The AutoEQ box sits just inside Settings, on the same end (left in Vertical,
-// bottom in Horizontal). In bit-perfect there is nothing to pick a profile FOR,
-// so the box does not exist and the letter group CENTRES in the space that is
-// left; in Reference EQ the box exists and the group pegs to the far end.
-// The jump between those two is instant, deliberately — no animation.
+// Settings is pinned at the very near end and NEVER moves: opening search must
+// not cost what the listener already typed, so Settings stays reachable and in
+// place while the letters collapse around it.
 //
-// With search open the filter letters and the AutoEQ box both hide, a close
-// button takes the far end, and the field spans the middle. Because the box
-// hides either way, open-search looks identical in bit-perfect and in
-// Reference EQ — one state to draw, not two.
+// The AutoEQ box follows Find. It shows the active profile's NAME and nothing
+// else; touching it opens the EqSwitcher scene (player_view). In bit-perfect
+// there is nothing to pick a profile FOR, so the box does not exist and the
+// letter group CENTRES in the space that is left; in Reference EQ the group
+// pegs to the far end. The jump between those two is instant -- no animation.
+//
+// With search open the letters and the box hide, a close button takes the far
+// end, and the field spans the middle, starting after Settings. Open search
+// looks identical in bit-perfect and in Reference EQ -- one state, not two.
 
 // The seven filter letters, in the order they are laid out from the near end
-// outward. Deliberately the READING order, which is also the sidebar row order
-// this replaces — not the Album::ReleaseType enum's order, which is frozen by
-// the albums table and means nothing on screen.
+// outward. Deliberately the READING order, not Album::ReleaseType's order,
+// which is frozen by the albums table and means nothing on screen.
 enum RailLetter {
     kRailAlbums = 0,
     kRailEps,
@@ -69,12 +71,6 @@ struct RailInput {
     UiOrientation orient    = UiOrientation::Horizontal;
     bool          bitPerfect = false;                   // no AutoEQ box
     bool          searchOpen = false;
-    // The AutoEQ list is unfurled over the letter group. It HIDES the letters
-    // rather than floating above them, and that is forced by the renderer, not
-    // chosen: every rect is emitted before every glyph (see the note on
-    // rcChips_ in recalcLayout()), so an overlay's background can never cover
-    // text drawn earlier -- the letters would show straight through it.
-    bool          eqListOpen = false;
 
     // The DESIRED extent of one cell along the long axis; the cross-axis
     // extent is always the bar's full thickness, so a cell is square when this
@@ -94,35 +90,11 @@ struct RailInput {
 // Every rect is in window coordinates. A hidden element is returned as {} —
 // an empty rect, which every hit-test in this codebase already misses.
 struct RailLayout {
-    LayoutRect letters[kRailLetterCount]{};  // empty while search or the EQ list is open
-    LayoutRect search{};    // the search letter, or the text field while open
+    LayoutRect letters[kRailLetterCount]{};  // empty while search is open
+    LayoutRect search{};    // the Find cell, or the text field while open
     LayoutRect settings{};
     LayoutRect close{};     // only while search is open
-    LayoutRect eqBox{};     // empty when bit-perfect, or while search is open
-
-    // The AutoEQ box's two halves. `eqNone` is the discreet × meaning "no
-    // profile"; `eqName` is the active profile's name, and touching it unfurls
-    // the list. Both empty whenever eqBox is.
-    LayoutRect eqNone{};
-    LayoutRect eqName{};
-
-    // The whole span the unfurled list may occupy: from the far edge of the box
-    // to the far end of the bar. Empty unless the list is open. Split into rows
-    // with railListRow() below — this is deliberately NOT a vector of rows,
-    // because how many rows there are is the app's business, not the layout's.
-    LayoutRect eqList{};
+    LayoutRect eqBox{};     // the active profile's name; empty when bit-perfect or searching
 };
 
 RailLayout computeRailLayout(const RailInput& in);
-
-// ── Splitting an unfurled list into rows ─────────────────────────────────────
-//
-// `list` is a span along the bar's long axis (RailLayout::eqList). Rows are
-// laid out from its NEAR end outward, each `rowExtent` long on that axis and
-// the bar's full thickness across it.
-//
-// One pair of functions serves both the drawing and the hit-testing, which is
-// the point: the two cannot disagree about where row 3 is. Pure, and allocating
-// nothing — a list is walked, never built.
-int        railListCapacity(const LayoutRect& list, UiOrientation orient, int rowExtent);
-LayoutRect railListRow(const LayoutRect& list, UiOrientation orient, int rowExtent, int i);
