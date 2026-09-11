@@ -26,7 +26,7 @@ except ImportError as e:
 HERE = os.path.dirname(os.path.abspath(__file__))
 HDR_OUT = os.path.join(HERE, "..", "..", "gui", "src", "terminus_glyphs.gen.h")
 STRIKES = [16, 32]      # the only strikes that are integer multiples of 8x16
-GLYPHS = "S"            # Settings. Add characters here, rerun, commit both.
+GLYPHS = "SF"           # Settings, Find. Add characters here, rerun, commit both.
 
 
 def bake(size, ch):

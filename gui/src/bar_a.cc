@@ -44,14 +44,16 @@ void drawSearchField(Canvas& canvas, const LayoutRect& rc, const std::string& te
 // and the ladder only confirms:
 //
 //   Settings  S              Terminus (a 1-bit pixel face)   DIM 128
-//   Find      F              Computer Modern, regular        SECONDARY 170
+//   Find      F              Terminus (a 1-bit pixel face)   SECONDARY 170
 //   filters   A E S C L R P  Computer Modern, BOLD           PRIMARY 242
 //
 // The filters are the most used cells, so they get the heaviest weight, which
-// also holds up best in the shrunken cells of a phone held upright. Settings is
-// machine chrome, not music, so it gets the terminal face. The one remaining
-// pair of equal letters -- Settings and Singles -- is a pixel S beside a bold
-// serif S, which do not resemble each other at any size.
+// also holds up best in the shrunken cells of a phone held upright. Settings
+// and Find are both machine chrome rather than music -- one opens
+// configuration, the other opens a text field -- so both get the terminal
+// face; the colour ladder is what still tells the two apart at a glance. The
+// one remaining pair of equal letters -- Settings and Singles -- is a pixel S
+// beside a bold serif S, which do not resemble each other at any size.
 
 namespace {
 
@@ -165,10 +167,16 @@ void drawBarA(Canvas& canvas, const BarAModel& m) {
             glyph(m.rail.letters[kRailPlaylists], "P", FontStyle::Bold,
                   m.playlistsActive ? CLR_ACCENT : CLR_TEXT_PRIMARY);
 
-        // Find: an F, which no filter uses, in the REGULAR weight and one step
-        // down the ladder -- it is about the music, but it is not a section.
-        if (cellBg(m.rail.search, false, m.hovered.item == BarAItem::Search))
-            glyph(m.rail.search, "F", FontStyle::Roman, CLR_TEXT_SECONDARY);
+        // Find: TERMINUS, same face as Settings, one step down the ladder --
+        // it is chrome like Settings, not a filter, so it gets Settings'
+        // typeface rather than the filters' bold serif. Falls back to a
+        // Computer Modern F only if the baked glyph is missing, which
+        // terminus_glyph_test makes a build-time failure, not a runtime one.
+        if (cellBg(m.rail.search, false, m.hovered.item == BarAItem::Search)) {
+            if (!drawTerminusGlyph(canvas, m.rail.search, U'F', m.metrics.text.title,
+                                   toColor(CLR_TEXT_SECONDARY)))
+                glyph(m.rail.search, "F", FontStyle::Roman, CLR_TEXT_SECONDARY);
+        }
     } else {
         // Open search: the field spans the middle, with a close cell at the far
         // end. The letters and the AutoEQ box are both gone -- see
