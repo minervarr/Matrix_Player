@@ -101,7 +101,8 @@ Economycs handles its whole font (`gui/src/term.hh` there):
 - **Integer scale only, nearest sampling**, the rule from Economycs's
   `docs/type-hierarchy.md`: a fractional scale resamples pixels into grey and
   breaks a 1-bit face. The strike and factor are chosen from the cell's target
-  height: the 32 px strike at `k = max(1, round(target / 32))`, or the 16 px
+  height -- the size the filter letters are drawn at, so the three cells
+  match: the 32 px strike at `k = max(1, round(target / 32))`, or the 16 px
   strike when the target is under 24 px. The glyph is centred in its cell.
 
 ## The EQ switcher
@@ -161,8 +162,8 @@ drawn earlier).
   checked with `--fixture 60` at `--frame 720x1640` and `--frame 1640x720`,
   because the default captures run on an empty library. The existing rail states
   will change and are checked by eye: `30-settings`, `40-search`, `41-search-suggest`,
-  `42-search-chips`, `43-autoeq-unfurled` (which becomes the switcher, or is
-  retired).
+  `42-search-chips`. `43-autoeq-unfurled` is **retired**: it opens the
+  along-the-bar list, which no longer exists, and `45-eq-switcher` replaces it.
 - `docs/UI_DESIGN_SYSTEM.md` and `CLAUDE.md` updated: the rail section, the
   three-`S` note in `bar_a.cc`, and `CLAUDE.md`'s rule 6 about the unfurled list.
 
