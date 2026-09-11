@@ -1017,7 +1017,12 @@ private:
     //
     // One enum for both, because they share everything except what they draw:
     // the same dismissal, the same rect, the same place in drawFrame().
-    enum class ContentOverlay { None, AlbumArt, SignalChain };
+    //
+    // EqSwitcher joined them for the same reason: choosing which headphone
+    // profile is on is something done WHILE the music plays, with the
+    // transport under the listener's hands -- a panel would swallow the very
+    // Space bar that stops it.
+    enum class ContentOverlay { None, AlbumArt, SignalChain, EqSwitcher };
     ContentOverlay overlay_ = ContentOverlay::None;
     // What the art scene is showing. Kept separately from displayAlbum_
     // because the two answer different questions: the scene follows the
@@ -1054,6 +1059,27 @@ private:
     int  scViewH_ = 0;
     LayoutRect rcScClose_{};
     bool hoverScClose_ = false;
+
+    // ── The EqSwitcher scene ────────────────────────────────────────────────
+    // The saved AutoEQ profiles as full-width rows of FULL names. It replaced a
+    // list that unfurled along bar A, where each profile got a segment the size
+    // of a filter letter and a name drew as "S..." -- sideways, in the
+    // horizontal layout. Rows are rebuilt by the draw and read by the hit-test,
+    // the contract rcScClose_ already has.
+    void drawEqSwitcher(Canvas& canvas, const LayoutRect& area);
+    struct EsEntry {
+        enum Kind { NoEq, Trial, Saved, All } kind;
+        int idx;                      // into eqHeadphones_ for Saved, else -1
+    };
+    std::vector<EsEntry>    esEntries_;
+    std::vector<LayoutRect> esRows_;  // parallel to esEntries_
+    LayoutRect rcEsContent_{};        // rows hit-test only inside this
+    LayoutRect rcEsClose_{};
+    bool hoverEsClose_ = false;
+    int  esHoverRow_   = -1;
+    int  esScrollY_    = 0;
+    int  esContentH_   = 0;           // measured by the draw
+    int  esViewH_      = 0;           // published by the draw, like scViewH_
 
     // Word-wrap cache for the signal chain's value column.
     //

@@ -2167,6 +2167,8 @@ void PlayerWindow::drawFrame() {
         // the transport has to stay under the listener's hands.
         if (overlay_ == ContentOverlay::SignalChain)
             drawSignalChain(canvas, rcGrid_);
+        else if (overlay_ == ContentOverlay::EqSwitcher)
+            drawEqSwitcher(canvas, rcGrid_);
     }
 
     // ── Bar B: the transport ─────────────────────────────────────────────
@@ -3924,6 +3926,19 @@ void PlayerWindow::onMouseMove(int x, int y) {
         if (hc != hoverScClose_) { hoverScClose_ = hc; invalidate(); }
     }
 
+    if (!settingsOpen_ && overlay_ == ContentOverlay::EqSwitcher) {
+        const bool hc = ptInRect(rcEsClose_, x, y) != 0;
+        int hr = -1;
+        if (ptInRect(rcEsContent_, x, y))
+            for (size_t i = 0; i < esRows_.size(); i++)
+                if (ptInRect(esRows_[i], x, y)) { hr = (int)i; break; }
+        if (hc != hoverEsClose_ || hr != esHoverRow_) {
+            hoverEsClose_ = hc;
+            esHoverRow_   = hr;
+            invalidate();
+        }
+    }
+
     // Chip / suggestion hover. Both lists are small and only exist while the
     // search is in use, so this runs before the rest rather than being folded
     // into a section-specific branch.
@@ -4189,6 +4204,38 @@ void PlayerWindow::handleClick(int x, int y) {
         return;
     }
 
+    if (!settingsOpen_ && overlay_ == ContentOverlay::EqSwitcher && ptInRect(rcGrid_, x, y)) {
+        if (ptInRect(rcEsClose_, x, y)) { closeOverlay(); return; }
+        if (!ptInRect(rcEsContent_, x, y)) return;      // a row scrolled under the header
+        for (size_t i = 0; i < esRows_.size() && i < esEntries_.size(); i++) {
+            if (!ptInRect(esRows_[i], x, y)) continue;
+            const EsEntry e = esEntries_[i];
+            closeOverlay();                             // a pick closes it, like any menu
+            switch (e.kind) {
+            case EsEntry::NoEq:  clearEqProfile(); break;
+            case EsEntry::Trial: break;                 // already applied; re-assigning
+                                                        // would restart its minute
+            case EsEntry::Saved:
+                if (e.idx < (int)eqHeadphones_.size()) {
+                    const EqHeadphone& h = eqHeadphones_[e.idx];
+                    selectEqProfile({ h.name, h.source, h.form });
+                }
+                break;
+            case EsEntry::All:
+                // The catalogue lives in the EQ Settings panel. It only draws
+                // under settingsOpen_, and closeActivePanel() hands the view
+                // back because of panelFromSidebar_ -- the old "Search more..."
+                // route.
+                onEqSettings();
+                settingsOpen_     = true;
+                panelFromSidebar_ = true;
+                break;
+            }
+            return;
+        }
+        return;
+    }
+
     // Artist photo -> fullscreen. Tested before the track list because the
     // photo sits inside the album view's own scroll area. The photo is the
     // ONLY clickable thing in the sidecar block, and it carries no hover
@@ -4229,14 +4276,18 @@ void PlayerWindow::handleClick(int x, int y) {
         // The sentinels MUST be tested before the `nav >= 0` branch below,
         // which casts whatever it gets into an AlbumTypeFilter.
         if (nav == kSidebarEqBoxHit) {
-            // Until the EqSwitcher scene lands, the box opens the EQ Settings
-            // panel -- the route "Search more..." used to take.
-            onEqSettings();            // clears panelFromSidebar_, as openers do
-            // The panel only draws under settingsOpen_, so borrow it — but the
-            // listener never asked to BE in Settings, and closeActivePanel()
-            // has to hand the view back rather than strand them there.
-            settingsOpen_     = true;
-            panelFromSidebar_ = true;
+            // The box is the handle: touching it opens the switcher, touching
+            // it again puts it away without changing anything.
+            if (overlay_ == ContentOverlay::EqSwitcher) {
+                closeOverlay();
+            } else {
+                settingsOpen_ = false;          // a scene only draws outside Settings
+                overlay_      = ContentOverlay::EqSwitcher;
+                esScrollY_    = 0;
+                esHoverRow_   = -1;
+                applyCursor();
+                invalidate();
+            }
             return;
         } else if (nav == kSidebarSearchHit) {
             openSearch();
@@ -4245,6 +4296,10 @@ void PlayerWindow::handleClick(int x, int y) {
             closeSearch();
             return;
         } else if (nav == kSidebarPlaylistsHit) {
+            // Moving anywhere on bar A leaves any open scene. Without this a
+            // filter tap under the signal chain changed the grid while the
+            // scene stayed drawn over it -- the change was real and invisible.
+            closeOverlay();
             // The seven content rows all obey one rule: a click takes you to
             // that section's ROOT — its grid of tiles — from wherever you are,
             // unless you are already standing there, in which case it does
@@ -4260,8 +4315,10 @@ void PlayerWindow::handleClick(int x, int y) {
                 navForwardValid_ = false;
             }
         } else if (nav == kSidebarSettingsHit) {
+            closeOverlay();
             if (!settingsOpen_) { settingsOpen_ = true; navForwardValid_ = false; invalidate(); }
         } else if (nav >= 0) {
+            closeOverlay();
             const bool atRoot = !settingsOpen_ && !trackPanelOpen_ &&
                                 navSection_ == NavSection::Albums &&
                                 albumTypeFilter_ == (AlbumTypeFilter)nav;
@@ -4499,6 +4556,9 @@ void PlayerWindow::onMouseWheel(int x, int y, int delta) {
             // page unreachable; when the content landed between the two the
             // page would not scroll at all. See scViewH_.
             scScrollY_ = scrollTo(scScrollY_, delta, scContentH_, scViewH_);
+            invalidate();
+        } else if (overlay_ == ContentOverlay::EqSwitcher) {
+            esScrollY_ = scrollTo(esScrollY_, delta, esContentH_, esViewH_);
             invalidate();
         }
         return;
@@ -6941,6 +7001,7 @@ BarAModel PlayerWindow::barAModel() const {
     m.searchOpen     = searchOpen_;
     m.searchFocused  = searchFocused_;
     m.settingsActive = settingsOpen_;
+    m.eqSwitcherOpen = (!settingsOpen_ && overlay_ == ContentOverlay::EqSwitcher);
     m.searchQuery    = searchQuery_;
 
     // The rail's reading order is NOT AlbumTypeFilter's order (that enum is
@@ -8570,6 +8631,8 @@ void PlayerWindow::closeOverlay() {
     // rebuild, so it goes rather than lingering per closed scene.
     releaseOverlayArtTexture();
     hoverScClose_ = false;
+    hoverEsClose_ = false;
+    esHoverRow_   = -1;
     applyCursor();                  // bring the pointer back where it sits
     invalidate();
 }
@@ -8588,6 +8651,87 @@ void PlayerWindow::releaseOverlayArtTexture() {
     // dropped (onArtDecoded matches overlayArtRequestPath_) rather than
     // applied to a scene that is no longer on screen.
     overlayArtRequestPath_.clear();
+}
+
+// ── The EqSwitcher scene ─────────────────────────────────────────────────────
+// No EQ first, then the profile on trial (picked, not yet credited its sixty
+// seconds -- see creditEqHeadphone), then the saved rows in their stored order
+// (pinned, most used, most recent), then the route to the whole catalogue.
+// The active row wears the accent tint: accent is state, never hover.
+void PlayerWindow::drawEqSwitcher(Canvas& canvas, const LayoutRect& area) {
+    const LayoutRect content = panels::drawHeader(canvas, area, "AutoEQ", metrics_.scale,
+                                                  metrics_.text.header, rcEsClose_);
+    rcEsContent_ = content;
+    const Rect c = toRect(content);
+    canvas.setClip(c.x, c.y, c.w, c.h);
+
+    const float pad   = metrics_.space(SP_LG);
+    const float inset = metrics_.space(SP_MD);
+    const int   rowH  = (int)metrics_.space(SP_XL);
+    const float sz    = metrics_.text.body;
+
+    esEntries_.clear();
+    esRows_.clear();
+    const bool trialLeads = eqCurrentTentative_ && !eqCurrent_.name.empty();
+    esEntries_.push_back({ EsEntry::NoEq, -1 });
+    if (trialLeads) esEntries_.push_back({ EsEntry::Trial, -1 });
+    for (int i = 0; i < (int)eqHeadphones_.size(); i++)
+        esEntries_.push_back({ EsEntry::Saved, i });
+    esEntries_.push_back({ EsEntry::All, -1 });
+
+    int y = (int)(c.y + pad) - esScrollY_;
+    for (size_t i = 0; i < esEntries_.size(); i++) {
+        const EsEntry& e = esEntries_[i];
+        const LayoutRect rc = { (int)(c.x + pad), y, (int)(c.x + c.w - pad), y + rowH };
+        esRows_.push_back(rc);
+        y += rowH;
+
+        std::string label;
+        bool active = false;
+        ColorRef clr = CLR_TEXT_PRIMARY;
+        FontStyle style = FontStyle::Roman;
+        switch (e.kind) {
+        case EsEntry::NoEq:
+            label  = "No EQ";
+            active = eqCurrent_.name.empty();
+            break;
+        case EsEntry::Trial:
+            label  = eqCurrent_.name;
+            active = true;
+            break;
+        case EsEntry::Saved: {
+            const EqHeadphone& h = eqHeadphones_[e.idx];
+            label = h.name;
+            // name + source, not the full triple: the form is the one field a
+            // regenerated catalogue can change (see findByKey's fallback).
+            active = !trialLeads && h.name == eqCurrent_.name && h.source == eqCurrent_.source;
+            break;
+        }
+        case EsEntry::All:
+            label = "All profiles…";
+            clr   = CLR_TEXT_DIM;
+            style = FontStyle::Italic;
+            break;
+        }
+
+        const Rect r = toRect(rc);
+        if (active)
+            canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA),
+                        UI_CORNER_RADIUS);
+        else if ((int)i == esHoverRow_)
+            canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+        canvas.textStyled(truncateToWidth(canvas, label, r.w - inset * 2, sz, style),
+                          r.x + inset, r.y + r.h * 0.5f - sz * 0.5f, sz,
+                          toColor(active ? CLR_ACCENT : clr), style);
+    }
+    canvas.clearClip();
+
+    esContentH_ = (int)(y + esScrollY_ - c.y + pad);
+    esViewH_    = content.bottom - content.top;
+    const int capped = (int)clampScroll((float)esScrollY_, (float)esContentH_, (float)esViewH_);
+    if (capped != esScrollY_) { esScrollY_ = capped; markDirty(); }
+    panels::drawScrollbar(canvas, content, esContentH_, esScrollY_, metrics_.scale);
+    panels::drawButton(canvas, rcEsClose_, "Close", hoverEsClose_, metrics_.text.body);
 }
 
 // ── The signal chain, in full ────────────────────────────────────────────────
@@ -9919,6 +10063,7 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
         activePanel_    = SettingsPanel::None;
         settingsOpen_   = false;
         trackPanelOpen_ = false;
+        overlay_        = ContentOverlay::None;
         navSection_     = NavSection::Albums;
         plKind_         = PlaylistKind::None;
         searchFocused_  = false;
@@ -10130,6 +10275,16 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
         currentAlbum_ = displayAlbum_ = found;
         currentTrack_ = displayTrack_ = trk;
         return true;
+    }
+
+    if (state == "45-eq-switcher") {
+        // Reached the way a listener reaches it: by touching the box. Search
+        // comes earlier in the state list and hides the box, so put it back.
+        closeSearch();
+        drawFrame();
+        if (rail_.eqBox.right <= rail_.eqBox.left) return false;   // bit-perfect
+        click(rail_.eqBox);
+        return overlay_ == ContentOverlay::EqSwitcher;
     }
 
     return false;
