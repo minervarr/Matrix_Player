@@ -4142,12 +4142,24 @@ void PlayerWindow::handleClick(int x, int y) {
     // Search box focus: clicking it starts typing; clicking anywhere else
     // releases focus (the query itself stays, still filtering).
     {
-        bool wasFocused = searchFocused_;
+        const bool wasFocused = searchFocused_;
         // Only while the field EXISTS. When search is closed that same rect is
-        // the letter that opens it, and focusing an absent field would arm the
-        // suggestion row with nowhere to draw it.
+        // the Find cell that opens it, and focusing an absent field would arm
+        // the suggestion row with nowhere to draw it.
         searchFocused_ = searchOpen_ && ptInRect(rcSearch_, x, y) != 0;
-        if (searchFocused_ != wasFocused) {
+
+        // An EMPTY search -- no text, no chips -- closes when the tap lands
+        // anywhere else. Opening search by mistake used to cost a trip to the
+        // close cell at the far end; now it costs nothing. A search holding
+        // anything stays open: a stray tap never discards what was typed.
+        if (searchOpen_ && !searchFocused_ && searchQuery_.empty() && searchChips_.empty()) {
+            closeSearch();
+            // closeSearch() re-laid out bar A (the letters are back) and the
+            // grid (the chip strip is gone) under the finger, so this tap is
+            // spent on closing -- except where nothing moved: the transport,
+            // and Settings, pinned at the near end in every state.
+            if (!ptInRect(rcBarB_, x, y) && !ptInRect(rcNavSettings_, x, y)) return;
+        } else if (searchFocused_ != wasFocused) {
             syncKeyboard();   // a phone has no keyboard until this box asks
             // Focus decides whether the suggestion row exists at all, so the
             // list is rebuilt on both edges: filled on focus (offering the
@@ -10285,6 +10297,16 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
         if (rail_.eqBox.right <= rail_.eqBox.left) return false;   // bit-perfect
         click(rail_.eqBox);
         return overlay_ == ContentOverlay::EqSwitcher;
+    }
+
+    if (state == "46-search-empty-closes") {
+        // A self-check through the REAL input path: open search, type nothing,
+        // tap the grid. Reported FAILED while an empty search survives the tap.
+        closeSearch();
+        click(rcSearch_);                               // opens it
+        if (!searchOpen_) return false;
+        click(rcGrid_);                                 // a tap anywhere else
+        return !searchOpen_;
     }
 
     return false;

@@ -176,6 +176,7 @@ const char* kStates[] = {
     "42-search-chips",
     "44-transport-ordinal",
     "45-eq-switcher",
+    "46-search-empty-closes",
 };
 
 } // namespace
