@@ -486,7 +486,7 @@ exactly how it went unnoticed until an MP3 misnamed `.flac` surfaced it on a
 phone. The generated `config.h` for both linux and android IS committed; only
 the sources are fetched.
 
-**Tests**: there is no ctest/gtest framework, but there are twelve assert-based
+**Tests**: there is no ctest/gtest framework, but there are thirteen assert-based
 pure-logic test executables, built **Debug-only** (see the bottom of
 `gui/CMakeLists.txt` and of `core/CMakeLists.txt`) and run directly. Convention
 matches `framework/vk_canvas/core/tests/*.cc`: plain `assert()`, `#undef NDEBUG`
@@ -507,7 +507,19 @@ scripts/linux/build.sh --debug
 ./build/linux_debug/core/scan_source_test  # the media index and the walk must agree
 ./build/linux_debug/gui/scroll_test        # scroll direction + bounds, one rule for eight surfaces
 ./build/linux_debug/gui/grid_layout_test   # the grid's shape (whole rows) and its row-snapped scroll
+./build/linux_debug/gui/terminus_glyph_test # the baked Terminus glyph, and its pixel runs
 ```
+
+**Terminus is a BITMAP face, baked into a committed header.** Bar A's Settings
+cell is drawn from it (see the frame's rule 3). It cannot go through the text
+engine — `RasterFont` bakes from outlines and `FontStyle`'s four slots are all
+taken — so `tools/terminus/bake_glyphs.py` turns the glyphs the UI needs into
+`gui/src/terminus_glyphs.gen.h`, one bit per pixel, and `terminus_glyph.cc`
+draws them as run-length rectangles at an INTEGER scale (a fractional one
+resamples a 1-bit face into grey, which is the whole thing it must not be).
+The header is committed, so a normal C++ build never needs Python; add a
+character to `GLYPHS`, rerun, and commit both. Terminus is SIL OFL 1.1 —
+`tools/terminus/LICENSE`.
 
 `scan_source_test` is the one that would otherwise need a phone. The scan takes
 its file list either from the platform's media catalogue (Android's MediaStore)
@@ -748,25 +760,28 @@ Five things here are load-bearing:
    that un-sticks by itself. Nothing has ever *written* `"global"`
    (`saveEqAssignment` has one call site and it always passes
    `getActiveDeviceKey()`), so any such row is legacy.
-5. **The switcher is a BOX that unfurls, and it no longer has a row budget.**
-   `drawEqBox()` shows two things — a discreet `×` meaning *no profile* and the
-   active profile's name — and touching the name unfurls the saved list WHOLE,
-   from the box to the far end of bar A. `kEqHpMaxRows`, `listCapacity` and
-   `drawHeadphoneBlock()`'s "drop rows from the LIST rather than hide the block"
-   are all gone: they existed only because the old sidebar had three rows'
-   worth of space below Settings. Order is still pinned → most-used →
-   most-recent (`loadEqHeadphones`).
-6. **The unfurled list HIDES the filter letters; it does not float over them.**
-   Not a style choice — the renderer emits every rect before every glyph, so a
-   panel drawn last still comes out UNDER text drawn earlier, and the letters
-   showed straight through the first version. It is handled in the GEOMETRY
-   (`RailInput::eqListOpen` → empty letter rects) so they also stop
-   hit-testing underneath it. Same trap the chip strip documents on `rcChips_`.
+5. **The switcher is a full-page SCENE, and bar A only carries its handle.**
+   The box shows one thing — the active profile's NAME (`No AutoEQ` when there
+   is none) — and touching it opens `ContentOverlay::EqSwitcher`
+   (`drawEqSwitcher`), which replaces the content area with full-width rows:
+   `No EQ`, the profile on trial, the saved pairs in their stored order, then
+   `All profiles…` into the EQ panel. A pick applies and closes, touching the
+   box again closes it, and so does Escape or any bar A navigation. It replaced
+   a list that unfurled ALONG bar A, where every profile got a segment the size
+   of a filter letter and a name drew as `S...` — sideways, in the horizontal
+   layout. The discreet `×` that used to mean *no profile* is gone with it:
+   `No EQ` is a row in the scene now, where it can say so in words. Order is
+   still pinned → most-used → most-recent (`loadEqHeadphones`).
+6. **Bar A navigation closes whatever scene is open.** The `closeOverlay()` at
+   the top of the Playlists, Settings and filter branches is not tidiness: a
+   filter tap under an open scene changed the grid while the scene stayed drawn
+   over it, so the change was real and invisible. It is a no-op when nothing is
+   open.
 
 The prune keeps 12 unpinned rows; pinned rows are exempt and are not counted
 against that budget. Pinning and removing happen only in the EQ panel's
-`My Drivers` tab — the sidebar block is a switcher and nothing else, its
-`No AutoEQ` row being a switch position rather than an edit.
+`My Drivers` tab — the EqSwitcher scene is a switcher and nothing else, its
+`No EQ` row being a switch position rather than an edit.
 
 ### Schema versioning
 
@@ -1233,10 +1248,22 @@ Five things here are load-bearing:
    survives at 130 with text, which is why bar A is a rail of *initials*
    (A E S C L R P) rather than a narrower list of words. `MATRIX PLAYER` has no
    home in it and is gone.
-3. **Three cells read `S`** — Singles, Search, Settings — and they are separated
-   by `theme.hh`'s existing text ladder: PRIMARY 242, SECONDARY 170, DIM 128.
-   That ladder is FULL: 128 is already the WCAG floor, so a fourth `S` has
-   nowhere to go. Position is what teaches them; colour only confirms.
+3. **Cells are told apart by TYPEFACE AND WEIGHT; the colour ladder only
+   confirms.** Three cells used to read `S` — Singles, Search, Settings —
+   separated by `theme.hh`'s ladder alone (PRIMARY 242, SECONDARY 170, DIM
+   128), and that ladder is FULL: 128 is already the WCAG floor, so a fourth
+   `S` had nowhere to go. The faces carry it now: **Settings** is a Terminus
+   pixel `S` (machine chrome, DIM), **Find** is a regular Computer Modern `F`
+   (SECONDARY), and the seven **filters** are bold Computer Modern (PRIMARY) —
+   the heaviest weight for the cells used most, which is also what survives the
+   shrunken cells of a phone held upright. The one remaining pair of equal
+   letters, Settings and Singles, is a pixel `S` beside a bold serif `S`, which
+   do not resemble each other at any size.
+   Find also MOVED, and that is the point of the pass: it sits beside Settings
+   at the near end, two cells and a gap from Albums. It used to be the cell
+   immediately beside Albums, the same size as a filter letter, so a
+   slightly-off tap on the most-used cell opened search — and opening search
+   collapses every letter.
 4. **Text is turned only when its LENGTH runs along the bar** — today that is
    the AutoEQ profile name in bar A, and nothing else. Bar A's initials never
    rotated (a single capital reads the same either way), and since the bar B
@@ -1275,10 +1302,11 @@ Five things here are load-bearing:
    visible and not clickable.
 6. **Overlays inside a bar must HIDE what they cover, not float over it.** The
    renderer emits every rect before every glyph, so a panel drawn last still
-   comes out under text drawn earlier. Both the open search field and the
-   unfurled AutoEQ list are handled in the geometry (`RailInput::searchOpen` /
-   `eqListOpen` return empty rects for what they cover), which also stops the
-   covered cells hit-testing underneath. Same trap `rcChips_` documents.
+   comes out under text drawn earlier. The open search field is handled in the
+   geometry (`RailInput::searchOpen` returns empty rects for what it covers),
+   which also stops the covered cells hit-testing underneath. Same trap
+   `rcChips_` documents. The AutoEQ list was the second case; it is a full-page
+   scene now (EqSwitcher, below) and the ordering problem cannot arise.
 
 The **simple variant** of each orientation (thumbnail + play button) is
 designed but deliberately not built — see
@@ -1294,13 +1322,19 @@ load-bearing rather than stylistic:
 | **Panel** (`activePanel_`) | **Yes — everything** | dispatchers at the top of every handler | Audio Settings |
 | **Section** (`navSection_`) | No | late `ptInRect` branches | Playlists |
 | **View** (`trackPanelOpen_`) | No | late branches; Escape / `goBack()` | the album view |
-| **Scene** (`overlay_`) | No | late branches; Escape / `goBack()` | fullscreen art, signal chain |
+| **Scene** (`overlay_`) | No | late branches; Escape / `goBack()` | fullscreen art, signal chain, the EQ switcher |
 
 The rule `settings_panels.hh` records is *panel for configuring, everything
-else for music*. Both scenes are for looking at music — and the signal-chain
-page exists to be read **while something is playing**, which a panel would make
-impossible by swallowing the space bar. One enum serves both, because they
-differ only in what they draw.
+else for music*. All three scenes are for music — and the signal-chain page
+exists to be read **while something is playing**, which a panel would make
+impossible by swallowing the space bar. The EQ switcher is there for the same
+reason: choosing which pair of drivers is being corrected is done WITH the
+music on, comparing. One enum serves all three, because they differ only in
+what they draw.
+
+**Bar A navigation closes any open scene** (`closeOverlay()` at the top of the
+Playlists, Settings and filter branches of `handleClick`). Without it a filter
+tap changed the grid *underneath* a scene that stayed drawn over it.
 
 Four things here will bite whoever adds the third scene:
 

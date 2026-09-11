@@ -393,57 +393,88 @@ same hover/active visual language; opening it replaces the whole content area
 (§8.6) and closing it returns to whichever filter was active, never
 resetting to Albums.
 
-**DRIVER'S AUTOEQ block** (`drawHeadphoneBlock`, `player_view.cc`) — anchored to
-the BOTTOM of the sidebar under a `CLR_SEPARATOR` hairline, in the space the old
-now-playing mini card used to occupy. A `DRIVER'S AUTOEQ` header (Bold,
-`secondary` size, `CLR_TEXT_DIM`), then `No AutoEQ`, then the saved profiles,
-then a `Search more…` row that opens the EQ panel. Rows reuse the nav's exact
-selection family —
-accent-tint pill + `stroke(3)` left bar when active, `CLR_HOVER` when merely
-hovered (§1.4) — at `secondary` size, one step down from the nav proper, because
-this is equipment configuration and not navigation. Every profile label goes
-through `truncateToWidth`: names run long and the sidebar is only `space(277)`.
-The **header does not**, deliberately — a section header that quietly loses its
-tail hides a fit failure rather than showing one.
+**THE AUTOEQ BOX** (`drawEqBox` in `bar_a.cc`) — a framed region in bar A,
+immediately after Find, carrying ONE thing: the active profile's name, or
+`No AutoEQ` in `CLR_TEXT_DIM` when there is none. It is the one text in bar A
+whose LENGTH runs along the bar, so it is the one text that rotates in the
+horizontal layout. On trial (selected, not yet credited its 60 seconds) it
+drops to `CLR_TEXT_SECONDARY`; while its scene is open it wears the accent
+tint, the same selected state every other cell uses. It is not drawn at all in
+bit-perfect mode — there is no EQ to pick a profile for, and a disabled control
+still asks to be read before it can be dismissed.
+
+Touching it opens the **EQ switcher scene** (§8.11). The box used to carry a
+discreet `×` for *no profile* beside the name, and the saved list used to
+unfurl along the bar itself; both are gone — a profile name in a cell the size
+of a filter letter drew as `S...`, sideways.
 
 **The label is not "HEADPHONES".** What an AutoEQ profile corrects is the
 *driver*, and the same list serves IEMs and speakers; but `DRIVERS` alone would
 read as an output driver in an app whose primary path is a USB DAC, so the
 header has to carry both halves.
 
-Rows are `space(36)`, not the `space(48)` this block was authored with. The
-sidebar holds three rows below Settings and no more (the nav is eight
-`space(65.36)` rows), so at the original height the `No AutoEQ` row would have
-been paid for by a saved pair.
-
-Three states are specific to this block:
-
-- **`No AutoEQ`** — the OFF position of the switch, and an ordinary row wearing
-  the ordinary active state when nothing is assigned, so "no EQ" is something
-  the block SHOWS rather than the absence of any highlight. It is the FIRST row,
-  the radio-list convention where "none of these" heads the set rather than
-  trailing it, and it is never the row that gets clamped away when space runs
-  short — the saved list below it is.
-- **On trial** — `CLR_TEXT_DIM` + Italic, first among the profiles (directly
-  under `No AutoEQ`). The profile is already audible; what is pending is whether
-  it keeps a row (it needs 60 s of real listening first). Italic-and-dim rather
-  than a badge because the row is temporary, and a badge would imply a durable
-  property.
-- **Hidden in bitperfect mode.** Not greyed — *not drawn at all*, and it gives
-  its space back. There is no EQ to pick a profile for, and a disabled control
-  still asks to be read before it can be dismissed.
-
-If the window is short enough that the block would collide with the Settings
-row, what yields is the SAVED LIST, not the block: the header, `No AutoEQ` and
-`Search more…` are the minimum, because a pair that doesn't fit is still one
-click away under the latter while the off switch has nowhere else to live. Only when
-even one list row won't fit does the block disappear entirely (browsing the
-library is the app's primary job).
-
 Saved rows are ordered **pinned first, then most-used**, with recency only as
-the tie-break (`Db::loadEqHeadphones`) — with three rows on screen the order
-decides what is reachable in one click, and "what I touched last" is not the
-same question as "what I actually use".
+the tie-break (`Db::loadEqHeadphones`) — the order decides what is reachable
+first, and "what I touched last" is not the same question as "what I actually
+use".
+
+### 8.1a Bar A's cells: one typeface each
+
+Bar A is a rail of single letters at `space(130)`, so the cells cannot be told
+apart by words. They are told apart by FACE and WEIGHT first; `theme.hh`'s grey
+ladder only confirms what the face already says.
+
+| Cell | Glyph | Face | Weight | Colour |
+|---|---|---|---|---|
+| Settings | `S` | **Terminus** (1-bit bitmap) | Bold strike | `CLR_TEXT_DIM` 128 |
+| Find | `F` | Computer Modern | Regular | `CLR_TEXT_SECONDARY` 170 |
+| Filters | `A E S C L R P` | Computer Modern | **Bold** | `CLR_TEXT_PRIMARY` 242 |
+
+The filters are the most-used cells and get the heaviest weight, which is also
+what survives the shrunken cells of a phone held upright. Settings is machine
+chrome rather than music, so it gets the terminal face — and the one remaining
+pair of equal letters, Settings and Singles, is a pixel `S` beside a bold serif
+`S`, which do not resemble each other at any size. Terminus is drawn at an
+INTEGER scale only (`terminus_glyph.cc`); a fractional scale resamples a 1-bit
+face into grey.
+
+**Order along the bar:** `[Settings][Find][AutoEQ box] · · gap · · [letters]`.
+Rare cells cluster at the near end, frequent cells sit alone at the far end,
+and the gap stands between them. Find used to be the cell immediately beside
+Albums, at the same size, so a slightly-off tap opened search and collapsed
+every letter. Settings never moves in any state — opening search must not cost
+what was typed.
+
+**An empty search closes itself.** With no text and no chips, a tap anywhere
+else closes the field rather than requiring a trip to the `×` at the far end;
+that tap is then spent on closing, except on the transport and on Settings,
+which are exactly the two things that did not move. A search holding anything
+stays open — a stray tap must never discard what was typed.
+
+### 8.11 EQ switcher scene (`drawEqSwitcher`)
+
+A full-page scene over the content area, opened by the AutoEQ box (§8.1) and
+closed by a pick, the box again, `Close`, Escape, or any bar A navigation. Page
+header `AutoEQ` + `Close` (`panels::drawHeader`), then full-width rows at
+`space(SP_XL)`:
+
+1. **`No EQ`** — the OFF position, first, the radio-list convention where "none
+   of these" heads the set. Active (accent tint + accent label) when nothing is
+   assigned, so "no EQ" is something the page SHOWS rather than the absence of
+   any highlight.
+2. **The profile on trial**, when one is pending its 60 seconds of real
+   listening. It leads the saved rows and reads as active, because it is what
+   is audible right now.
+3. **The saved pairs**, pinned → most-used → most-recent, each as its FULL
+   name — the point of moving the list off the bar.
+4. **`All profiles…`** in `CLR_TEXT_DIM` Italic — the route to the whole
+   catalogue in the EQ panel. Italic and dim because it is a door, not a
+   profile.
+
+Accent is state and never hover: the active row wears the accent tint, a
+hovered row wears `CLR_HOVER`. The list scrolls with `panels::drawScrollbar`
+and the wheel, and the transport stays live underneath — choosing a profile is
+something done WITH the music on.
 
 ### 8.2 Album grid
 **One authored pad, on all four edges.** `gridPadX_` is the only authored pad;
