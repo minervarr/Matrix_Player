@@ -6040,10 +6040,16 @@ const EqHeadphone* PlayerWindow::eqSelectedHeadphone() const {
 
 void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     ensureEqProfiles();
-    LayoutRect content = panels::drawHeader(canvas, area, "EQ / AutoEQ Profiles", metrics_.scale, metrics_.text.header, eqCloseRc_);
+    LayoutRect content = panels::drawHeader(canvas, area, "EQ / AutoEQ Profiles", metrics_.scale,
+                                            metrics_.text.header, eqCloseRc_, true);
     Rect c = toRect(content);
     float pad = metrics_.space(SP_LG);
     float y = c.y + pad;
+    auto chromeText = [&](const std::string& s, float x, float yy, float sz,
+                          ColorRef col, FontStyle style) {
+        if (!drawTerminusText(canvas, s, x, yy, sz, toColor(col)))
+            canvas.textStyled(s, x, yy, sz, toColor(col), style);
+    };
 
     // Mono, because "32BB:0004" is an identifier, not a name. The family
     // already carries a face that says so, and it is the one with the most
@@ -6062,6 +6068,10 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
         eqAssignLineDirty_ = false;
     }
 
+    // Both lines are LITERAL PREFIX + RUNTIME DATA (a device key, a profile
+    // name) — the two-part rule (this plan's preamble) says leave these
+    // unconditionally serif, never attempt Terminus even though the data is
+    // usually ASCII: a profile's real name must not be re-cased.
     canvas.textStyled(eqDeviceLine_, c.x + pad, y, metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Math);
     y += metrics_.text.secondary * 1.6f;
 
@@ -6069,8 +6079,9 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     y += metrics_.text.secondary * 1.8f;
 
     if (eqBitperfectActive_) {
-        canvas.textStyled("Bitperfect mode active \xE2\x80\x94 EQ applies once Reference EQ mode is enabled.",
-                          c.x + pad, y, metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        // A fixed literal (falls back — em dash).
+        chromeText("Bitperfect mode active \xE2\x80\x94 EQ applies once Reference EQ mode is enabled.",
+                  c.x + pad, y, metrics_.text.secondary, CLR_TEXT_DIM, FontStyle::Italic);
         y += metrics_.text.secondary * 1.6f;
     }
 
@@ -6102,12 +6113,20 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
             if (active)
                 canvas.rect(r.x, r.y + r.h - metrics_.stroke(2.0f), r.w,
                             metrics_.stroke(2.0f), toColor(CLR_ACCENT));
-            float tw = canvas.textWidthStyled(label, metrics_.text.body, FontStyle::Roman);
-            canvas.textStyled(label, r.x + std::max(0.0f, (r.w - tw) * 0.5f),
-                              r.y + r.h * 0.5f - metrics_.text.body * 0.5f,
-                              metrics_.text.body,
-                              toColor(active ? CLR_ACCENT : CLR_TEXT_SECONDARY),
-                              FontStyle::Roman);
+            const ColorRef col = active ? CLR_ACCENT : CLR_TEXT_SECONDARY;
+            // Centering needs the width BEFORE drawing, so terminusTextWidth
+            // is called first — the pattern the spec's API doc calls out.
+            const float tw = terminusTextWidth(label, metrics_.text.body);
+            if (tw >= 0.0f) {
+                drawTerminusText(canvas, label, r.x + std::max(0.0f, (r.w - tw) * 0.5f),
+                                 r.y + r.h * 0.5f - metrics_.text.body * 0.5f,
+                                 metrics_.text.body, toColor(col));
+            } else {
+                const float stw = canvas.textWidthStyled(label, metrics_.text.body, FontStyle::Roman);
+                canvas.textStyled(label, r.x + std::max(0.0f, (r.w - stw) * 0.5f),
+                                  r.y + r.h * 0.5f - metrics_.text.body * 0.5f,
+                                  metrics_.text.body, toColor(col), FontStyle::Roman);
+            }
         };
         tab(eqTabMine_, "My Drivers", eqShowMine_,  eqHoverTabMine_);
         tab(eqTabAll_,  "All Profiles",  !eqShowMine_, eqHoverTabAll_);
@@ -6164,14 +6183,16 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
         // The saved view's empty state explains the rule rather than just
         // reporting nothing: "no profiles match" would read as a bug to
         // someone who has assigned a profile and not yet listened to it.
+        // All THREE branches are fixed literals (no data embedded) — safe to
+        // wrap uniformly regardless of which one is picked at runtime.
         const char* msg = eqShowMine_
             ? (eqSearch_.empty()
                  ? "No drivers saved yet \xE2\x80\x94 pick a profile under All Profiles "
                    "and listen for a minute."
                  : "No saved drivers match.")
             : "No profiles match.";
-        canvas.textStyled(msg, a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
-                          metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        chromeText(msg, a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
+                  metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
     }
 
     int by = (int)(content.bottom - (btnH + pad));
@@ -6189,17 +6210,17 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
         eqBtnPin_    = eqBtnRects[1];
         eqBtnRemove_ = eqBtnRects[2];
         eqBtnClear_  = {};   // not offered here; Clear belongs to the device view
-        panels::drawButton(canvas, eqBtnAssign_, "Select", eqHoverAssign_, metrics_.text.body, true);
+        panels::drawButton(canvas, eqBtnAssign_, "Select", eqHoverAssign_, metrics_.text.body, true, true);
         panels::drawButton(canvas, eqBtnPin_,
                            (sel && sel->pinned) ? "Unpin" : "Pin",
-                           eqHoverPin_, metrics_.text.body);
-        panels::drawButton(canvas, eqBtnRemove_, "Remove", eqHoverRemove_, metrics_.text.body);
+                           eqHoverPin_, metrics_.text.body, false, true);
+        panels::drawButton(canvas, eqBtnRemove_, "Remove", eqHoverRemove_, metrics_.text.body, false, true);
     } else {
         eqBtnClear_  = eqBtnRects[1];
         eqBtnPin_    = {};
         eqBtnRemove_ = {};
-        panels::drawButton(canvas, eqBtnAssign_, "Assign to Device", eqHoverAssign_, metrics_.text.body, true);
-        panels::drawButton(canvas, eqBtnClear_, "Clear", eqHoverClear_, metrics_.text.body);
+        panels::drawButton(canvas, eqBtnAssign_, "Assign to Device", eqHoverAssign_, metrics_.text.body, true, true);
+        panels::drawButton(canvas, eqBtnClear_, "Clear", eqHoverClear_, metrics_.text.body, false, true);
     }
 }
 
