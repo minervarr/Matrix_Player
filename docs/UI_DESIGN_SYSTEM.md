@@ -715,20 +715,25 @@ elevated grey), both at `UI_CORNER_RADIUS`. Row lists via
 `drawRadioRow` stay for Playlists and other music-facing lists.
 
 **Settings is a Terminus surface, ALL CAPS** — titles, buttons, radio labels,
-descriptions, file-manager rows, EQ names, search, toggles. Same 1-bit
-bitmap face bar A's Settings cell uses (§8.1a), as running text:
+descriptions, file-manager rows, EQ names, search, toggles. Sizes come
+from the same type roles as the rest of the app (`header` / `body` /
+`secondary` in `ui_metrics.hh`). Advance is optical (ink box + 1 px),
+not the monospace cell, so `AAUDIO` does not open a hole around I.
 `terminusFold` / `terminusWrap` / `terminusEllipsize` /
 `drawTerminusText` (`gui/src/terminus_glyph.hh`). Unrepresentable
 codepoints fold (em dash → `-`, middle dot → `/`) or become `?`; there
-is no Computer Modern inside the five panels. List/radio/toggle/search
-are `panels::drawTerminusScrollList` and siblings in
-`settings_panels.cc` — not `widgets::drawScrollList` / `drawRadioRow` /
-`drawToggle`, which live in the vk_canvas submodule and always call
-`Canvas::text`. `panels::drawHeader`/`panels::drawButton` take
+is no Computer Modern inside the five panels. List inset matches the
+captions (`SP_LG`), not `canvas.pad()`. Terminus is one SDF-shape quad
+per pixel-run; the shape VBO in `vk_canvas` grows rather than truncating
+at 2048 quads (that ceiling is what sliced the last letters of a line
+and hid every EQ row past the first two, and what turned the transport
+bar black when a longer Audio page ate the budget). OverlayRasterizer's
+32768 / 256-per-tile curve cap is the compute-path ceiling, unused while
+`useShapes()` is on. `panels::drawHeader`/`panels::drawButton` take
 `terminusChrome = false` by default so EqSwitcher and the signal chain
-stay serif. Audio Output docks Apply below a clipped, scrollable body
-so overlapping copy cannot hide it (Terminus is rects; glyphs draw last).
-EQ Every-source rows use ASCII `" / "` between name, source and rig.
+stay serif. Audio Output and EQ dock action buttons below a clipped,
+scrollable body; the EQ catalogue scrolls inside the list. EQ
+Every-source rows use ASCII `" / "` between name, source and rig.
 
 **One rendering trap this exposed:** Terminus draws as raw overlapping
 rectangles (run-length fills), not through the MSDF text layer plain

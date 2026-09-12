@@ -1413,22 +1413,21 @@ draw/click/hover logic lives in `player_view.cc` (`drawManageFolders`,
 **Settings is a Terminus surface.** Everything inside the five Settings
 panels — titles, buttons, radio labels, descriptions, file-manager rows,
 EQ profile names, search, toggles — draws in Terminus (1-bit bitmap,
-integer scale, ALL CAPS), never Computer Modern. Unrepresentable
-codepoints fold (em dash / en dash → `-`, middle dot / bullet → `/`) or
-become `?`; `terminusFold` is the one table. Paragraphs wrap at a cell
-(`terminusWrap`); single-line rows ellipsize at a cell
-(`terminusEllipsize`). List/radio/toggle/search for Settings are
-app-side (`panels::drawTerminusScrollList` and siblings in
-`settings_panels.cc`) because `widgets::drawScrollList` /
-`drawRadioRow` / `drawToggle` live in the vk_canvas submodule and always
-call `Canvas::text`. Audio Output docks Apply below a clipped,
-scrollable body so codec copy cannot paint over it (Terminus is rects;
-the renderer emits glyphs last). `panels::drawHeader` /
-`panels::drawButton` still take `terminusChrome = false` by default so
-EqSwitcher and the signal chain stay serif. Bar A's Find field stays
-`drawSearchField`. See `docs/superpowers/specs/
-2026-09-11-settings-terminus-chrome-design.md` (superseded in part:
-chrome-only / serif fallback is void).
+integer scale, ALL CAPS), never Computer Modern. Sizes are the same
+type roles as the rest of the app (`metrics_.text.header` / `.body` /
+`.secondary`). Advance is optical (ink box + 1 px), not the monospace
+cell. Unrepresentable codepoints fold (em dash / en dash → `-`, middle
+dot / bullet → `/`) or become `?`. List inset is the panel pad, not
+`canvas.pad()`. Terminus is one SDF-shape quad per pixel-run, and the
+shape VBO in `vk_canvas` **grows** (`ensureShapeVboCapacity`) — a fixed
+2048-quad ceiling used to drop later letters, list rows, and the
+transport fill drawn after the panel. OverlayRasterizer's curve cap
+(32768 / 256 per tile) is the other ceiling, for the compute path this
+app does not use while `useShapes()` is on. Audio Output and EQ dock
+action buttons below a scrollable body; the EQ catalogue scrolls inside
+its list, not by stretching the list to every row. `terminusChrome =
+false` by default so EqSwitcher and the signal chain stay serif. Bar A
+is Computer Modern Regular, not Terminus.
 
 ### Visual language
 

@@ -5105,8 +5105,14 @@ void PlayerWindow::onPanelWheel(int x, int y, int delta) {
         return;
     }
     case SettingsPanel::EqSettings: {
-        int bodyH = eqBodyArea_.bottom - eqBodyArea_.top;
-        eqBodyScrollY_ = scrollTo(eqBodyScrollY_, delta, eqBodyContentH_, bodyH);
+        if (ptInRect(eqListArea_, x, y)) {
+            int listH = eqListArea_.bottom - eqListArea_.top;
+            int contentH = (int)((float)eqFilteredIndices_.size() * panelRowH());
+            eqScrollY_ = scrollTo(eqScrollY_, delta, contentH, listH);
+        } else if (ptInRect(eqBodyArea_, x, y)) {
+            int bodyH = eqBodyArea_.bottom - eqBodyArea_.top;
+            eqBodyScrollY_ = scrollTo(eqBodyScrollY_, delta, eqBodyContentH_, bodyH);
+        }
         invalidate();
         return;
     }
@@ -6195,13 +6201,19 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
         labels.push_back(label);
     }
     float eqRowH = panelRowH();
-    const float listH = std::max(6.0f * eqRowH, std::max(eqRowH, (float)labels.size() * eqRowH));
+    // Viewport is whatever is left above the docked buttons, same rule as
+    // Audio's device list: a catalogue of thousands must scroll INSIDE the
+    // list, not stretch the list to the length of the catalogue and hope
+    // the parent clip hides the rest.
+    const float avail = std::max(eqRowH, (float)eqBodyArea_.bottom - y);
+    const float listH = avail;
     LayoutRect listArea = { content.left, (int)y, content.right, (int)(y + listH) };
     eqListArea_ = listArea;
     eqListRows_ = drawSettingsList(canvas, listArea, labels,
-                                   eqSelectedRow_, 0.0f, eqRowH,
+                                   eqSelectedRow_, (float)eqScrollY_, eqRowH,
                                    eqHoverRow_, metrics_.text.body, pad);
-    panels::drawScrollbar(canvas, eqBodyArea_, eqBodyContentH_, eqBodyScrollY_, metrics_.scale);
+    panels::drawScrollbar(canvas, listArea, (int)((float)labels.size() * eqRowH),
+                          eqScrollY_, metrics_.scale);
     if (labels.empty()) {
         Rect a = toRect(listArea);
         // The saved view's empty state explains the rule rather than just

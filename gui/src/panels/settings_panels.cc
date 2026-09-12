@@ -206,11 +206,22 @@ std::vector<TerminusListRow> drawTerminusScrollList(
     canvas.rect(a.x, a.y, a.w, a.h, toColor(CLR_BG_MAIN));
     const auto saved = canvas.saveClip();
     canvas.setClip(a.x, a.y, a.w, a.h);
+    const auto clip = canvas.saveClip();
     const float in = std::max(0.0f, inset);
     std::vector<TerminusListRow> visible;
     for (int i = 0; i < (int)items.size(); i++) {
         const float ry = a.y + (float)i * rowH - scrollPx;
         if (ry + rowH < a.y || ry > a.y + a.h) continue;
+        // The list rect can be taller than the parent clip (a body that
+        // scrolls around a huge catalogue). Skip rows the intersected clip
+        // has already rejected so we do not emit thousands of clipped
+        // Terminus runs for items that cannot appear. Skip also when the
+        // glyph band would be sliced — a 1-bit face cut through the middle
+        // reads as apostrophes, which is how "1C''" happened.
+        if (clip.active && (ry + rowH < clip.y0 || ry > clip.y1)) continue;
+        const float textY = ry + (rowH - textSize) * 0.5f;
+        if (clip.active && (textY < clip.y0 || textY + textSize > clip.y1 + 0.01f))
+            continue;
         Rect r{ a.x, ry, a.w, rowH };
         const float textX = r.x + in;
         const std::string shown = terminusEllipsize(items[(size_t)i], textSize,
