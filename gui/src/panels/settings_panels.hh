@@ -6,6 +6,7 @@
 #include "color.hh"
 
 class Canvas;
+struct Color;
 enum class FontStyle : unsigned char;
 
 // vk_canvas-native replacements for the four native Win32 dialogs (Manage
@@ -51,6 +52,36 @@ namespace panels {
 void drawButton(Canvas& canvas, const LayoutRect& rc, const std::string& label,
                  bool hover, float textSize, bool primary = false,
                  bool terminusChrome = false);
+
+// Settings-only Terminus replacements for widgets::drawRadioRow / drawScrollList
+// / drawToggle / drawSearchField. Those live in the vk_canvas submodule and
+// always call Canvas::text (Computer Modern). Settings must not.
+LayoutRect drawTerminusRadioRow(Canvas& canvas, const LayoutRect& row,
+                                bool selected, bool hovered, const std::string& label,
+                                float textSize, const Color& dotOn, const Color& dotOff,
+                                const Color& textOn, const Color& textOff,
+                                const Color& hoverBg, const Color& selBg, const Color& selBar);
+
+struct TerminusListRow { LayoutRect rect; int index; };
+std::vector<TerminusListRow> drawTerminusScrollList(
+    Canvas& canvas, const LayoutRect& area, const std::vector<std::string>& items,
+    int selected, float scrollPx, float rowH, int hoverIndex, float textSize,
+    const Color& rowText, const Color& hoverBg, const Color& pillColor,
+    const Color& pillText, const Color& selectedBar);
+
+void drawTerminusToggle(Canvas& canvas, const LayoutRect& row, bool on,
+                        const std::string& label, float textSize,
+                        const Color& onColor, const Color& offColor, const Color& knobColor,
+                        const Color& labelColor);
+
+void drawTerminusSearchField(Canvas& canvas, const LayoutRect& rc,
+                             const std::string& text, bool focused,
+                             const char* placeholder, float textSize);
+
+// Paragraph. Returns y after the last line (unchanged when `text` is empty).
+float drawTerminusLabel(Canvas& canvas, const std::string& text,
+                        float x, float y, float targetPx, float maxW, float lineH,
+                        const Color& col);
 
 // Panel chrome: title bar + "Close" affordance. Returns the content area
 // below the header (what the panel's own drawing should treat as its rect).
