@@ -716,6 +716,42 @@ elevated grey), both at `UI_CORNER_RADIUS`. Row lists via
 widgets) styled by `matrixListStyle()` / `matrixRadioStyle()` — the shared
 selection family. Search fields via §8.6's shared field.
 
+**Settings' chrome draws in Terminus, ALL CAPS** — headers, buttons, section
+captions, toggle words, short status lines — reusing the SAME bitmap face
+bar A's Settings/Find cells use (§8.1a), extended from "one centred glyph"
+to running text: `terminus::resolveText`/`terminusTextWidth`/
+`drawTerminusText` (`gui/src/terminus_glyph.hh`), over the FULL printable
+ASCII set (baked once, not one letter at a time — a future Settings copy
+change never needs a re-bake). `panels::drawHeader`/`panels::drawButton` take
+`terminusChrome = false` by default (so `EqSwitcher` and the signal chain,
+which reuse the same widgets, are untouched); only the five Settings panels
+pass `true`.
+
+**The classification rule is not "is this ASCII."** A call whose whole string
+is a compile-time literal is wrapped — Terminus if every character resolves,
+serif automatically otherwise (several literals use an em dash and are
+EXPECTED to fall back — that is the mechanism protecting non-Latin text, not
+a special case). A call whose string is built by concatenating a literal with
+RUNTIME data (a device name, a database key, a profile name, an assembled
+notice) is written as a plain, permanently-serif call instead, regardless of
+whether that data happens to be ASCII today — `"Now: " + codecSummary` must
+read exactly as the Bluetooth stack reports it, never reformatted, and a
+device's real name must never be shouted. Two things stay serif for a
+different reason entirely: anything drawn by `widgets::drawScrollList`,
+`drawRadioRow` or `drawToggle` (their own internal label text is a `vk_canvas`
+submodule call, off-limits to change) — which is also where the actual row
+DATA (folder paths, device names, profile names) already lives, so the two
+reasons point the same way.
+
+**One rendering trap this exposed:** Terminus draws as raw overlapping
+rectangles (run-length fills), not through the MSDF text layer plain
+`canvas.text`/`textStyled` calls use. Two identical labels drawn at the exact
+same position — harmless when both went through the text layer — can leave a
+later character incompletely drawn when both are Terminus rects. This is how
+a **pre-existing** redundant double-draw of Interface Settings' Close button
+(drawn once inline, once again by the shared panel dispatcher) was found and
+removed; see `drawInterfaceSettings`'s closing comment.
+
 **The primary button is right-anchored in all four panels.** EQ Settings used to
 lay its row out left-to-right from `content.left`, making it the one page of four
 where the green button changed sides. Mouse muscle memory is learned per app; a

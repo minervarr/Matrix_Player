@@ -1413,6 +1413,18 @@ draw/click/hover logic lives in `player_view.cc` (`drawManageFolders`,
 `drawAudioSettings`, `drawEqSettings`, `drawFolderPicker`, and the
 `onPanel*` dispatchers).
 
+**Settings' chrome (headers, buttons, fixed captions) draws in Terminus**,
+ALL CAPS, via `drawTerminusText`/`terminusTextWidth`
+(`gui/src/terminus_glyph.hh`) — see `docs/superpowers/specs/
+2026-09-11-settings-terminus-chrome-design.md` and its plan for the full
+design. The classification rule is NOT "is this ASCII" alone: a call site
+built from runtime data (a device name, a database key, an assembled
+notice) is written as a plain, permanently-serif `canvas.textStyled` call
+regardless of that data's script — only a call whose whole string is a
+compile-time literal is wrapped. `panels::drawHeader`/`panels::drawButton`
+take an opt-in `terminusChrome` flag for exactly this reason: `EqSwitcher`
+and the signal chain reuse the same two widgets and must stay untouched.
+
 ### Visual language
 
 `docs/UI_DESIGN_SYSTEM.md` is the written map of colors, type, and layout
