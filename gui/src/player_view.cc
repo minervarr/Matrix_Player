@@ -181,18 +181,12 @@ static LayoutRect drawSettingsRadio(Canvas& canvas, const LayoutRect& rc,
 
 static std::vector<panels::TerminusListRow> drawSettingsList(
     Canvas& canvas, const LayoutRect& area, const std::vector<std::string>& items,
-    int selected, float scrollY, float rowH, int hover, float textSize) {
+    int selected, float scrollY, float rowH, int hover, float textSize, float inset) {
     const auto s = matrixListStyle();
     return panels::drawTerminusScrollList(canvas, area, items, selected, scrollY, rowH, hover,
                                           textSize, s.rowText, s.hoverBg, s.pillColor,
-                                          s.pillText, s.selectedBar);
+                                          s.pillText, s.selectedBar, inset);
 }
-
-// OverlayRasterizer::MAX_CURVES is 8192 and extra curves are silently dropped.
-// Terminus is one curve per pixel-run; the 32 px strike at body size blows
-// that budget on a Settings list (Close/buttons vanished, labels cut mid-
-// glyph). targetPx < 24 selects the 16 px strike at x1.
-static float terminusBodyPx(float body) { return std::min(body, 23.0f); }
 
 // drawSearchField() moved to bar_a.cc: bar A's search box needs it, and a
 // second copy is how two search fields start looking different.
@@ -1666,7 +1660,7 @@ void PlayerWindow::drawFrame() {
             // space(24), not a bare 24: the rows below it are scaled, so a
             // fixed title pad drifts toward them as the display grows.
             Rect hdr = { g.x, g.y + metrics_.space(24.0f), g.w, metrics_.text.header };
-            centeredIn("Settings", hdr, terminusBodyPx(metrics_.text.header), CLR_TEXT_PRIMARY, FontStyle::Bold);
+            centeredIn("Settings", hdr, metrics_.text.header, CLR_TEXT_PRIMARY, FontStyle::Bold);
         }
 
         bool bp = bitperfectMode_.load();
@@ -1699,7 +1693,7 @@ void PlayerWindow::drawFrame() {
             canvas.rect(r.x + r.w - bt, r.y, bt, r.h, toColor(border));
             ColorRef textClr = (item.idx == 3 && bp) ? CLR_TEXT_DIM
                              : isActiveModeRow ? CLR_ACCENT : CLR_TEXT_PRIMARY;
-            centeredIn(item.label, r, terminusBodyPx(metrics_.text.body), textClr, FontStyle::Roman);
+            centeredIn(item.label, r, metrics_.text.body, textClr, FontStyle::Roman);
         }
     }
 
@@ -5111,9 +5105,8 @@ void PlayerWindow::onPanelWheel(int x, int y, int delta) {
         return;
     }
     case SettingsPanel::EqSettings: {
-        int listH = eqListArea_.bottom - eqListArea_.top;
-        int contentH = (int)((float)eqFilteredIndices_.size() * panelRowH());
-        eqScrollY_ = scrollTo(eqScrollY_, delta, contentH, listH);
+        int bodyH = eqBodyArea_.bottom - eqBodyArea_.top;
+        eqBodyScrollY_ = scrollTo(eqBodyScrollY_, delta, eqBodyContentH_, bodyH);
         invalidate();
         return;
     }
@@ -5189,7 +5182,7 @@ void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
     float mfRowH = panelRowH();
     mfListRows_ = drawSettingsList(canvas, listArea, mfRoots_,
                                    mfSelectedRow_, (float)mfScrollY_, mfRowH,
-                                   mfHoverRow_, metrics_.text.body);
+                                   mfHoverRow_, metrics_.text.body, pad);
     panels::drawScrollbar(canvas, listArea, (int)((float)mfRoots_.size() * mfRowH), mfScrollY_, metrics_.scale);
     if (mfRoots_.empty()) {
         Rect a = toRect(listArea);
@@ -5411,7 +5404,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
         asDeviceListRows_ = drawSettingsList(canvas, asDeviceListArea_, labels,
                                             asUsbSel_, (float)asDeviceScrollY_, listRowH,
-                                            asHoverDeviceRow_, metrics_.text.body);
+                                            asHoverDeviceRow_, metrics_.text.body, pad);
         panels::drawScrollbar(canvas, asDeviceListArea_, (int)((float)labels.size() * listRowH),
                               asDeviceScrollY_, metrics_.scale);
         if (labels.empty()) {
@@ -5433,7 +5426,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
         asDeviceListRows_ = drawSettingsList(canvas, asDeviceListArea_, labels,
                                             asWasapiSel_, (float)asDeviceScrollY_, listRowH,
-                                            asHoverDeviceRow_, metrics_.text.body);
+                                            asHoverDeviceRow_, metrics_.text.body, pad);
         panels::drawScrollbar(canvas, asDeviceListArea_, (int)((float)labels.size() * listRowH),
                               asDeviceScrollY_, metrics_.scale);
         y += listH + metrics_.space(SP_MD);
@@ -5462,7 +5455,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
         asDeviceListRows_ = drawSettingsList(canvas, asDeviceListArea_, labels,
                                             asAlsaSel_, (float)asDeviceScrollY_, listRowH,
-                                            asHoverDeviceRow_, metrics_.text.body);
+                                            asHoverDeviceRow_, metrics_.text.body, pad);
         panels::drawScrollbar(canvas, asDeviceListArea_, (int)((float)labels.size() * listRowH),
                               asDeviceScrollY_, metrics_.scale);
         y += listH + metrics_.space(SP_MD);
@@ -5478,7 +5471,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
         asDeviceListRows_ = drawSettingsList(canvas, asDeviceListArea_, labels,
                                             asJackSel_, (float)asDeviceScrollY_, listRowH,
-                                            asHoverDeviceRow_, metrics_.text.body);
+                                            asHoverDeviceRow_, metrics_.text.body, pad);
         panels::drawScrollbar(canvas, asDeviceListArea_, (int)((float)labels.size() * listRowH),
                               asDeviceScrollY_, metrics_.scale);
         if (asJackPorts_.empty()) {
@@ -5509,7 +5502,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
         asDeviceListRows_ = drawSettingsList(canvas, asDeviceListArea_, labels,
                                             asBtSel_, (float)asDeviceScrollY_, listRowH,
-                                            asHoverDeviceRow_, metrics_.text.body);
+                                            asHoverDeviceRow_, metrics_.text.body, pad);
         panels::drawScrollbar(canvas, asDeviceListArea_, (int)((float)labels.size() * listRowH),
                               asDeviceScrollY_, metrics_.scale);
         if (asBtDevices_.empty()) {
@@ -5980,6 +5973,7 @@ void PlayerWindow::onEqSettings() {
     eqSelectedRow_ = -1;
     eqHoverRow_ = -1;
     eqScrollY_ = 0;
+    eqBodyScrollY_ = 0;
     eqHoverClose_ = eqHoverAssign_ = eqHoverClear_ = false;
     eqHoverTabAll_ = eqHoverTabMine_ = eqHoverPin_ = eqHoverRemove_ = false;
     eqHoverTabRecommended_ = false;
@@ -6092,6 +6086,38 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
                 CLR_TEXT_DIM, metrics_.text.secondary);
     }
 
+    float btnH = metrics_.space(58.0f);
+    int by = (int)(content.bottom - (btnH + pad));
+    int eqBtnCount = eqShowMine_ ? 3 : 2;
+    auto eqBtnRects = panels::layoutButtonRow(content, pad, eqBtnCount, metrics_.space(277.0f),
+                                              metrics_.space(SP_MD), metrics_.space(panels::kMinActionBtnW),
+                                              by, (int)btnH);
+    eqBtnAssign_ = eqBtnRects[0];
+    if (eqShowMine_) {
+        const EqHeadphone* sel = eqSelectedHeadphone();
+        eqBtnPin_    = eqBtnRects[1];
+        eqBtnRemove_ = eqBtnRects[2];
+        eqBtnClear_  = {};
+        panels::drawButton(canvas, eqBtnAssign_, "Select", eqHoverAssign_, metrics_.text.body, true, true);
+        panels::drawButton(canvas, eqBtnPin_,
+                           (sel && sel->pinned) ? "Unpin" : "Pin",
+                           eqHoverPin_, metrics_.text.body, false, true);
+        panels::drawButton(canvas, eqBtnRemove_, "Remove", eqHoverRemove_, metrics_.text.body, false, true);
+    } else {
+        eqBtnClear_  = eqBtnRects[1];
+        eqBtnPin_    = {};
+        eqBtnRemove_ = {};
+        panels::drawButton(canvas, eqBtnAssign_, "Assign to Device", eqHoverAssign_, metrics_.text.body, true, true);
+        panels::drawButton(canvas, eqBtnClear_, "Clear", eqHoverClear_, metrics_.text.body, false, true);
+    }
+
+    eqBodyArea_ = { content.left, (int)y, content.right, by - (int)pad };
+    const auto eqBodyClip = canvas.saveClip();
+    canvas.setClip((float)eqBodyArea_.left, (float)eqBodyArea_.top,
+                   (float)(eqBodyArea_.right - eqBodyArea_.left),
+                   (float)std::max(0, eqBodyArea_.bottom - eqBodyArea_.top));
+    y = (float)eqBodyArea_.top - (float)eqBodyScrollY_;
+
     // Two views over one list: the saved set, or the whole catalogue. This is
     // also the ONLY place a saved pair is pinned or removed — the sidebar
     // block stays a pure switcher, with no room for a per-row × at space(277).
@@ -6139,34 +6165,6 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
                                     "Search profiles", metrics_.text.body);
     y += metrics_.space(55.0f) + metrics_.space(16.0f);
 
-    float btnH = metrics_.space(58.0f);
-    int by = (int)(content.bottom - (btnH + pad));
-    int eqBtnCount = eqShowMine_ ? 3 : 2;
-    auto eqBtnRects = panels::layoutButtonRow(content, pad, eqBtnCount, metrics_.space(277.0f),
-                                              metrics_.space(SP_MD), metrics_.space(panels::kMinActionBtnW),
-                                              by, (int)btnH);
-    eqBtnAssign_ = eqBtnRects[0];
-    if (eqShowMine_) {
-        const EqHeadphone* sel = eqSelectedHeadphone();
-        eqBtnPin_    = eqBtnRects[1];
-        eqBtnRemove_ = eqBtnRects[2];
-        eqBtnClear_  = {};
-        panels::drawButton(canvas, eqBtnAssign_, "Select", eqHoverAssign_, metrics_.text.body, true, true);
-        panels::drawButton(canvas, eqBtnPin_,
-                           (sel && sel->pinned) ? "Unpin" : "Pin",
-                           eqHoverPin_, metrics_.text.body, false, true);
-        panels::drawButton(canvas, eqBtnRemove_, "Remove", eqHoverRemove_, metrics_.text.body, false, true);
-    } else {
-        eqBtnClear_  = eqBtnRects[1];
-        eqBtnPin_    = {};
-        eqBtnRemove_ = {};
-        panels::drawButton(canvas, eqBtnAssign_, "Assign to Device", eqHoverAssign_, metrics_.text.body, true, true);
-        panels::drawButton(canvas, eqBtnClear_, "Clear", eqHoverClear_, metrics_.text.body, false, true);
-    }
-
-    LayoutRect listArea = { content.left, (int)y, content.right, (int)(content.bottom - (btnH + pad * 2)) };
-    eqListArea_ = listArea;
-
     std::vector<std::string> labels;
     labels.reserve(eqFilteredIndices_.size());
     auto& all = eqProfiles_.getAll();
@@ -6197,10 +6195,13 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
         labels.push_back(label);
     }
     float eqRowH = panelRowH();
+    const float listH = std::max(6.0f * eqRowH, std::max(eqRowH, (float)labels.size() * eqRowH));
+    LayoutRect listArea = { content.left, (int)y, content.right, (int)(y + listH) };
+    eqListArea_ = listArea;
     eqListRows_ = drawSettingsList(canvas, listArea, labels,
-                                   eqSelectedRow_, (float)eqScrollY_, eqRowH,
-                                   eqHoverRow_, metrics_.text.body);
-    panels::drawScrollbar(canvas, listArea, (int)((float)labels.size() * eqRowH), eqScrollY_, metrics_.scale);
+                                   eqSelectedRow_, 0.0f, eqRowH,
+                                   eqHoverRow_, metrics_.text.body, pad);
+    panels::drawScrollbar(canvas, eqBodyArea_, eqBodyContentH_, eqBodyScrollY_, metrics_.scale);
     if (labels.empty()) {
         Rect a = toRect(listArea);
         // The saved view's empty state explains the rule rather than just
@@ -6219,6 +6220,12 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
                                   metrics_.text.body, a.w - metrics_.space(44.0f),
                                   metrics_.text.body * 1.4f, toColor(CLR_TEXT_DIM));
     }
+
+    eqBodyContentH_ = (int)((y + listH) - ((float)eqBodyArea_.top - (float)eqBodyScrollY_));
+    eqBodyScrollY_ = (int)clampScroll((float)eqBodyScrollY_, (float)eqBodyContentH_,
+                                      (float)std::max(0, eqBodyArea_.bottom - eqBodyArea_.top));
+    canvas.restoreClip(eqBodyClip);
+    canvas.clearClip();
 }
 
 // ── Playlists section ───────────────────────────────────────────────────────
@@ -6857,7 +6864,7 @@ void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
     float fpRowH = panelRowH();
     fpListRows_ = drawSettingsList(canvas, listArea, labels,
                                    -1, (float)fpScrollY_, fpRowH,
-                                   fpHoverRow_, metrics_.text.body);
+                                   fpHoverRow_, metrics_.text.body, pad);
     panels::drawScrollbar(canvas, listArea, (int)((float)labels.size() * fpRowH), fpScrollY_, metrics_.scale);
     if (labels.empty()) {
         Rect a = toRect(listArea);

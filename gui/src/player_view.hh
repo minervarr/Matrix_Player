@@ -757,6 +757,9 @@ private:
     int  eqHoverRow_    = -1;
     int  eqSelectedRow_ = -1;
     int  eqScrollY_     = 0;
+    int  eqBodyScrollY_ = 0;
+    int  eqBodyContentH_ = 0;
+    LayoutRect eqBodyArea_ = {};
     std::string eqDeviceKey_;
     bool eqBitperfectActive_ = false;
     // The panel's two header lines, cached. drawEqSettings() used to run TWO

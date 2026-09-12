@@ -67,7 +67,7 @@ std::vector<TerminusListRow> drawTerminusScrollList(
     Canvas& canvas, const LayoutRect& area, const std::vector<std::string>& items,
     int selected, float scrollPx, float rowH, int hoverIndex, float textSize,
     const Color& rowText, const Color& hoverBg, const Color& pillColor,
-    const Color& pillText, const Color& selectedBar);
+    const Color& pillText, const Color& selectedBar, float inset);
 
 void drawTerminusToggle(Canvas& canvas, const LayoutRect& row, bool on,
                         const std::string& label, float textSize,

@@ -201,28 +201,28 @@ std::vector<TerminusListRow> drawTerminusScrollList(
     Canvas& canvas, const LayoutRect& area, const std::vector<std::string>& items,
     int selected, float scrollPx, float rowH, int hoverIndex, float textSize,
     const Color& rowText, const Color& hoverBg, const Color& pillColor,
-    const Color& pillText, const Color& selectedBar) {
+    const Color& pillText, const Color& selectedBar, float inset) {
     Rect a = toRect(area);
     canvas.rect(a.x, a.y, a.w, a.h, toColor(CLR_BG_MAIN));
     const auto saved = canvas.saveClip();
     canvas.setClip(a.x, a.y, a.w, a.h);
-    const float inset = canvas.pad();
+    const float in = std::max(0.0f, inset);
     std::vector<TerminusListRow> visible;
     for (int i = 0; i < (int)items.size(); i++) {
         const float ry = a.y + (float)i * rowH - scrollPx;
         if (ry + rowH < a.y || ry > a.y + a.h) continue;
         Rect r{ a.x, ry, a.w, rowH };
-        const float textX = r.x + inset;
+        const float textX = r.x + in;
         const std::string shown = terminusEllipsize(items[(size_t)i], textSize,
-                                                    std::max(0.0f, r.w - inset * 2.0f));
+                                                    std::max(0.0f, r.w - in * 2.0f));
         const bool sel = (i == selected);
         const float rad = 0.0f;
         if (sel)
-            canvas.rect(r.x + inset * 0.3f, r.y, r.w - inset * 0.6f, rowH, pillColor, rad);
+            canvas.rect(r.x + in * 0.3f, r.y, r.w - in * 0.6f, rowH, pillColor, rad);
         else if (i == hoverIndex)
-            canvas.rect(r.x + inset * 0.3f, r.y, r.w - inset * 0.6f, rowH, hoverBg, rad);
+            canvas.rect(r.x + in * 0.3f, r.y, r.w - in * 0.6f, rowH, hoverBg, rad);
         if (sel && selectedBar.a > 0.0f)
-            canvas.rect(r.x + inset * 0.3f, r.y, 3.0f, rowH, selectedBar, rad);
+            canvas.rect(r.x + in * 0.3f, r.y, 3.0f, rowH, selectedBar, rad);
         drawTerminusText(canvas, shown, textX, r.y + (rowH - textSize) * 0.5f, textSize,
                          sel ? pillText : rowText);
         visible.push_back({ { (int)r.x, (int)r.y, (int)(r.x + r.w), (int)(r.y + r.h) }, i });
@@ -269,7 +269,15 @@ float drawTerminusLabel(Canvas& canvas, const std::string& text,
                         float x, float y, float targetPx, float maxW, float lineH,
                         const Color& col) {
     const std::vector<std::string> lines = terminusWrap(text, targetPx, maxW);
-    drawTerminusWrapped(canvas, text, x, y, targetPx, maxW, lineH, col);
+    const auto clip = canvas.saveClip();
+    const terminus::Pick pk = terminus::pickStrike(U'M', targetPx);
+    const float cellH = pk.glyph ? (float)(pk.glyph->cellH * pk.scale) : targetPx;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const float yy = y + (float)i * lineH;
+        if (clip.active && (yy + cellH > clip.y1 + 0.01f || yy + cellH < clip.y0))
+            continue;
+        drawTerminusText(canvas, lines[i], x, yy, targetPx, col);
+    }
     if (lines.empty()) return y;
     return y + (float)lines.size() * lineH;
 }
