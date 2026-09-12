@@ -510,13 +510,14 @@ scripts/linux/build.sh --debug
 ./build/linux_debug/gui/terminus_glyph_test # the baked Terminus glyph, and its pixel runs
 ```
 
-**Terminus is a BITMAP face, baked into a committed header.** Bar A's Settings
-cell is drawn from it (see the frame's rule 3). It cannot go through the text
-engine — `RasterFont` bakes from outlines and `FontStyle`'s four slots are all
-taken — so `tools/terminus/bake_glyphs.py` turns the glyphs the UI needs into
-`gui/src/terminus_glyphs.gen.h`, one bit per pixel, and `terminus_glyph.cc`
-draws them as run-length rectangles at an INTEGER scale (a fractional one
-resamples a 1-bit face into grey, which is the whole thing it must not be).
+**Terminus is a BITMAP face, baked into a committed header.** Settings
+panels are drawn from it (see the Settings-chrome paragraph). It cannot go
+through the text engine — `RasterFont` bakes from outlines and `FontStyle`'s
+four slots are all taken — so `tools/terminus/bake_glyphs.py` turns the glyphs
+the UI needs into `gui/src/terminus_glyphs.gen.h`, one bit per pixel, and
+`terminus_glyph.cc` draws them as run-length rectangles at an INTEGER scale
+(a fractional one resamples a 1-bit face into grey, which is the whole thing
+it must not be).
 The header is committed, so a normal C++ build never needs Python; add a
 character to `GLYPHS`, rerun, and commit both. Terminus is SIL OFL 1.1 —
 `tools/terminus/LICENSE`.
@@ -1248,17 +1249,13 @@ Five things here are load-bearing:
    survives at 130 with text, which is why bar A is a rail of *initials*
    (A E S C L R P) rather than a narrower list of words. `MATRIX PLAYER` has no
    home in it and is gone.
-3. **Cells are told apart by TYPEFACE AND WEIGHT; the colour ladder only
-   confirms.** Three cells used to read `S` — Singles, Search, Settings —
-   separated by `theme.hh`'s ladder alone (PRIMARY 242, SECONDARY 170, DIM
-   128), and that ladder is FULL: 128 is already the WCAG floor, so a fourth
-   `S` had nowhere to go. The faces carry it now: **Settings** is a Terminus
-   pixel `S` (machine chrome, DIM), **Find** is a regular Computer Modern `F`
-   (SECONDARY), and the seven **filters** are bold Computer Modern (PRIMARY) —
-   the heaviest weight for the cells used most, which is also what survives the
-   shrunken cells of a phone held upright. The one remaining pair of equal
-   letters, Settings and Singles, is a pixel `S` beside a bold serif `S`, which
-   do not resemble each other at any size.
+3. **One face on the music page: Computer Modern Regular.** Settings `S`,
+   Find `F`, and the seven filters `A E S C L R P` are the same face and
+   weight so the rail does not fight the album grid. They are told apart by
+   **position** and `theme.hh`'s colour ladder: Settings DIM 128 (near end),
+   Find SECONDARY 170, filters PRIMARY 242 (far end). Settings vs Singles
+   (both `S`) is near-end DIM beside the filter-group PRIMARY. Terminus stays
+   inside Settings panels, not on the rail.
    Find also MOVED, and that is the point of the pass: it sits beside Settings
    at the near end, two cells and a gap from Albums. It used to be the cell
    immediately beside Albums, the same size as a filter letter, so a

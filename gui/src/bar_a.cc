@@ -1,7 +1,6 @@
 #include "bar_a.hh"
 
 #include "canvas.hh"
-#include "terminus_glyph.hh"
 #include "text_font.hh"   // FontStyle -- canvas.hh only forward-declares it
 #include "text_util.hh"   // truncateToWidth -- lives in vk_canvas, already shared
 
@@ -39,21 +38,14 @@ void drawSearchField(Canvas& canvas, const LayoutRect& rc, const std::string& te
 // the same upright at any orientation. Rotation is only for text whose LENGTH
 // runs along the bar -- the AutoEQ profile name.
 //
-// Three cells used to be told apart only by theme.hh's grey ladder, because
-// three of them said "S". They are now told apart by TYPEFACE AND WEIGHT first,
-// and the ladder only confirms:
+// One face on the music page: Computer Modern Regular. Filters used to be
+// Bold and Settings/Find Terminus; that fought the album grid. Settings vs
+// Singles (both S) are told apart by POSITION (near end vs filter group) and
+// COLOUR (DIM 128 vs PRIMARY 242).
 //
-//   Settings  S              Terminus (a 1-bit pixel face)   DIM 128
-//   Find      F              Terminus (a 1-bit pixel face)   SECONDARY 170
-//   filters   A E S C L R P  Computer Modern, BOLD           PRIMARY 242
-//
-// The filters are the most used cells, so they get the heaviest weight, which
-// also holds up best in the shrunken cells of a phone held upright. Settings
-// and Find are both machine chrome rather than music -- one opens
-// configuration, the other opens a text field -- so both get the terminal
-// face; the colour ladder is what still tells the two apart at a glance. The
-// one remaining pair of equal letters -- Settings and Singles -- is a pixel S
-// beside a bold serif S, which do not resemble each other at any size.
+//   Settings  S              Computer Modern Regular   DIM 128
+//   Find      F              Computer Modern Regular   SECONDARY 170
+//   filters   A E S C L R P  Computer Modern Regular   PRIMARY 242
 
 namespace {
 
@@ -152,31 +144,23 @@ void drawBarA(Canvas& canvas, const BarAModel& m) {
         // Initials, in the reading order rail_layout.hh fixes: original
         // material by descending size (Albums, EPs, Singles), then the artist's
         // own material re-presented (Compilations, Live), then other people's
-        // reworkings of it (Remixes), then Playlists. BOLD: these are the cells
-        // the listener uses most.
+        // reworkings of it (Remixes), then Playlists. Regular: Bold stole
+        // protagonism from the album grid.
         static const char* kGlyphs[] = { "A", "E", "S", "C", "L", "R" };
         for (int i = kRailAlbums; i <= kRailRemixes; i++) {
             const bool active = (m.activeLetter == i);
             if (cellBg(m.rail.letters[i], active,
                        m.hovered.item == BarAItem::Filter && m.hovered.index == i && !active))
-                glyph(m.rail.letters[i], kGlyphs[i], FontStyle::Bold,
+                glyph(m.rail.letters[i], kGlyphs[i], FontStyle::Roman,
                       active ? CLR_ACCENT : CLR_TEXT_PRIMARY);
         }
         if (cellBg(m.rail.letters[kRailPlaylists], m.playlistsActive,
                    m.hovered.item == BarAItem::Playlists && !m.playlistsActive))
-            glyph(m.rail.letters[kRailPlaylists], "P", FontStyle::Bold,
+            glyph(m.rail.letters[kRailPlaylists], "P", FontStyle::Roman,
                   m.playlistsActive ? CLR_ACCENT : CLR_TEXT_PRIMARY);
 
-        // Find: TERMINUS, same face as Settings, one step down the ladder --
-        // it is chrome like Settings, not a filter, so it gets Settings'
-        // typeface rather than the filters' bold serif. Falls back to a
-        // Computer Modern F only if the baked glyph is missing, which
-        // terminus_glyph_test makes a build-time failure, not a runtime one.
-        if (cellBg(m.rail.search, false, m.hovered.item == BarAItem::Search)) {
-            if (!drawTerminusGlyph(canvas, m.rail.search, U'F', m.metrics.text.title,
-                                   toColor(CLR_TEXT_SECONDARY)))
-                glyph(m.rail.search, "F", FontStyle::Roman, CLR_TEXT_SECONDARY);
-        }
+        if (cellBg(m.rail.search, false, m.hovered.item == BarAItem::Search))
+            glyph(m.rail.search, "F", FontStyle::Roman, CLR_TEXT_SECONDARY);
     } else {
         // Open search: the field spans the middle, with a close cell at the far
         // end. The letters and the AutoEQ box are both gone -- see
@@ -188,16 +172,13 @@ void drawBarA(Canvas& canvas, const BarAModel& m) {
             glyph(m.rail.close, "×", FontStyle::Roman, CLR_TEXT_SECONDARY);
     }
 
-    // Settings: pinned at the near end in every state, in TERMINUS. It does not
-    // move when search opens: interrupting a filter to change a setting must
-    // not cost what was typed. The Computer Modern fallback only runs if the
-    // baked glyph is missing, which terminus_glyph_test makes a build-time
-    // failure rather than something to discover on screen.
+    // Settings: pinned at the near end in every state. It does not move when
+    // search opens: interrupting a filter to change a setting must not cost
+    // what was typed.
     if (cellBg(m.rail.settings, m.settingsActive,
                m.hovered.item == BarAItem::Settings && !m.settingsActive)) {
         const ColorRef c = m.settingsActive ? CLR_ACCENT : CLR_TEXT_DIM;
-        if (!drawTerminusGlyph(canvas, m.rail.settings, U'S', m.metrics.text.title, toColor(c)))
-            glyph(m.rail.settings, "S", FontStyle::Roman, c);
+        glyph(m.rail.settings, "S", FontStyle::Roman, c);
     }
 
     drawEqBox(canvas, m);

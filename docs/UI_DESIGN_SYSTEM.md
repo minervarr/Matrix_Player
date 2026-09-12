@@ -419,25 +419,20 @@ the tie-break (`Db::loadEqHeadphones`) — the order decides what is reachable
 first, and "what I touched last" is not the same question as "what I actually
 use".
 
-### 8.1a Bar A's cells: one typeface each
+### 8.1a Bar A's cells: one typeface
 
-Bar A is a rail of single letters at `space(130)`, so the cells cannot be told
-apart by words. They are told apart by FACE and WEIGHT first; `theme.hh`'s grey
-ladder only confirms what the face already says.
+Bar A is a rail of single letters at `space(130)`. The music page is one face
+— Computer Modern Regular — so the rail does not fight the album grid.
+`theme.hh`'s grey ladder and position tell the cells apart.
 
 | Cell | Glyph | Face | Weight | Colour |
 |---|---|---|---|---|
-| Settings | `S` | **Terminus** (1-bit bitmap) | Bold strike | `CLR_TEXT_DIM` 128 |
+| Settings | `S` | Computer Modern | Regular | `CLR_TEXT_DIM` 128 |
 | Find | `F` | Computer Modern | Regular | `CLR_TEXT_SECONDARY` 170 |
-| Filters | `A E S C L R P` | Computer Modern | **Bold** | `CLR_TEXT_PRIMARY` 242 |
+| Filters | `A E S C L R P` | Computer Modern | Regular | `CLR_TEXT_PRIMARY` 242 |
 
-The filters are the most-used cells and get the heaviest weight, which is also
-what survives the shrunken cells of a phone held upright. Settings is machine
-chrome rather than music, so it gets the terminal face — and the one remaining
-pair of equal letters, Settings and Singles, is a pixel `S` beside a bold serif
-`S`, which do not resemble each other at any size. Terminus is drawn at an
-INTEGER scale only (`terminus_glyph.cc`); a fractional scale resamples a 1-bit
-face into grey.
+Settings vs Singles (both `S`) is near-end DIM beside the filter-group
+PRIMARY. Terminus stays inside Settings panels (§8.6), not on this rail.
 
 **Order along the bar:** `[Settings][Find][AutoEQ box] · · gap · · [letters]`.
 Rare cells cluster at the near end, frequent cells sit alone at the far end,
