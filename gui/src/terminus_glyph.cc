@@ -49,13 +49,13 @@ void runs(const Glyph& g, int scale, std::vector<Run>& out) {
 
 bool resolveText(const std::string& text, float targetPx,
                  std::vector<const Glyph*>& out, int& outScale) {
+    const std::string folded = terminusFold(text);
     out.clear();
-    out.reserve(text.size());
+    out.reserve(folded.size());
     outScale = 1;
-    for (unsigned char ch : text) {
-        const char32_t up = (ch >= 'a' && ch <= 'z') ? (char32_t)(ch - 'a' + 'A')
-                                                     : (char32_t)ch;
-        const Pick p = pickStrike(up, targetPx);
+    for (unsigned char ch : folded) {
+        Pick p = pickStrike((char32_t)ch, targetPx);
+        if (!p.glyph) p = pickStrike(U'?', targetPx);
         if (!p.glyph) return false;
         out.push_back(p.glyph);
         outScale = p.scale;   // identical for every glyph at this targetPx
@@ -65,12 +65,118 @@ bool resolveText(const std::string& text, float targetPx,
 
 } // namespace terminus
 
+namespace {
+char32_t nextCp(const std::string& s, size_t& i) {
+    if (i >= s.size()) return 0;
+    const unsigned char b0 = (unsigned char)s[i];
+    auto cont = [&](size_t n) -> char32_t {
+        if (i + n > s.size()) { ++i; return 0xFFFD; }
+        for (size_t k = 1; k < n; ++k) {
+            const unsigned char c = (unsigned char)s[i + k];
+            if ((c & 0xC0) != 0x80) { ++i; return 0xFFFD; }
+        }
+        char32_t cp = 0;
+        if (n == 2) cp = ((b0 & 0x1F) << 6) | (s[i + 1] & 0x3F);
+        else if (n == 3) cp = ((b0 & 0x0F) << 12) | ((s[i + 1] & 0x3F) << 6) | (s[i + 2] & 0x3F);
+        else cp = ((b0 & 0x07) << 18) | ((s[i + 1] & 0x3F) << 12) |
+                  ((s[i + 2] & 0x3F) << 6) | (s[i + 3] & 0x3F);
+        i += n;
+        return cp;
+    };
+    if (b0 < 0x80) { ++i; return b0; }
+    if ((b0 & 0xE0) == 0xC0) return cont(2);
+    if ((b0 & 0xF0) == 0xE0) return cont(3);
+    if ((b0 & 0xF8) == 0xF0) return cont(4);
+    ++i;
+    return 0xFFFD;
+}
+} // namespace
+
+char terminusFoldCp(char32_t cp) {
+    if (cp >= U'a' && cp <= U'z') return (char)(cp - U'a' + U'A');
+    if (cp == 0x2013 || cp == 0x2014) return '-';
+    if (cp == 0x00B7 || cp == 0x2022 || cp == 0x2219) return '/';
+    if (cp >= 0x20 && cp <= 0x7E) return (char)cp;
+    return '?';
+}
+
+std::string terminusFold(const std::string& utf8) {
+    std::string out;
+    out.reserve(utf8.size());
+    size_t i = 0;
+    while (i < utf8.size())
+        out.push_back(terminusFoldCp(nextCp(utf8, i)));
+    return out;
+}
+
 float terminusTextWidth(const std::string& text, float targetPx) {
     if (text.empty()) return 0.0f;
     std::vector<const terminus::Glyph*> glyphs;
     int scale = 1;
-    if (!terminus::resolveText(text, targetPx, glyphs, scale)) return -1.0f;
+    if (!terminus::resolveText(text, targetPx, glyphs, scale)) return 0.0f;
     float total = 0.0f;
     for (const terminus::Glyph* g : glyphs) total += (float)(g->cellW * scale);
     return total;
+}
+
+std::string terminusEllipsize(const std::string& text, float targetPx, float maxW) {
+    const std::string s = terminusFold(text);
+    if (terminusTextWidth(s, targetPx) <= maxW) return s;
+    const std::string dots = "...";
+    if (terminusTextWidth(dots, targetPx) > maxW) return dots;
+    std::string prefix = s;
+    while (!prefix.empty() && terminusTextWidth(prefix + dots, targetPx) > maxW)
+        prefix.pop_back();
+    return prefix + dots;
+}
+
+std::vector<std::string> terminusWrap(const std::string& text, float targetPx, float maxW) {
+    const std::string s = terminusFold(text);
+    std::vector<std::string> out;
+    if (s.empty()) return out;
+    const float cell = terminusTextWidth("X", targetPx);
+    const int maxC = std::max(1, (int)std::floor((maxW + 1e-4f) / std::max(cell, 1.0f)));
+
+    std::vector<std::string> words;
+    std::string w;
+    for (char ch : s) {
+        if (ch == ' ') {
+            if (!w.empty()) { words.push_back(w); w.clear(); }
+        } else {
+            w.push_back(ch);
+        }
+    }
+    if (!w.empty()) words.push_back(w);
+
+    std::string line;
+    auto flush = [&]() {
+        if (!line.empty()) { out.push_back(line); line.clear(); }
+    };
+    for (const std::string& word : words) {
+        if ((int)word.size() > maxC) {
+            flush();
+            size_t p = 0;
+            while (p < word.size()) {
+                const size_t n = std::min((size_t)maxC, word.size() - p);
+                if (p + n < word.size()) {
+                    out.push_back(word.substr(p, n));
+                    p += n;
+                } else {
+                    line = word.substr(p, n);
+                    p += n;
+                }
+            }
+            continue;
+        }
+        if (line.empty()) { line = word; continue; }
+        if ((int)(line.size() + 1 + word.size()) <= maxC) {
+            line += ' ';
+            line += word;
+        } else {
+            out.push_back(line);
+            line = word;
+        }
+    }
+    flush();
+    return out;
 }

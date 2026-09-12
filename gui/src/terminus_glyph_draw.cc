@@ -37,3 +37,10 @@ bool drawTerminusText(Canvas& c, const std::string& text, float x, float y,
     }
     return true;
 }
+
+void drawTerminusWrapped(Canvas& c, const std::string& text, float x, float y,
+                         float targetPx, float maxW, float lineH, const Color& col) {
+    const std::vector<std::string> lines = terminusWrap(text, targetPx, maxW);
+    for (size_t i = 0; i < lines.size(); ++i)
+        drawTerminusText(c, lines[i], x, y + (float)i * lineH, targetPx, col);
+}

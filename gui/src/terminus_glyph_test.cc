@@ -53,18 +53,50 @@ int main() {
         checkExact(*big.glyph, s);
     }
 
-    // ── Running text: resolve, measure, and the two-part fallback rule ─────
+    // ── Running text: fold, always-resolve, wrap, ellipsis ─────────────────
     //
-    // ASCII (any case) round-trips; a byte outside 0x20-0x7E (here: the "é" in
-    // a synthetic folder name, and a real em-dash sentence lifted verbatim
-    // from drawAudioSettings) does not, and terminusTextWidth reports that as
-    // -1.0f rather than 0 -- 0 is a legitimately empty string's answer.
+    // Settings is a Terminus surface: every string draws. Unrepresentable
+    // scalars fold (em dash to '-', middle dot to '/') or become '?'. Width
+    // is never -1 -- that was the old chrome-fallback signal, and it is what
+    // mixed Computer Modern into the panels.
     assert(terminusTextWidth("", 20.0f) == 0.0f);
     assert(terminusTextWidth("Done", 20.0f) > 0.0f);
     assert(terminusTextWidth("done", 20.0f) == terminusTextWidth("DONE", 20.0f));  // case-folded
-    assert(terminusTextWidth("café", 20.0f) < 0.0f);
+
+    assert(terminusFoldCp(U'-') == '-');
+    assert(terminusFoldCp(0x2014) == '-');          // em dash
+    assert(terminusFoldCp(0x2013) == '-');          // en dash
+    assert(terminusFoldCp(0x00B7) == '/');          // middle dot
+    assert(terminusFoldCp(0x2022) == '/');          // bullet
+    assert(terminusFoldCp(0x2219) == '/');          // bullet operator
+    assert(terminusFoldCp(0x00C2) == '?');          // Â -- the lead byte of the EQ mojibake
+    assert(terminusFoldCp(U'é') == '?');
+
+    assert(terminusFold("plug in headphones \xE2\x80\x94 there is no device to pick here.")
+           == "PLUG IN HEADPHONES - THERE IS NO DEVICE TO PICK HERE.");
+    // Double-encoded middle dot: UTF-8 for Â (C3 82) + UTF-8 for · (C2 B7).
+    assert(terminusFold("  \xC3\x82\xC2\xB7  ") == "  ?/  ");
+    assert(terminusFold("caf\xC3\xA9") == "CAF?");
+    assert(terminusTextWidth("caf\xC3\xA9", 20.0f) == terminusTextWidth("CAF?", 20.0f));
     assert(terminusTextWidth("SBC is a lossy encode \xE2\x80\x94 this route can never be bit-perfect.",
-                             20.0f) < 0.0f);   // a real em-dash sentence from drawAudioSettings
+                             20.0f) ==
+           terminusTextWidth("SBC IS A LOSSY ENCODE - THIS ROUTE CAN NEVER BE BIT-PERFECT.", 20.0f));
+
+    {
+        const float maxW = 8.0f * 20;   // 20 cells of the 16 px strike
+        auto lines = terminusWrap(
+            "16-bit output. Not a bit-perfect path for deeper sources.", 20.0f, maxW);
+        assert(lines.size() >= 2);
+        for (const auto& ln : lines)
+            assert(terminusTextWidth(ln, 20.0f) <= maxW + 0.01f);
+    }
+    {
+        std::string e = terminusEllipsize(
+            "Sennheiser HD 650 (over-ear) / oratory1990", 20.0f, 8.0f * 10);
+        assert(e.size() >= 3);
+        assert(e.compare(e.size() - 3, 3, "...") == 0);
+        assert(terminusTextWidth(e, 20.0f) <= 8.0f * 10 + 0.01f);
+    }
 
     // Every literal chrome string actually wrapped in Settings (Tasks 3-6)
     // must round-trip with ZERO fallback -- the same "a missing glyph is a
