@@ -170,6 +170,24 @@ static widgets::ScrollListStyle matrixListStyle() {
     return s;
 }
 
+static LayoutRect drawSettingsRadio(Canvas& canvas, const LayoutRect& rc,
+                                    bool sel, bool hover, const std::string& label,
+                                    float textSize) {
+    const auto s = matrixRadioStyle();
+    return panels::drawTerminusRadioRow(canvas, rc, sel, hover, label, textSize,
+                                        s.dotOn, s.dotOff, s.textOn, s.textOff,
+                                        s.hoverBg, s.selBg, s.selBar);
+}
+
+static std::vector<panels::TerminusListRow> drawSettingsList(
+    Canvas& canvas, const LayoutRect& area, const std::vector<std::string>& items,
+    int selected, float scrollY, float rowH, int hover, float textSize) {
+    const auto s = matrixListStyle();
+    return panels::drawTerminusScrollList(canvas, area, items, selected, scrollY, rowH, hover,
+                                          textSize, s.rowText, s.hoverBg, s.pillColor,
+                                          s.pillText, s.selectedBar);
+}
+
 // drawSearchField() moved to bar_a.cc: bar A's search box needs it, and a
 // second copy is how two search fields start looking different.
 
@@ -3852,6 +3870,12 @@ static int hitTestListRows(const std::vector<widgets::ListRow>& rows, int x, int
         if (r.rect.contains((float)x, (float)y)) return r.index;
     return -1;
 }
+static int hitTestListRows(const std::vector<panels::TerminusListRow>& rows, int x, int y) {
+    for (auto& r : rows)
+        if (x >= r.rect.left && x < r.rect.right && y >= r.rect.top && y < r.rect.bottom)
+            return r.index;
+    return -1;
+}
 
 int PlayerWindow::trackPanelHitTest(int x, int y) const {
     if (!trackPanelOpen_ || settingsOpen_) return -1;
@@ -5095,29 +5119,33 @@ void PlayerWindow::onPanelWheel(int x, int y, int delta) {
         return;
     }
     case SettingsPanel::AudioSettings: {
-        (void)x; (void)y;
-        AudioBackend sel = asBackendOptions_.empty() ? AudioBackend::Usb : asBackendOptions_[asBackendSelIdx_];
-        int rowCount = 0;
-        switch (sel) {
-        case AudioBackend::Usb: rowCount = (int)asUsbDevices_.size(); break;
+        if (ptInRect(asDeviceListArea_, x, y)) {
+            AudioBackend sel = asBackendOptions_.empty() ? AudioBackend::Usb : asBackendOptions_[asBackendSelIdx_];
+            int rowCount = 0;
+            switch (sel) {
+            case AudioBackend::Usb: rowCount = (int)asUsbDevices_.size(); break;
 #ifdef _WIN32
-        case AudioBackend::Wasapi: rowCount = (int)asWasapiDevices_.size() + 1; break;
+            case AudioBackend::Wasapi: rowCount = (int)asWasapiDevices_.size() + 1; break;
 #else
 #ifdef MATRIX_HAVE_ALSA
-        case AudioBackend::Alsa: rowCount = (int)asAlsaDevices_.size() + 1; break;
+            case AudioBackend::Alsa: rowCount = (int)asAlsaDevices_.size() + 1; break;
 #endif
 #ifdef MATRIX_HAVE_JACK
-        case AudioBackend::Jack: rowCount = (int)asJackPorts_.size() + 1; break;
+            case AudioBackend::Jack: rowCount = (int)asJackPorts_.size() + 1; break;
 #endif
 #ifdef MATRIX_HAVE_BLUETOOTH
-        case AudioBackend::Bluetooth: rowCount = (int)asBtDevices_.size(); break;
+            case AudioBackend::Bluetooth: rowCount = (int)asBtDevices_.size(); break;
 #endif
 #endif
-        default: break;
+            default: break;
+            }
+            int listH = asDeviceListArea_.bottom - asDeviceListArea_.top;
+            int contentH = (int)((float)rowCount * panelRowH());
+            asDeviceScrollY_ = scrollTo(asDeviceScrollY_, delta, contentH, listH);
+        } else if (ptInRect(asBodyArea_, x, y)) {
+            int bodyH = asBodyArea_.bottom - asBodyArea_.top;
+            asBodyScrollY_ = scrollTo(asBodyScrollY_, delta, asBodyContentH_, bodyH);
         }
-        int listH = asDeviceListArea_.bottom - asDeviceListArea_.top;
-        int contentH = (int)((float)rowCount * panelRowH());
-        asDeviceScrollY_ = scrollTo(asDeviceScrollY_, delta, contentH, listH);
         invalidate();
         return;
     }
@@ -5152,21 +5180,16 @@ void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
                             content.right, (int)(content.bottom - (btnH + pad * 2)) };
     mfListArea_ = listArea;
     float mfRowH = panelRowH();
-    // Folder PATHS are data and go through the (untouchable) submodule row
-    // list unchanged -- see CLAUDE.md's bar_a.cc rule, same reasoning here.
-    mfListRows_ = widgets::drawScrollList(canvas, toRect(listArea), mfRoots_,
-                                          mfSelectedRow_, (float)mfScrollY_, mfRowH,
-                                          mfHoverRow_, widgets::kTextFree, matrixListStyle());
+    mfListRows_ = drawSettingsList(canvas, listArea, mfRoots_,
+                                   mfSelectedRow_, (float)mfScrollY_, mfRowH,
+                                   mfHoverRow_, metrics_.text.body);
     panels::drawScrollbar(canvas, listArea, (int)((float)mfRoots_.size() * mfRowH), mfScrollY_, metrics_.scale);
     if (mfRoots_.empty()) {
         Rect a = toRect(listArea);
-        const float ex = a.x + metrics_.space(22.0f), ey = a.y + metrics_.space(22.0f);
-        // A fixed literal: Terminus, falling back to the serif italic if it
-        // ever isn't representable.
-        if (!drawTerminusText(canvas, "No music folders added yet.", ex, ey,
-                              metrics_.text.body, toColor(CLR_TEXT_DIM)))
-            canvas.textStyled("No music folders added yet.", ex, ey,
-                              metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        panels::drawTerminusLabel(canvas, "No music folders added yet.",
+                                  a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
+                                  metrics_.text.body, a.w - metrics_.space(44.0f),
+                                  metrics_.text.body * 1.4f, toColor(CLR_TEXT_DIM));
     }
 
     float btnW = metrics_.space(277.0f);
@@ -5295,6 +5318,8 @@ void PlayerWindow::onAudioSettings() {
     asHoverDeviceRow_  = -1;
     asDeviceScrollY_ = 0;
     asHoverClose_ = asHoverApply_ = false;
+    asBodyScrollY_ = 0;
+    asBodyContentH_ = 0;
 #ifdef _WIN32
     asHoverModeRow_ = -1;
 #endif
@@ -5315,28 +5340,32 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
                                             metrics_.text.header, asCloseRc_, true);
     Rect c = toRect(content);
     float pad = metrics_.space(SP_LG);
-    float y = c.y + pad;
-    // Every direct call in this function is a fixed literal (no runtime data
-    // concatenated in) — see drawBluetoothCodecSection below for the ones
-    // that are NOT and must stay unwrapped.
-    auto chromeText = [&](const std::string& s, float x, float yy, float sz,
-                          ColorRef col, FontStyle style) {
-        if (!drawTerminusText(canvas, s, x, yy, sz, toColor(col)))
-            canvas.textStyled(s, x, yy, sz, toColor(col), style);
+    float btnH = metrics_.space(58.0f);
+    asBodyArea_ = { content.left, content.top, content.right,
+                    (int)((float)content.bottom - pad - btnH - pad) };
+    const auto bodyClip = canvas.saveClip();
+    canvas.setClip((float)asBodyArea_.left, (float)asBodyArea_.top,
+                   (float)(asBodyArea_.right - asBodyArea_.left),
+                   (float)(asBodyArea_.bottom - asBodyArea_.top));
+    float y = (float)asBodyArea_.top + pad - (float)asBodyScrollY_;
+    const float maxW = c.w - 2.0f * pad;
+    const float lineH = metrics_.text.body * 1.4f;
+    auto caption = [&](const char* s, ColorRef col) {
+        y = panels::drawTerminusLabel(canvas, s, c.x + pad, y, metrics_.text.body,
+                                      maxW, lineH, toColor(col));
     };
 
-    chromeText("Output backend:", c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Roman);
-    y += metrics_.text.body * 1.8f;
+    caption("Output backend:", CLR_TEXT_DIM);
+    y += metrics_.text.body * 0.4f;
 
     float rowH = metrics_.space(55.0f);
     asBackendRowRects_.assign(asBackendOptions_.size(), LayoutRect{});
     for (int i = 0; i < (int)asBackendOptions_.size(); i++) {
         LayoutRect rc = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + rowH) };
         bool sel = (i == asBackendSelIdx_);
-        Rect hit = widgets::drawRadioRow(canvas, toRect(rc), sel, (i == asHoverBackendRow_),
-                                         backendDisplayName(asBackendOptions_[i]),
-                                         widgets::kTextFree, matrixRadioStyle());
-        asBackendRowRects_[i] = toLayoutRect(hit);
+        asBackendRowRects_[i] = drawSettingsRadio(canvas, rc, sel, (i == asHoverBackendRow_),
+                                                  backendDisplayName(asBackendOptions_[i]),
+                                                  metrics_.text.body);
         y += rowH;
     }
     y += metrics_.space(SP_MD);
@@ -5348,9 +5377,8 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     // With 10+ ALSA devices that fixed height hid everything past row 6 behind
     // a scroll with no affordance — drawScrollList clips silently and draws no
     // scrollbar, so a DAC in row 7 simply looked absent.
-    float btnH = metrics_.space(58.0f);
     float listTop = y + metrics_.text.body * 1.6f;   // every branch draws its label first
-    float listBottomLimit = (float)content.bottom - pad - btnH - pad;
+    float listBottomLimit = (float)asBodyArea_.bottom;
 #ifdef _WIN32
     if (sel == AudioBackend::Wasapi)             // the Mode radios sit below the list
         listBottomLimit -= metrics_.space(SP_MD) + metrics_.text.body * 1.6f + 2.0f * rowH + metrics_.space(SP_MD);
@@ -5364,51 +5392,49 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     };
 
     if (sel == AudioBackend::Usb) {
-        chromeText("USB DAC:", c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Roman);
-        y += metrics_.text.body * 1.6f;
+        caption("USB DAC:", CLR_TEXT_DIM);
         std::vector<std::string> labels;
         for (auto& d : asUsbDevices_) labels.push_back(d.name);
         float listH = listHeightFor((int)labels.size());
         asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
-        asDeviceListRows_ = widgets::drawScrollList(canvas, toRect(asDeviceListArea_), labels,
-                                                    asUsbSel_, (float)asDeviceScrollY_, listRowH,
-                                                    asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
+        asDeviceListRows_ = drawSettingsList(canvas, asDeviceListArea_, labels,
+                                            asUsbSel_, (float)asDeviceScrollY_, listRowH,
+                                            asHoverDeviceRow_, metrics_.text.body);
         panels::drawScrollbar(canvas, asDeviceListArea_, (int)((float)labels.size() * listRowH),
                               asDeviceScrollY_, metrics_.scale);
         if (labels.empty()) {
             Rect a = toRect(asDeviceListArea_);
-            chromeText("No USB audio devices found.", a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
-                      metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
+            panels::drawTerminusLabel(canvas, "No USB audio devices found.",
+                                      a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
+                                      metrics_.text.body, a.w - metrics_.space(44.0f), lineH,
+                                      toColor(CLR_TEXT_DIM));
         }
         y += listH + metrics_.space(SP_MD);
     }
 #ifdef _WIN32
     else if (sel == AudioBackend::Wasapi) {
-        chromeText("Device:", c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Roman);
-        y += metrics_.text.body * 1.6f;
+        caption("Device:", CLR_TEXT_DIM);
         std::vector<std::string> labels;
         labels.push_back("(Default device)");
         for (auto& d : asWasapiDevices_) labels.push_back(wideToUtf8(d.name));
         float listH = listHeightFor((int)labels.size());
         asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
-        asDeviceListRows_ = widgets::drawScrollList(canvas, toRect(asDeviceListArea_), labels,
-                                                    asWasapiSel_, (float)asDeviceScrollY_, listRowH,
-                                                    asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
+        asDeviceListRows_ = drawSettingsList(canvas, asDeviceListArea_, labels,
+                                            asWasapiSel_, (float)asDeviceScrollY_, listRowH,
+                                            asHoverDeviceRow_, metrics_.text.body);
         panels::drawScrollbar(canvas, asDeviceListArea_, (int)((float)labels.size() * listRowH),
                               asDeviceScrollY_, metrics_.scale);
         y += listH + metrics_.space(SP_MD);
 
-        chromeText("Mode:", c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Roman);
-        y += metrics_.text.body * 1.6f;
+        caption("Mode:", CLR_TEXT_DIM);
         static const char* kModeLabels[2] = {
-            "Shared \xE2\x80\x94 other apps can play simultaneously",
-            "Exclusive \xE2\x80\x94 lower latency, blocks other apps" };
+            "Shared - other apps can play simultaneously",
+            "Exclusive - lower latency, blocks other apps" };
         for (int i = 0; i < 2; i++) {
             LayoutRect rc = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + rowH) };
             bool s2 = (asExclusive_ == (i == 1));
-            Rect hit = widgets::drawRadioRow(canvas, toRect(rc), s2, (i == asHoverModeRow_),
-                                             kModeLabels[i], widgets::kTextFree, matrixRadioStyle());
-            asModeRows_[i] = toLayoutRect(hit);
+            asModeRows_[i] = drawSettingsRadio(canvas, rc, s2, (i == asHoverModeRow_),
+                                               kModeLabels[i], metrics_.text.body);
             y += rowH;
         }
         y += metrics_.space(SP_MD);
@@ -5416,16 +5442,15 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
 #else
 #ifdef MATRIX_HAVE_ALSA
     else if (sel == AudioBackend::Alsa) {
-        chromeText("Device:", c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Roman);
-        y += metrics_.text.body * 1.6f;
+        caption("Device:", CLR_TEXT_DIM);
         std::vector<std::string> labels;
         labels.push_back("(System default)");
         for (auto& d : asAlsaDevices_) labels.push_back(d.name);
         float listH = listHeightFor((int)labels.size());
         asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
-        asDeviceListRows_ = widgets::drawScrollList(canvas, toRect(asDeviceListArea_), labels,
-                                                    asAlsaSel_, (float)asDeviceScrollY_, listRowH,
-                                                    asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
+        asDeviceListRows_ = drawSettingsList(canvas, asDeviceListArea_, labels,
+                                            asAlsaSel_, (float)asDeviceScrollY_, listRowH,
+                                            asHoverDeviceRow_, metrics_.text.body);
         panels::drawScrollbar(canvas, asDeviceListArea_, (int)((float)labels.size() * listRowH),
                               asDeviceScrollY_, metrics_.scale);
         y += listH + metrics_.space(SP_MD);
@@ -5433,31 +5458,30 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
 #endif
 #ifdef MATRIX_HAVE_JACK
     else if (sel == AudioBackend::Jack) {
-        chromeText("Starting port:", c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Roman);
-        y += metrics_.text.body * 1.6f;
+        caption("Starting port:", CLR_TEXT_DIM);
         std::vector<std::string> labels;
         labels.push_back("(Auto-connect to first available ports)");
         for (auto& p : asJackPorts_) labels.push_back(p.portName);
         float listH = listHeightFor((int)labels.size());
         asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
-        asDeviceListRows_ = widgets::drawScrollList(canvas, toRect(asDeviceListArea_), labels,
-                                                    asJackSel_, (float)asDeviceScrollY_, listRowH,
-                                                    asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
+        asDeviceListRows_ = drawSettingsList(canvas, asDeviceListArea_, labels,
+                                            asJackSel_, (float)asDeviceScrollY_, listRowH,
+                                            asHoverDeviceRow_, metrics_.text.body);
         panels::drawScrollbar(canvas, asDeviceListArea_, (int)((float)labels.size() * listRowH),
                               asDeviceScrollY_, metrics_.scale);
         if (asJackPorts_.empty()) {
             Rect a = toRect(asDeviceListArea_);
-            chromeText("No running JACK server found (or no physical playback ports).",
-                      a.x + metrics_.space(22.0f), a.y + metrics_.space(98.0f),
-                      metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
+            panels::drawTerminusLabel(canvas,
+                "No running JACK server found (or no physical playback ports).",
+                a.x + metrics_.space(22.0f), a.y + metrics_.space(98.0f),
+                metrics_.text.body, a.w - metrics_.space(44.0f), lineH, toColor(CLR_TEXT_DIM));
         }
         y += listH + metrics_.space(SP_MD);
     }
 #endif
 #ifdef MATRIX_HAVE_BLUETOOTH
     else if (sel == AudioBackend::Bluetooth) {
-        chromeText("Headphones:", c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Roman);
-        y += metrics_.text.body * 1.6f;
+        caption("Headphones:", CLR_TEXT_DIM);
         std::vector<std::string> labels;
         for (auto& d : asBtDevices_) {
             // Three states, said on the row rather than discovered on Apply:
@@ -5465,33 +5489,32 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
             // one is the whole reason this backend can fail, so it is named
             // where the choice is made.
             std::string label = d.name;
-            if (!d.connected)  label += "  — not connected";
-            else if (d.busy)   label += "  — in use by another app";
+            if (!d.connected)  label += "  - not connected";
+            else if (d.busy)   label += "  - in use by another app";
             labels.push_back(std::move(label));
         }
         float listH = listHeightFor(std::max(1, (int)labels.size()));
         asDeviceListArea_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + listH) };
-        asDeviceListRows_ = widgets::drawScrollList(canvas, toRect(asDeviceListArea_), labels,
-                                                    asBtSel_, (float)asDeviceScrollY_, listRowH,
-                                                    asHoverDeviceRow_, widgets::kTextFree, matrixListStyle());
+        asDeviceListRows_ = drawSettingsList(canvas, asDeviceListArea_, labels,
+                                            asBtSel_, (float)asDeviceScrollY_, listRowH,
+                                            asHoverDeviceRow_, metrics_.text.body);
         panels::drawScrollbar(canvas, asDeviceListArea_, (int)((float)labels.size() * listRowH),
                               asDeviceScrollY_, metrics_.scale);
         if (asBtDevices_.empty()) {
             Rect a = toRect(asDeviceListArea_);
-            chromeText("No paired A2DP device. Pair and connect a pair of headphones first.",
-                      a.x + metrics_.space(22.0f), a.y + metrics_.space(98.0f),
-                      metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
+            panels::drawTerminusLabel(canvas,
+                "No paired A2DP device. Pair and connect a pair of headphones first.",
+                a.x + metrics_.space(22.0f), a.y + metrics_.space(98.0f),
+                metrics_.text.body, a.w - metrics_.space(44.0f), lineH, toColor(CLR_TEXT_DIM));
         }
         y += listH + metrics_.space(SP_MD);
 
         // The one thing this backend is not, stated where it is chosen rather
         // than left to the signal chain to reveal after a track has started.
-        chromeText("SBC is a lossy encode — this route can never be bit-perfect.",
-                  c.x + pad, y, metrics_.text.body, CLR_WARNING, FontStyle::Italic);
-        y += metrics_.text.body * 1.8f;
-        chromeText("Release the device in your sound server first; only one app can stream to it.",
-                  c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
-        y += metrics_.text.body * 1.6f + metrics_.space(SP_MD);
+        caption("SBC is a lossy encode - this route can never be bit-perfect.", CLR_WARNING);
+        caption("Release the device in your sound server first; only one app can stream to it.",
+                CLR_TEXT_DIM);
+        y += metrics_.space(SP_MD);
     }
 #endif
 #ifdef MATRIX_HAVE_AAUDIO
@@ -5502,15 +5525,10 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         // them.
         asDeviceListArea_ = {};
         asDeviceListRows_.clear();
-        chromeText("Android chooses the output route itself, and follows it when you",
-                  c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
-        y += metrics_.text.body * 1.4f;
-        chromeText("plug in headphones \xE2\x80\x94 there is no device to pick here.",
-                  c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
-        y += metrics_.text.body * 1.9f;
-        chromeText("16-bit output. Not a bit-perfect path for deeper sources.",
-                  c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
-        y += metrics_.space(SP_MD) + metrics_.text.body;
+        caption("Android chooses the output route itself, and follows it when you "
+                "plug in headphones - there is no device to pick here.", CLR_TEXT_DIM);
+        caption("16-bit output. Not a bit-perfect path for deeper sources.", CLR_TEXT_DIM);
+        y += metrics_.space(SP_MD);
 
         // The one thing on this route that CAN be chosen. Android owns which
         // device the audio goes to; it does not own which codec carries it
@@ -5525,23 +5543,22 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         // so a stale list rect would keep dead rows clickable).
         asDeviceListArea_ = {};
         asDeviceListRows_.clear();
-        chromeText("Playback goes through the AOAS service, which owns the USB",
-                  c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
-        y += metrics_.text.body * 1.4f;
-        chromeText("permission and the DAC's isochronous stream \xE2\x80\x94 bit-exact,",
-                  c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
-        y += metrics_.text.body * 1.4f;
-        chromeText("and silent across app switches. AOAS must be installed and",
-                  c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
-        y += metrics_.text.body * 1.4f;
-        chromeText("signed with the same key as this app. There is no device to pick here.",
-                  c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
-        y += metrics_.space(SP_MD) + metrics_.text.body;
+        caption("Playback goes through the AOAS service, which owns the USB "
+                "permission and the DAC's isochronous stream - bit-exact, "
+                "and silent across app switches. AOAS must be installed and "
+                "signed with the same key as this app. There is no device to pick here.",
+                CLR_TEXT_DIM);
+        y += metrics_.space(SP_MD);
     }
 #endif
 #endif
 
-    int by = (int)(content.bottom - (btnH + pad));   // btnH declared above — the list is sized against it
+    asBodyContentH_ = (int)(y - ((float)asBodyArea_.top + pad - (float)asBodyScrollY_));
+    asBodyScrollY_ = (int)clampScroll((float)asBodyScrollY_, (float)asBodyContentH_,
+                                      (float)(asBodyArea_.bottom - asBodyArea_.top));
+    canvas.restoreClip(bodyClip);
+
+    int by = (int)(content.bottom - (btnH + pad));
     auto asRects = panels::layoutButtonRow(content, pad, 1, metrics_.space(196.0f), 0.0f,
                                            metrics_.space(panels::kMinActionBtnW), by, (int)btnH);
     asBtnApply_ = asRects[0];
@@ -5633,44 +5650,30 @@ void PlayerWindow::drawBluetoothCodecSection(Canvas& canvas, const Rect& c, floa
     const bt_codec::Capability cap = asBtCap_;   // cached; see the declaration
     if (cap == bt_codec::Capability::Unavailable && btDevice_.empty()) return;
 
-    auto chromeText = [&](const std::string& s, float x, float yy, float sz,
-                          ColorRef col, FontStyle style) {
-        if (!drawTerminusText(canvas, s, x, yy, sz, toColor(col)))
-            canvas.textStyled(s, x, yy, sz, toColor(col), style);
+    const float maxW = c.w - 2.0f * pad;
+    const float lineH = metrics_.text.body * 1.5f;
+    auto caption = [&](const std::string& s, ColorRef col, float sz) {
+        y = panels::drawTerminusLabel(canvas, s, c.x + pad, y, sz, maxW, lineH, toColor(col));
     };
 
-    const float lineH = metrics_.text.body * 1.5f;
-    chromeText("Bluetooth codec", c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Bold);
-    y += lineH * 1.2f;
+    caption("Bluetooth codec", CLR_TEXT_DIM, metrics_.text.body);
 
     if (btDevice_.empty()) {
-        chromeText("No Bluetooth headphones connected.", c.x + pad, y,
-                  metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
-        y += lineH;
+        caption("No Bluetooth headphones connected.", CLR_TEXT_DIM, metrics_.text.body);
         return;
     }
 
-    // The device NAME is pure data — stays serif unconditionally, never
-    // attempts Terminus even though most Bluetooth names are ASCII.
-    canvas.textStyled(btDevice_.name, c.x + pad, y, metrics_.text.body,
-                      toColor(CLR_TEXT_PRIMARY), FontStyle::Roman);
-    y += lineH;
+    caption(btDevice_.name, CLR_TEXT_PRIMARY, metrics_.text.body);
 
     // What is actually running, always — this needs no permission and it is the
     // single most useful line on the page for a listener on Bluetooth.
     const std::string now = btActive_.valid() ? bt_codec::summary(btActive_)
                                               : std::string("unknown");
-    // LITERAL PREFIX + DATA (the negotiated codec summary) — unwrapped, per
-    // the two-part rule: "Now: SBC 44100Hz 16bit" must read exactly as the
-    // stack reports it, never reformatted.
-    canvas.textStyled("Now: " + now, c.x + pad, y, metrics_.text.body,
-                      toColor(btActive_.valid() ? CLR_WARNING : CLR_TEXT_DIM), FontStyle::Roman);
-    y += lineH * 1.3f;
+    caption("Now: " + now, btActive_.valid() ? CLR_WARNING : CLR_TEXT_DIM, metrics_.text.body);
 
     if (cap != bt_codec::Capability::Writable) {
-        chromeText("This phone has not granted codec control. Two ways to get it:",
-                  c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
-        y += lineH;
+        caption("This phone has not granted codec control. Two ways to get it:",
+                CLR_TEXT_DIM, metrics_.text.body);
 
         const float btnH = metrics_.space(50.0f);
         asBtEnableRc_ = { (int)(c.x + pad), (int)y,
@@ -5679,15 +5682,8 @@ void PlayerWindow::drawBluetoothCodecSection(Canvas& canvas, const Rect& c, floa
                            asHoverBtEnable_, metrics_.text.body, false, true);
         y += btnH + metrics_.space(SP_SM);
 
-        chromeText("...or, from a computer, once:", c.x + pad, y,
-                  metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
-        y += lineH;
-        // The literal adb command is DATA (it embeds this device's MAC) —
-        // stays serif unconditionally. It is also the one string on this
-        // page a listener may need to copy character-for-character.
-        canvas.textStyled(bt_codec::adbGrantCommand(), c.x + pad, y,
-                          metrics_.text.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Roman);
-        y += lineH * 1.4f;
+        caption("...or, from a computer, once:", CLR_TEXT_DIM, metrics_.text.body);
+        caption(bt_codec::adbGrantCommand(), CLR_TEXT_SECONDARY, metrics_.text.secondary);
         return;
     }
 
@@ -5707,12 +5703,11 @@ void PlayerWindow::drawBluetoothCodecSection(Canvas& canvas, const Rect& c, floa
     asBtCodecRows_.assign(asBtSelectable_.size(), LayoutRect{});
     for (int i = 0; i < (int)asBtSelectable_.size(); i++) {
         LayoutRect rc = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + rowH) };
-        Rect hit = widgets::drawRadioRow(canvas, toRect(rc),
-                                         asBtEdit_.codec == asBtSelectable_[i].id,
-                                         (i == asHoverBtCodecRow_),
-                                         asBtSelectable_[i].name,
-                                         widgets::kTextFree, matrixRadioStyle());
-        asBtCodecRows_[i] = toLayoutRect(hit);
+        asBtCodecRows_[i] = drawSettingsRadio(canvas, rc,
+                                              asBtEdit_.codec == asBtSelectable_[i].id,
+                                              (i == asHoverBtCodecRow_),
+                                              asBtSelectable_[i].name,
+                                              metrics_.text.body);
         y += rowH;
     }
     if (asBtSelectable_.empty()) {
@@ -5721,11 +5716,8 @@ void PlayerWindow::drawBluetoothCodecSection(Canvas& canvas, const Rect& c, floa
         // nothing would read as the second, which is a claim we cannot make.
         // LITERAL both before AND after the embedded device name — unwrapped
         // per the two-part rule; the name must not be re-cased mid-sentence.
-        canvas.textStyled("This phone will not say which codecs " + btDevice_.name +
-                          " supports, so none can be offered.",
-                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM),
-                          FontStyle::Italic);
-        y += lineH * 1.4f;
+        caption("This phone will not say which codecs " + btDevice_.name +
+                " supports, so none can be offered.", CLR_TEXT_DIM, metrics_.text.body);
     }
     y += metrics_.space(SP_SM);
 
@@ -5764,16 +5756,10 @@ void PlayerWindow::drawBluetoothCodecSection(Canvas& canvas, const Rect& c, floa
         y += btnH + metrics_.space(SP_SM);
     }
 
-    chromeText("Apply saves this against these headphones and re-applies it "
-              "whenever they reconnect.",
-              c.x + pad, y, metrics_.text.secondary, CLR_TEXT_DIM, FontStyle::Italic);
-    y += lineH;
-    if (!btNotice_.empty()) {
-        // An assembled runtime notice — data, stays serif unconditionally.
-        canvas.textStyled(btNotice_, c.x + pad, y, metrics_.text.secondary,
-                          toColor(CLR_WARNING), FontStyle::Italic);
-        y += lineH;
-    }
+    caption("Apply saves this against these headphones and re-applies it "
+            "whenever they reconnect.", CLR_TEXT_DIM, metrics_.text.secondary);
+    if (!btNotice_.empty())
+        caption(btNotice_, CLR_WARNING, metrics_.text.secondary);
 }
 
 // Returns true when the click was this section's. Each control cycles rather
@@ -6068,10 +6054,10 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     Rect c = toRect(content);
     float pad = metrics_.space(SP_LG);
     float y = c.y + pad;
-    auto chromeText = [&](const std::string& s, float x, float yy, float sz,
-                          ColorRef col, FontStyle style) {
-        if (!drawTerminusText(canvas, s, x, yy, sz, toColor(col)))
-            canvas.textStyled(s, x, yy, sz, toColor(col), style);
+    const float maxW = c.w - 2.0f * pad;
+    const float lineH = metrics_.text.secondary * 1.5f;
+    auto caption = [&](const std::string& s, ColorRef col, float sz) {
+        y = panels::drawTerminusLabel(canvas, s, c.x + pad, y, sz, maxW, lineH, toColor(col));
     };
 
     // Mono, because "32BB:0004" is an identifier, not a name. The family
@@ -6091,21 +6077,12 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
         eqAssignLineDirty_ = false;
     }
 
-    // Both lines are LITERAL PREFIX + RUNTIME DATA (a device key, a profile
-    // name) — the two-part rule (this plan's preamble) says leave these
-    // unconditionally serif, never attempt Terminus even though the data is
-    // usually ASCII: a profile's real name must not be re-cased.
-    canvas.textStyled(eqDeviceLine_, c.x + pad, y, metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Math);
-    y += metrics_.text.secondary * 1.6f;
-
-    canvas.textStyled(eqAssignLine_, c.x + pad, y, metrics_.text.secondary, toColor(CLR_ACCENT), FontStyle::Roman);
-    y += metrics_.text.secondary * 1.8f;
+    caption(eqDeviceLine_, CLR_TEXT_DIM, metrics_.text.secondary);
+    caption(eqAssignLine_, CLR_ACCENT, metrics_.text.secondary);
 
     if (eqBitperfectActive_) {
-        // A fixed literal (falls back — em dash).
-        chromeText("Bitperfect mode active \xE2\x80\x94 EQ applies once Reference EQ mode is enabled.",
-                  c.x + pad, y, metrics_.text.secondary, CLR_TEXT_DIM, FontStyle::Italic);
-        y += metrics_.text.secondary * 1.6f;
+        caption("Bitperfect mode active - EQ applies once Reference EQ mode is enabled.",
+                CLR_TEXT_DIM, metrics_.text.secondary);
     }
 
     // Two views over one list: the saved set, or the whole catalogue. This is
@@ -6137,19 +6114,11 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
                 canvas.rect(r.x, r.y + r.h - metrics_.stroke(2.0f), r.w,
                             metrics_.stroke(2.0f), toColor(CLR_ACCENT));
             const ColorRef col = active ? CLR_ACCENT : CLR_TEXT_SECONDARY;
-            // Centering needs the width BEFORE drawing, so terminusTextWidth
-            // is called first — the pattern the spec's API doc calls out.
-            const float tw = terminusTextWidth(label, metrics_.text.body);
-            if (tw >= 0.0f) {
-                drawTerminusText(canvas, label, r.x + std::max(0.0f, (r.w - tw) * 0.5f),
-                                 r.y + r.h * 0.5f - metrics_.text.body * 0.5f,
-                                 metrics_.text.body, toColor(col));
-            } else {
-                const float stw = canvas.textWidthStyled(label, metrics_.text.body, FontStyle::Roman);
-                canvas.textStyled(label, r.x + std::max(0.0f, (r.w - stw) * 0.5f),
-                                  r.y + r.h * 0.5f - metrics_.text.body * 0.5f,
-                                  metrics_.text.body, toColor(col), FontStyle::Roman);
-            }
+            const std::string shown = terminusEllipsize(label, metrics_.text.body, r.w);
+            const float tw = terminusTextWidth(shown, metrics_.text.body);
+            drawTerminusText(canvas, shown, r.x + std::max(0.0f, (r.w - tw) * 0.5f),
+                             r.y + r.h * 0.5f - metrics_.text.body * 0.5f,
+                             metrics_.text.body, toColor(col));
         };
         tab(eqTabMine_, "My Drivers", eqShowMine_,  eqHoverTabMine_);
         tab(eqTabAll_,  "All Profiles",  !eqShowMine_, eqHoverTabAll_);
@@ -6159,8 +6128,8 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     }
 
     eqSearchRc_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + metrics_.space(55.0f)) };
-    drawSearchField(canvas, eqSearchRc_, eqSearch_, eqSearchFocused_, "Search profiles",
-                    metrics_.text.body);
+    panels::drawTerminusSearchField(canvas, eqSearchRc_, eqSearch_, eqSearchFocused_,
+                                    "Search profiles", metrics_.text.body);
     y += metrics_.space(55.0f) + metrics_.space(16.0f);
 
     float btnH = metrics_.space(58.0f);
@@ -6180,7 +6149,7 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
         // picking between them was guesswork. AutoEq's own list says
         // "by <source>" / "on <rig>" for exactly this reason.
         if (!eqRecommendedOnly_ || eqShowMine_) {
-            label += "  Â·  " + all[idx].source;
+            label += " / " + all[idx].source;
             if (!all[idx].rig.empty()) label += " / " + all[idx].rig;
         }
         // In the saved view, say which rows are pinned — pinned is the one
@@ -6189,7 +6158,7 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
             for (const auto& h : eqHeadphones_) {
                 if (h.name == all[idx].name && h.source == all[idx].source &&
                     h.form == all[idx].form) {
-                    if (h.pinned) label += "  \xE2\x80\x94 pinned";
+                    if (h.pinned) label += " - pinned";
                     break;
                 }
             }
@@ -6197,9 +6166,9 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
         labels.push_back(label);
     }
     float eqRowH = panelRowH();
-    eqListRows_ = widgets::drawScrollList(canvas, toRect(listArea), labels,
-                                          eqSelectedRow_, (float)eqScrollY_, eqRowH,
-                                          eqHoverRow_, widgets::kTextFree, matrixListStyle());
+    eqListRows_ = drawSettingsList(canvas, listArea, labels,
+                                   eqSelectedRow_, (float)eqScrollY_, eqRowH,
+                                   eqHoverRow_, metrics_.text.body);
     panels::drawScrollbar(canvas, listArea, (int)((float)labels.size() * eqRowH), eqScrollY_, metrics_.scale);
     if (labels.empty()) {
         Rect a = toRect(listArea);
@@ -6210,12 +6179,14 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
         // wrap uniformly regardless of which one is picked at runtime.
         const char* msg = eqShowMine_
             ? (eqSearch_.empty()
-                 ? "No drivers saved yet \xE2\x80\x94 pick a profile under All Profiles "
+                 ? "No drivers saved yet - pick a profile under All Profiles "
                    "and listen for a minute."
                  : "No saved drivers match.")
             : "No profiles match.";
-        chromeText(msg, a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
-                  metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
+        panels::drawTerminusLabel(canvas, msg,
+                                  a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
+                                  metrics_.text.body, a.w - metrics_.space(44.0f),
+                                  metrics_.text.body * 1.4f, toColor(CLR_TEXT_DIM));
     }
 
     int by = (int)(content.bottom - (btnH + pad));
@@ -6855,11 +6826,9 @@ void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
     Rect c = toRect(content);
     float pad = metrics_.space(SP_LG);
 
-    // A filesystem path is DATA and stays serif unconditionally — it is
-    // exactly the string the two-part rule (see the plan's preamble) exists
-    // to protect, regardless of whether it happens to be pure ASCII today.
-    canvas.textStyled(truncateToWidth(canvas, fpCurrentDir_, c.w - 2.0f * pad, metrics_.text.secondary, FontStyle::Math),
-                      c.x + pad, c.y + pad, metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Math);
+    const float pathMaxW = c.w - 2.0f * pad;
+    drawTerminusText(canvas, terminusEllipsize(fpCurrentDir_, metrics_.text.secondary, pathMaxW),
+                     c.x + pad, c.y + pad, metrics_.text.secondary, toColor(CLR_TEXT_DIM));
 
     float listTop = pad * 2.0f + metrics_.text.secondary * 1.4f;
     float btnH = metrics_.space(58.0f);
@@ -6873,17 +6842,16 @@ void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
     labels.insert(labels.end(), fpEntries_.begin(), fpEntries_.end());
 
     float fpRowH = panelRowH();
-    fpListRows_ = widgets::drawScrollList(canvas, toRect(listArea), labels,
-                                          -1, (float)fpScrollY_, fpRowH,
-                                          fpHoverRow_, widgets::kTextFree, matrixListStyle());
+    fpListRows_ = drawSettingsList(canvas, listArea, labels,
+                                   -1, (float)fpScrollY_, fpRowH,
+                                   fpHoverRow_, metrics_.text.body);
     panels::drawScrollbar(canvas, listArea, (int)((float)labels.size() * fpRowH), fpScrollY_, metrics_.scale);
     if (labels.empty()) {
         Rect a = toRect(listArea);
-        const float ex = a.x + metrics_.space(22.0f), ey = a.y + metrics_.space(22.0f);
-        if (!drawTerminusText(canvas, "No subfolders here.", ex, ey,
-                              metrics_.text.body, toColor(CLR_TEXT_DIM)))
-            canvas.textStyled("No subfolders here.", ex, ey,
-                              metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        panels::drawTerminusLabel(canvas, "No subfolders here.",
+                                  a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
+                                  metrics_.text.body, a.w - metrics_.space(44.0f),
+                                  metrics_.text.body * 1.4f, toColor(CLR_TEXT_DIM));
     }
 
     float btnW = metrics_.space(326.0f);
@@ -8839,21 +8807,13 @@ void PlayerWindow::drawInterfaceSettings(Canvas& canvas, const LayoutRect& area)
     LayoutRect content = panels::drawHeader(canvas, area, "Interface",
                                             metrics_.scale, metrics_.text.header, isCloseRc_, true);
     Rect c = toRect(content);
-    // A fixed-literal helper: Terminus, falling back to the original serif
-    // draw automatically (several of these sentences use an em dash and are
-    // EXPECTED to fall back — see the plan's preamble).
-    auto chromeText = [&](const std::string& s, float x, float y, float sz,
-                          ColorRef col, FontStyle style) {
-        if (!drawTerminusText(canvas, s, x, y, sz, toColor(col)))
-            canvas.textStyled(s, x, y, sz, toColor(col), style);
-    };
-
     const float pad  = metrics_.space(SP_LG);
     const float rowH = panelRowH();
+    const float maxW = c.w - 2.0f * pad;
     float y = c.y + pad;
 
-    chromeText("Scrolling", c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Bold);
-    y += rowH;
+    y = panels::drawTerminusLabel(canvas, "Scrolling", c.x + pad, y, metrics_.text.body,
+                                  maxW, rowH, toColor(CLR_TEXT_DIM));
 
     // Two toggles, not one, and the reason is worth stating on screen as well
     // as in the code: a finger and a wheel start from opposite conventions, so
@@ -8863,11 +8823,11 @@ void PlayerWindow::drawInterfaceSettings(Canvas& canvas, const LayoutRect& area)
     struct Row { LayoutRect* rc; bool on; const char* title; const char* onS; const char* offS; };
     const Row rows[] = {
         { &isRowTouch_, scrollInvertTouch_, "Touch",
-          "Reversed — the content moves against your finger",
-          "Natural — the content follows your finger" },
+          "Reversed - the content moves against your finger",
+          "Natural - the content follows your finger" },
         { &isRowWheel_, scrollInvertWheel_, "Mouse wheel",
-          "Reversed — wheel away scrolls down",
-          "Traditional — wheel away scrolls up" },
+          "Reversed - wheel away scrolls down",
+          "Traditional - wheel away scrolls up" },
     };
     for (int i = 0; i < 2; i++) {
         LayoutRect rc = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + rowH) };
@@ -8875,26 +8835,20 @@ void PlayerWindow::drawInterfaceSettings(Canvas& canvas, const LayoutRect& area)
         if (isHoverRow_ == i)
             canvas.rect((float)rc.left, (float)rc.top, (float)(rc.right - rc.left),
                         (float)(rc.bottom - rc.top), toColor(CLR_HOVER), UI_CORNER_RADIUS);
-        widgets::ToggleStyle st;
-        st.onColor   = toColor(CLR_ACCENT);
-        st.offColor  = toColor(CLR_SEPARATOR);
-        st.knobColor = toColor(CLR_TEXT_PRIMARY);
-        // widgets::drawToggle draws its own title ("Touch"/"Mouse wheel")
-        // internally — a vk_canvas submodule call, left untouched. It stays
-        // serif; see the plan's Task 7 "explicitly not done" list.
-        widgets::drawToggle(canvas, toRect(rc), rows[i].on, rows[i].title, st);
+        panels::drawTerminusToggle(canvas, rc, rows[i].on, rows[i].title, metrics_.text.body,
+                                   toColor(CLR_ACCENT), toColor(CLR_SEPARATOR),
+                                   toColor(CLR_TEXT_PRIMARY), toColor(CLR_TEXT_PRIMARY));
         y += rowH;
-        // The state in words, under the switch. Both sentences use an em
-        // dash, so they fall back to serif every time — expected, not a bug.
-        chromeText(rows[i].on ? rows[i].onS : rows[i].offS,
-                  c.x + pad + metrics_.space(SP_MD), y, metrics_.text.secondary,
-                  CLR_TEXT_DIM, FontStyle::Italic);
-        y += rowH * 0.9f;
+        y = panels::drawTerminusLabel(canvas, rows[i].on ? rows[i].onS : rows[i].offS,
+                                      c.x + pad + metrics_.space(SP_MD), y,
+                                      metrics_.text.secondary, maxW - metrics_.space(SP_MD),
+                                      rowH * 0.9f, toColor(CLR_TEXT_DIM));
     }
 
     y += rowH * 0.5f;
-    chromeText("Flicking a list throws it, and it slows to a stop on its own.",
-              c.x + pad, y, metrics_.text.secondary, CLR_TEXT_DIM, FontStyle::Italic);
+    panels::drawTerminusLabel(canvas, "Flicking a list throws it, and it slows to a stop on its own.",
+                              c.x + pad, y, metrics_.text.secondary, maxW,
+                              metrics_.text.secondary * 1.4f, toColor(CLR_TEXT_DIM));
 
     // No inline Close button here: this function is only ever called from
     // drawActivePanel's switch, which draws Close for every panel right

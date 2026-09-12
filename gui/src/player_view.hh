@@ -673,7 +673,7 @@ private:
     bool mfChanged_     = false;
     LayoutRect mfListArea_ = {}, mfCloseRc_ = {}, mfBtnRemove_ = {}, mfBtnDone_ = {};
     bool mfHoverClose_ = false, mfHoverRemove_ = false, mfHoverDone_ = false;
-    std::vector<widgets::ListRow> mfListRows_;  // cached during draw, read by hit-test
+    std::vector<panels::TerminusListRow> mfListRows_;  // cached during draw, read by hit-test
 
     // Audio Settings. asBackendOptions_ lists whichever backends this build
     // actually has (USB always; WASAPI on Windows; ALSA/JACK on Linux, each
@@ -687,8 +687,11 @@ private:
     int  asUsbSel_      = -1;
     int  asHoverDeviceRow_ = -1;
     int  asDeviceScrollY_ = 0;
+    int  asBodyScrollY_   = 0;
+    int  asBodyContentH_  = 0;
+    LayoutRect asBodyArea_ = {};
     LayoutRect asDeviceListArea_ = {};
-    std::vector<widgets::ListRow> asDeviceListRows_;  // cached during draw, read by hit-test
+    std::vector<panels::TerminusListRow> asDeviceListRows_;  // cached during draw, read by hit-test
     // ── Bluetooth codec, inside the Audio Settings panel ────────────────────
     // It lives HERE, and not on a screen of its own, because it is a property
     // of the output — the same panel that already chooses the output. The old
@@ -768,7 +771,7 @@ private:
     void markEqAssignmentDirty() { eqAssignLineDirty_ = true; }
     LayoutRect eqSearchRc_ = {}, eqListArea_ = {}, eqCloseRc_ = {}, eqBtnAssign_ = {}, eqBtnClear_ = {};
     bool eqHoverClose_ = false, eqHoverAssign_ = false, eqHoverClear_ = false;
-    std::vector<widgets::ListRow> eqListRows_;  // cached during draw, read by hit-test
+    std::vector<panels::TerminusListRow> eqListRows_;  // cached during draw, read by hit-test
     // Two views over ONE list and ONE selection: the full catalogue, or just
     // the saved headphones. Pinning and removing live only here — the sidebar
     // stays a pure switcher, with no room for a per-row × at 277px wide.
@@ -796,7 +799,7 @@ private:
     int  fpScrollY_    = 0;
     LayoutRect fpListArea_ = {}, fpCloseRc_ = {}, fpBtnSelect_ = {}, fpBtnCancel_ = {};
     bool fpHoverClose_ = false, fpHoverSelect_ = false, fpHoverCancel_ = false;
-    std::vector<widgets::ListRow> fpListRows_;  // cached during draw, read by hit-test
+    std::vector<panels::TerminusListRow> fpListRows_;  // cached during draw, read by hit-test
 
     // Grid state. gridTileSize_/gridArtSize_ are recomputed every recalcLayout()
     // from a fixed target column count and the available width (see
