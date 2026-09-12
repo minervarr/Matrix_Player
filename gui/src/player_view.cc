@@ -188,6 +188,12 @@ static std::vector<panels::TerminusListRow> drawSettingsList(
                                           s.pillText, s.selectedBar);
 }
 
+// OverlayRasterizer::MAX_CURVES is 8192 and extra curves are silently dropped.
+// Terminus is one curve per pixel-run; the 32 px strike at body size blows
+// that budget on a Settings list (Close/buttons vanished, labels cut mid-
+// glyph). targetPx < 24 selects the 16 px strike at x1.
+static float terminusBodyPx(float body) { return std::min(body, 23.0f); }
+
 // drawSearchField() moved to bar_a.cc: bar A's search box needs it, and a
 // second copy is how two search fields start looking different.
 
@@ -1650,15 +1656,17 @@ void PlayerWindow::drawFrame() {
         // so labels came out visibly off-center both ways.
         auto centeredIn = [&](const std::string& s, const Rect& r, float sz,
                               ColorRef clr, FontStyle st) {
-            float w = canvas.textWidthStyled(s, sz, st);
-            canvas.textStyled(s, r.x + std::max(0.0f, (r.w - w) * 0.5f),
-                              r.y + r.h * 0.5f - sz * 0.5f, sz, toColor(clr), st);
+            (void)st;
+            const std::string shown = terminusEllipsize(s, sz, r.w);
+            const float w = terminusTextWidth(shown, sz);
+            drawTerminusText(canvas, shown, r.x + std::max(0.0f, (r.w - w) * 0.5f),
+                             r.y + r.h * 0.5f - sz * 0.5f, sz, toColor(clr));
         };
         {
             // space(24), not a bare 24: the rows below it are scaled, so a
             // fixed title pad drifts toward them as the display grows.
             Rect hdr = { g.x, g.y + metrics_.space(24.0f), g.w, metrics_.text.header };
-            centeredIn("Settings", hdr, metrics_.text.header, CLR_TEXT_PRIMARY, FontStyle::Bold);
+            centeredIn("Settings", hdr, terminusBodyPx(metrics_.text.header), CLR_TEXT_PRIMARY, FontStyle::Bold);
         }
 
         bool bp = bitperfectMode_.load();
@@ -1691,7 +1699,7 @@ void PlayerWindow::drawFrame() {
             canvas.rect(r.x + r.w - bt, r.y, bt, r.h, toColor(border));
             ColorRef textClr = (item.idx == 3 && bp) ? CLR_TEXT_DIM
                              : isActiveModeRow ? CLR_ACCENT : CLR_TEXT_PRIMARY;
-            centeredIn(item.label, r, metrics_.text.body, textClr, FontStyle::Roman);
+            centeredIn(item.label, r, terminusBodyPx(metrics_.text.body), textClr, FontStyle::Roman);
         }
     }
 
@@ -4832,12 +4840,11 @@ void PlayerWindow::drawActivePanel(Canvas& canvas, const LayoutRect& area) {
     case SettingsPanel::None:
         break;
     }
-    // Covers Manage Folders, Audio Settings, EQ Settings and the folder
-    // picker's Close in one place. "Close" is a fixed literal — Terminus,
-    // no fallback expected.
-    if (closeRc)
-        panels::drawButton(canvas, *closeRc, "Close", hoverClose, metrics_.text.body,
-                           false, true);
+    // Close is painted inside panels::drawHeader when terminusChrome is set
+    // (every Settings panel). Drawing it again here used to double-stamp the
+    // Terminus rects (a sliced "E" on Interface). Hover still uses *closeRc.
+    (void)closeRc;
+    (void)hoverClose;
 }
 
 void PlayerWindow::onPanelMouseMove(int x, int y) {
@@ -5172,7 +5179,7 @@ void PlayerWindow::onManageFolders() {
 
 void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
     LayoutRect content = panels::drawHeader(canvas, area, "Music Folders", metrics_.scale,
-                                            metrics_.text.header, mfCloseRc_, true);
+                                            metrics_.text.header, mfCloseRc_, true, mfHoverClose_);
     float pad = metrics_.space(SP_LG);
     float btnH = metrics_.space(58.0f);
 
@@ -5337,12 +5344,18 @@ void PlayerWindow::onAudioSettings() {
 
 void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     LayoutRect content = panels::drawHeader(canvas, area, "Audio Output Settings", metrics_.scale,
-                                            metrics_.text.header, asCloseRc_, true);
+                                            metrics_.text.header, asCloseRc_, true, asHoverClose_);
     Rect c = toRect(content);
     float pad = metrics_.space(SP_LG);
     float btnH = metrics_.space(58.0f);
     asBodyArea_ = { content.left, content.top, content.right,
                     (int)((float)content.bottom - pad - btnH - pad) };
+    int byApply = (int)(content.bottom - (btnH + pad));
+    auto asRects = panels::layoutButtonRow(content, pad, 1, metrics_.space(196.0f), 0.0f,
+                                           metrics_.space(panels::kMinActionBtnW), byApply, (int)btnH);
+    asBtnApply_ = asRects[0];
+    panels::drawButton(canvas, asBtnApply_, "Apply", asHoverApply_, metrics_.text.body, true, true);
+
     const auto bodyClip = canvas.saveClip();
     canvas.setClip((float)asBodyArea_.left, (float)asBodyArea_.top,
                    (float)(asBodyArea_.right - asBodyArea_.left),
@@ -5377,7 +5390,6 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     // With 10+ ALSA devices that fixed height hid everything past row 6 behind
     // a scroll with no affordance — drawScrollList clips silently and draws no
     // scrollbar, so a DAC in row 7 simply looked absent.
-    float listTop = y + metrics_.text.body * 1.6f;   // every branch draws its label first
     float listBottomLimit = (float)asBodyArea_.bottom;
 #ifdef _WIN32
     if (sel == AudioBackend::Wasapi)             // the Mode radios sit below the list
@@ -5387,7 +5399,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     // 3-row floor keeps the empty-state messages below readable.
     auto listHeightFor = [&](int rowCount) {
         float minH  = 3.0f * listRowH;
-        float avail = std::max(listBottomLimit - listTop, minH);
+        float avail = std::max(listBottomLimit - y, minH);
         return std::clamp((float)rowCount * listRowH, minH, avail);
     };
 
@@ -5557,12 +5569,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     asBodyScrollY_ = (int)clampScroll((float)asBodyScrollY_, (float)asBodyContentH_,
                                       (float)(asBodyArea_.bottom - asBodyArea_.top));
     canvas.restoreClip(bodyClip);
-
-    int by = (int)(content.bottom - (btnH + pad));
-    auto asRects = panels::layoutButtonRow(content, pad, 1, metrics_.space(196.0f), 0.0f,
-                                           metrics_.space(panels::kMinActionBtnW), by, (int)btnH);
-    asBtnApply_ = asRects[0];
-    panels::drawButton(canvas, asBtnApply_, "Apply", asHoverApply_, metrics_.text.body, true, true);
+    canvas.clearClip();
 }
 
 // ── Bluetooth codec, inside the Audio Settings panel ────────────────────────
@@ -6050,7 +6057,7 @@ const EqHeadphone* PlayerWindow::eqSelectedHeadphone() const {
 void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     ensureEqProfiles();
     LayoutRect content = panels::drawHeader(canvas, area, "EQ / AutoEQ Profiles", metrics_.scale,
-                                            metrics_.text.header, eqCloseRc_, true);
+                                            metrics_.text.header, eqCloseRc_, true, eqHoverClose_);
     Rect c = toRect(content);
     float pad = metrics_.space(SP_LG);
     float y = c.y + pad;
@@ -6133,6 +6140,30 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     y += metrics_.space(55.0f) + metrics_.space(16.0f);
 
     float btnH = metrics_.space(58.0f);
+    int by = (int)(content.bottom - (btnH + pad));
+    int eqBtnCount = eqShowMine_ ? 3 : 2;
+    auto eqBtnRects = panels::layoutButtonRow(content, pad, eqBtnCount, metrics_.space(277.0f),
+                                              metrics_.space(SP_MD), metrics_.space(panels::kMinActionBtnW),
+                                              by, (int)btnH);
+    eqBtnAssign_ = eqBtnRects[0];
+    if (eqShowMine_) {
+        const EqHeadphone* sel = eqSelectedHeadphone();
+        eqBtnPin_    = eqBtnRects[1];
+        eqBtnRemove_ = eqBtnRects[2];
+        eqBtnClear_  = {};
+        panels::drawButton(canvas, eqBtnAssign_, "Select", eqHoverAssign_, metrics_.text.body, true, true);
+        panels::drawButton(canvas, eqBtnPin_,
+                           (sel && sel->pinned) ? "Unpin" : "Pin",
+                           eqHoverPin_, metrics_.text.body, false, true);
+        panels::drawButton(canvas, eqBtnRemove_, "Remove", eqHoverRemove_, metrics_.text.body, false, true);
+    } else {
+        eqBtnClear_  = eqBtnRects[1];
+        eqBtnPin_    = {};
+        eqBtnRemove_ = {};
+        panels::drawButton(canvas, eqBtnAssign_, "Assign to Device", eqHoverAssign_, metrics_.text.body, true, true);
+        panels::drawButton(canvas, eqBtnClear_, "Clear", eqHoverClear_, metrics_.text.body, false, true);
+    }
+
     LayoutRect listArea = { content.left, (int)y, content.right, (int)(content.bottom - (btnH + pad * 2)) };
     eqListArea_ = listArea;
 
@@ -6187,34 +6218,6 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
                                   a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
                                   metrics_.text.body, a.w - metrics_.space(44.0f),
                                   metrics_.text.body * 1.4f, toColor(CLR_TEXT_DIM));
-    }
-
-    int by = (int)(content.bottom - (btnH + pad));
-    // Slot 0 is the PRIMARY and sits hard right, matching Manage Folders,
-    // Audio Settings and the folder picker. Secondaries fill leftward. This
-    // panel used to lay out left-to-right, so it was the one page of four
-    // where the green button changed sides.
-    int eqBtnCount = eqShowMine_ ? 3 : 2;
-    auto eqBtnRects = panels::layoutButtonRow(content, pad, eqBtnCount, metrics_.space(277.0f),
-                                              metrics_.space(SP_MD), metrics_.space(panels::kMinActionBtnW),
-                                              by, (int)btnH);
-    eqBtnAssign_ = eqBtnRects[0];
-    if (eqShowMine_) {
-        const EqHeadphone* sel = eqSelectedHeadphone();
-        eqBtnPin_    = eqBtnRects[1];
-        eqBtnRemove_ = eqBtnRects[2];
-        eqBtnClear_  = {};   // not offered here; Clear belongs to the device view
-        panels::drawButton(canvas, eqBtnAssign_, "Select", eqHoverAssign_, metrics_.text.body, true, true);
-        panels::drawButton(canvas, eqBtnPin_,
-                           (sel && sel->pinned) ? "Unpin" : "Pin",
-                           eqHoverPin_, metrics_.text.body, false, true);
-        panels::drawButton(canvas, eqBtnRemove_, "Remove", eqHoverRemove_, metrics_.text.body, false, true);
-    } else {
-        eqBtnClear_  = eqBtnRects[1];
-        eqBtnPin_    = {};
-        eqBtnRemove_ = {};
-        panels::drawButton(canvas, eqBtnAssign_, "Assign to Device", eqHoverAssign_, metrics_.text.body, true, true);
-        panels::drawButton(canvas, eqBtnClear_, "Clear", eqHoverClear_, metrics_.text.body, false, true);
     }
 }
 
@@ -6822,7 +6825,7 @@ void PlayerWindow::onAddFolder() {
 
 void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
     LayoutRect content = panels::drawHeader(canvas, area, "Select Music Folder", metrics_.scale,
-                                            metrics_.text.header, fpCloseRc_, true);
+                                            metrics_.text.header, fpCloseRc_, true, fpHoverClose_);
     Rect c = toRect(content);
     float pad = metrics_.space(SP_LG);
 
@@ -6832,6 +6835,16 @@ void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
 
     float listTop = pad * 2.0f + metrics_.text.secondary * 1.4f;
     float btnH = metrics_.space(58.0f);
+    float btnW = metrics_.space(326.0f);
+    int by = (int)(content.bottom - (btnH + pad));
+    auto fpRects = panels::layoutEdgePair(
+        content, pad, btnW, btnW,
+        metrics_.space(panels::kMinActionBtnW), metrics_.space(SP_MD), by, (int)btnH);
+    fpBtnCancel_ = fpRects.first;
+    fpBtnSelect_ = fpRects.second;
+    panels::drawButton(canvas, fpBtnCancel_, "Cancel", fpHoverCancel_, metrics_.text.body, false, true);
+    panels::drawButton(canvas, fpBtnSelect_, "Select This Folder", fpHoverSelect_, metrics_.text.body, true, true);
+
     LayoutRect listArea = { content.left, (int)(content.top + listTop),
                             content.right, (int)(content.bottom - (btnH + pad * 2.0f)) };
     fpListArea_ = listArea;
@@ -6853,16 +6866,6 @@ void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
                                   metrics_.text.body, a.w - metrics_.space(44.0f),
                                   metrics_.text.body * 1.4f, toColor(CLR_TEXT_DIM));
     }
-
-    float btnW = metrics_.space(326.0f);
-    int by = (int)(content.bottom - (btnH + pad));
-    auto fpRects = panels::layoutEdgePair(
-        content, pad, btnW, btnW,
-        metrics_.space(panels::kMinActionBtnW), metrics_.space(SP_MD), by, (int)btnH);
-    fpBtnCancel_ = fpRects.first;
-    fpBtnSelect_ = fpRects.second;
-    panels::drawButton(canvas, fpBtnCancel_, "Cancel", fpHoverCancel_, metrics_.text.body, false, true);
-    panels::drawButton(canvas, fpBtnSelect_, "Select This Folder", fpHoverSelect_, metrics_.text.body, true, true);
 }
 
 // ── Album / Track selection (simplified for custom UI) ──────────────────────
@@ -8805,7 +8808,8 @@ void PlayerWindow::onInterfaceSettings() {
 
 void PlayerWindow::drawInterfaceSettings(Canvas& canvas, const LayoutRect& area) {
     LayoutRect content = panels::drawHeader(canvas, area, "Interface",
-                                            metrics_.scale, metrics_.text.header, isCloseRc_, true);
+                                            metrics_.scale, metrics_.text.header, isCloseRc_, true,
+                                            isHoverClose_);
     Rect c = toRect(content);
     const float pad  = metrics_.space(SP_LG);
     const float rowH = panelRowH();

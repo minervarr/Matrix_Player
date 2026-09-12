@@ -90,7 +90,7 @@ float drawTerminusLabel(Canvas& canvas, const std::string& text,
 // as drawButton above.
 LayoutRect drawHeader(Canvas& canvas, const LayoutRect& area, const std::string& title,
                       float scale, float headerTextSize, LayoutRect& closeRc,
-                      bool terminusChrome = false);
+                      bool terminusChrome = false, bool closeHover = false);
 
 // Overflow indicator for a widgets::drawScrollList viewport: a thin track +
 // proportional thumb docked inside the list's right edge. Draws nothing when

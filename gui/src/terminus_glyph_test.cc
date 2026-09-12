@@ -32,14 +32,16 @@ int main() {
     // The one glyph bar A draws exists in both strikes and is not blank.
     const terminus::Pick small = terminus::pickStrike(U'S', 20.0f);
     const terminus::Pick big   = terminus::pickStrike(U'S', 30.0f);
-    assert(small.glyph && small.glyph->cellW == 8  && small.glyph->cellH == 16);
-    assert(big.glyph   && big.glyph->cellW   == 16 && big.glyph->cellH   == 32);
+    assert(small.glyph && small.glyph->cellW == 8 && small.glyph->cellH == 16);
+    assert(big.glyph   && big.glyph->cellW   == 8 && big.glyph->cellH   == 16);
 
-    // Integer scale only, chosen from the target height.
+    // Integer scale only, chosen from the target height. Always the 16 px
+    // strike -- x2 at 30 px is the same tallness as the old 32 px x1, with
+    // half the curves.
     assert(small.scale == 1);                                   // < 24 -> 16 px x1
-    assert(big.scale == 1);                                     // 30 -> 32 px x1
-    assert(terminus::pickStrike(U'S', 48.0f).scale == 2);       // round(1.5)
-    assert(terminus::pickStrike(U'S', 100.0f).scale == 3);      // round(3.125)
+    assert(big.scale == 2);                                     // 30 -> 16 px x2
+    assert(terminus::pickStrike(U'S', 48.0f).scale == 3);       // round(48/16)
+    assert(terminus::pickStrike(U'S', 100.0f).scale == 6);      // round(100/16)
     assert(terminus::pickStrike(U'S', 1.0f).scale >= 1);        // never 0
 
     // A glyph that was not baked is reported, not drawn as garbage. `Q` was

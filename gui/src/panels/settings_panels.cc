@@ -62,7 +62,7 @@ void drawButton(Canvas& canvas, const LayoutRect& rc, const std::string& label,
 
 LayoutRect drawHeader(Canvas& canvas, const LayoutRect& area, const std::string& title,
                       float scale, float headerTextSize, LayoutRect& closeRc,
-                      bool terminusChrome) {
+                      bool terminusChrome, bool closeHover) {
     Rect a = toRect(area);
     canvas.rect(a.x, a.y, a.w, a.h, toColor(CLR_BG_MAIN));
 
@@ -85,6 +85,12 @@ LayoutRect drawHeader(Canvas& canvas, const LayoutRect& area, const std::string&
 
     closeRc = { (int)(area.right - closeW - closeMargin), (int)(area.top + (headerH - closeH) * 0.5f),
                 (int)(area.right - closeMargin),          (int)(area.top + (headerH + closeH) * 0.5f) };
+    // Drawn HERE, before the panel body floods the curve buffer with Terminus
+    // pixel-rects. Close used to be painted at the end of drawActivePanel, and
+    // a Settings page with a list dropped it (and the action buttons) while
+    // Manage Folders -- almost no body glyphs -- still showed it.
+    if (terminusChrome)
+        drawButton(canvas, closeRc, "Close", closeHover, headerTextSize * 0.6f, false, true);
 
     return { area.left, (int)(area.top + headerH), area.right, area.bottom };
 }

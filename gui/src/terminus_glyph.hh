@@ -34,7 +34,9 @@ struct Pick {
 };
 
 // The strike and integer scale for `cp` drawn about `targetPx` tall: the 16 px
-// strike at x1 below 24 px, otherwise the 32 px strike at round(target / 32).
+// strike at x1 below 24 px, otherwise the 16 px strike at round(target / 16).
+// The 32 px strike is still baked; running text does not use it (twice the
+// rows = twice the curves, and OverlayRasterizer drops past 8192).
 Pick pickStrike(char32_t cp, float targetPx);
 
 // Device-pixel rectangles relative to the glyph's top-left, one per run of set

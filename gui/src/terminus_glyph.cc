@@ -15,13 +15,17 @@ const Glyph* find(const Glyph (&table)[N], char32_t cp) {
 } // namespace
 
 Pick pickStrike(char32_t cp, float targetPx) {
+    // Always the 16 px strike, integer scale. The 32 px strike has twice the
+    // rows and therefore twice the run-length rects for the same on-screen
+    // size; OverlayRasterizer silently drops curves past 8192, which is how
+    // Settings lists ate Close/Apply. 16 px at x2 is 32 px tall and half the
+    // curves. Integer scale is the bitmap rule -- never a fractional one.
     Pick p;
+    p.glyph = find(kBold16, cp);
     if (targetPx < 24.0f) {
-        p.glyph = find(kBold16, cp);
         p.scale = 1;
     } else {
-        p.glyph = find(kBold32, cp);
-        p.scale = std::max(1, (int)std::lround(targetPx / 32.0f));
+        p.scale = std::max(1, (int)std::lround(targetPx / 16.0f));
     }
     return p;
 }
