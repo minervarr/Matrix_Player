@@ -8793,15 +8793,22 @@ void PlayerWindow::onInterfaceSettings() {
 
 void PlayerWindow::drawInterfaceSettings(Canvas& canvas, const LayoutRect& area) {
     LayoutRect content = panels::drawHeader(canvas, area, "Interface",
-                                            metrics_.scale, metrics_.text.header, isCloseRc_);
+                                            metrics_.scale, metrics_.text.header, isCloseRc_, true);
     Rect c = toRect(content);
+    // A fixed-literal helper: Terminus, falling back to the original serif
+    // draw automatically (several of these sentences use an em dash and are
+    // EXPECTED to fall back — see the plan's preamble).
+    auto chromeText = [&](const std::string& s, float x, float y, float sz,
+                          ColorRef col, FontStyle style) {
+        if (!drawTerminusText(canvas, s, x, y, sz, toColor(col)))
+            canvas.textStyled(s, x, y, sz, toColor(col), style);
+    };
 
     const float pad  = metrics_.space(SP_LG);
     const float rowH = panelRowH();
     float y = c.y + pad;
 
-    canvas.textStyled("Scrolling", c.x + pad, y, metrics_.text.body,
-                      toColor(CLR_TEXT_DIM), FontStyle::Bold);
+    chromeText("Scrolling", c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Bold);
     y += rowH;
 
     // Two toggles, not one, and the reason is worth stating on screen as well
@@ -8828,22 +8835,31 @@ void PlayerWindow::drawInterfaceSettings(Canvas& canvas, const LayoutRect& area)
         st.onColor   = toColor(CLR_ACCENT);
         st.offColor  = toColor(CLR_SEPARATOR);
         st.knobColor = toColor(CLR_TEXT_PRIMARY);
+        // widgets::drawToggle draws its own title ("Touch"/"Mouse wheel")
+        // internally — a vk_canvas submodule call, left untouched. It stays
+        // serif; see the plan's Task 7 "explicitly not done" list.
         widgets::drawToggle(canvas, toRect(rc), rows[i].on, rows[i].title, st);
         y += rowH;
-        // The state in words, under the switch, in the value colour the rest of
-        // the app uses for a setting's current reading.
-        canvas.textStyled(rows[i].on ? rows[i].onS : rows[i].offS,
-                          c.x + pad + metrics_.space(SP_MD), y, metrics_.text.secondary,
-                          toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        // The state in words, under the switch. Both sentences use an em
+        // dash, so they fall back to serif every time — expected, not a bug.
+        chromeText(rows[i].on ? rows[i].onS : rows[i].offS,
+                  c.x + pad + metrics_.space(SP_MD), y, metrics_.text.secondary,
+                  CLR_TEXT_DIM, FontStyle::Italic);
         y += rowH * 0.9f;
     }
 
     y += rowH * 0.5f;
-    canvas.textStyled("Flicking a list throws it, and it slows to a stop on its own.",
-                      c.x + pad, y, metrics_.text.secondary,
-                      toColor(CLR_TEXT_DIM), FontStyle::Italic);
+    chromeText("Flicking a list throws it, and it slows to a stop on its own.",
+              c.x + pad, y, metrics_.text.secondary, CLR_TEXT_DIM, FontStyle::Italic);
 
-    panels::drawButton(canvas, isCloseRc_, "Close", isHoverClose_, metrics_.text.body);
+    // No inline Close button here: this function is only ever called from
+    // drawActivePanel's switch, which draws Close for every panel right
+    // after (the shared *closeRc call at the end of drawActivePanel). A
+    // second, redundant draw used to sit here — harmless while both drew
+    // through the MSDF text layer, but visibly broken now that Terminus
+    // draws as raw overlapping rects: two identical Close labels overlapping
+    // pixel-for-pixel left only the first row of the second draw's "E"
+    // showing, discovered via a headless capture during this change.
 }
 
 void PlayerWindow::drawSignalChain(Canvas& canvas, const LayoutRect& area) {
