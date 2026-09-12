@@ -51,6 +51,35 @@ void runs(const Glyph& g, int scale, std::vector<Run>& out) {
     }
 }
 
+int leftBearing(const Glyph& g) {
+    int lo = g.cellW;
+    for (int row = 0; row < g.cellH; ++row) {
+        const std::uint32_t bits = g.rows[row];
+        if (!bits) continue;
+        for (int b = 0; b < g.cellW; ++b)
+            if ((bits >> b) & 1u) { if (b < lo) lo = b; break; }
+    }
+    if (lo >= g.cellW) return 0;   // empty (space)
+    return lo;
+}
+
+int advance(const Glyph& g, int scale) {
+    const int s = std::max(1, scale);
+    int lo = g.cellW, hi = -1;
+    for (int row = 0; row < g.cellH; ++row) {
+        const std::uint32_t bits = g.rows[row];
+        if (!bits) continue;
+        for (int b = 0; b < g.cellW; ++b) {
+            if ((bits >> b) & 1u) {
+                if (b < lo) lo = b;
+                if (b > hi) hi = b;
+            }
+        }
+    }
+    if (hi < 0) return g.cellW * s;                 // space: full cell
+    return std::max(1, (hi - lo + 1) + 1) * s;      // ink + 1 px bearing
+}
+
 bool resolveText(const std::string& text, float targetPx,
                  std::vector<const Glyph*>& out, int& outScale) {
     const std::string folded = terminusFold(text);
@@ -119,7 +148,7 @@ float terminusTextWidth(const std::string& text, float targetPx) {
     int scale = 1;
     if (!terminus::resolveText(text, targetPx, glyphs, scale)) return 0.0f;
     float total = 0.0f;
-    for (const terminus::Glyph* g : glyphs) total += (float)(g->cellW * scale);
+    for (const terminus::Glyph* g : glyphs) total += (float)terminus::advance(*g, scale);
     return total;
 }
 
@@ -138,8 +167,15 @@ std::vector<std::string> terminusWrap(const std::string& text, float targetPx, f
     const std::string s = terminusFold(text);
     std::vector<std::string> out;
     if (s.empty()) return out;
-    const float cell = terminusTextWidth("X", targetPx);
-    const int maxC = std::max(1, (int)std::floor((maxW + 1e-4f) / std::max(cell, 1.0f)));
+
+    auto fits = [&](const std::string& t) {
+        return terminusTextWidth(t, targetPx) <= maxW + 1e-4f;
+    };
+    auto takePrefix = [&](const std::string& word) -> size_t {
+        size_t n = 0;
+        while (n < word.size() && fits(word.substr(0, n + 1))) ++n;
+        return std::max<size_t>(n, 1);
+    };
 
     std::vector<std::string> words;
     std::string w;
@@ -157,11 +193,11 @@ std::vector<std::string> terminusWrap(const std::string& text, float targetPx, f
         if (!line.empty()) { out.push_back(line); line.clear(); }
     };
     for (const std::string& word : words) {
-        if ((int)word.size() > maxC) {
+        if (!fits(word)) {
             flush();
             size_t p = 0;
             while (p < word.size()) {
-                const size_t n = std::min((size_t)maxC, word.size() - p);
+                const size_t n = takePrefix(word.substr(p));
                 if (p + n < word.size()) {
                     out.push_back(word.substr(p, n));
                     p += n;
@@ -173,7 +209,7 @@ std::vector<std::string> terminusWrap(const std::string& text, float targetPx, f
             continue;
         }
         if (line.empty()) { line = word; continue; }
-        if ((int)(line.size() + 1 + word.size()) <= maxC) {
+        if (fits(line + " " + word)) {
             line += ' ';
             line += word;
         } else {

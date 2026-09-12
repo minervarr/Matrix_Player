@@ -64,6 +64,11 @@ int main() {
     assert(terminusTextWidth("", 20.0f) == 0.0f);
     assert(terminusTextWidth("Done", 20.0f) > 0.0f);
     assert(terminusTextWidth("done", 20.0f) == terminusTextWidth("DONE", 20.0f));  // case-folded
+    // Optical advance: I is a thin stem, not a full cell. AAUDIO must be
+    // narrower than six ems or the D-I hole is still the monospace cell.
+    assert(terminusTextWidth("I", 20.0f) < terminusTextWidth("M", 20.0f));
+    assert(terminusTextWidth("AAUDIO", 20.0f) < 6.0f * terminusTextWidth("M", 20.0f));
+    assert(terminusTextWidth("AAUDIO", 20.0f) > 0.0f);
 
     assert(terminusFoldCp(U'-') == '-');
     assert(terminusFoldCp(0x2014) == '-');          // em dash

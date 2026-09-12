@@ -44,6 +44,14 @@ Pick pickStrike(char32_t cp, float targetPx);
 struct Run { int x, y, w, h; };
 void runs(const Glyph& g, int scale, std::vector<Run>& out);
 
+// Horizontal advance of `g` at `scale`, in device pixels. Ink bounding box
+// plus 1 px side bearing -- not the monospace cell -- so "AAUDIO" does not
+// open a hole around I. Space (no ink) still advances a full cell. Integer.
+int advance(const Glyph& g, int scale);
+// Columns of empty pixels to the left of the ink. Draw by subtracting
+// leftBearing * scale from the pen so the ink starts at the pen.
+int leftBearing(const Glyph& g);
+
 // Resolves every character of `text` against the strike `targetPx` picks,
 // after terminusFold (ASCII lowercase to capital, dashes/dots to ASCII,
 // everything else to '?'). Always succeeds for any UTF-8 input: folding made

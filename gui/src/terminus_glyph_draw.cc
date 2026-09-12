@@ -31,9 +31,10 @@ bool drawTerminusText(Canvas& c, const std::string& text, float x, float y,
     std::vector<terminus::Run> rs;
     for (const terminus::Glyph* g : glyphs) {
         terminus::runs(*g, scale, rs);
+        const float ox = pen - (float)(terminus::leftBearing(*g) * scale);
         for (const terminus::Run& r : rs)
-            c.rect(pen + (float)r.x, oy + (float)r.y, (float)r.w, (float)r.h, col);
-        pen += (float)(g->cellW * scale);
+            c.rect(ox + (float)r.x, oy + (float)r.y, (float)r.w, (float)r.h, col);
+        pen += (float)terminus::advance(*g, scale);
     }
     return true;
 }
