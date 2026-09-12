@@ -26,7 +26,15 @@ except ImportError as e:
 HERE = os.path.dirname(os.path.abspath(__file__))
 HDR_OUT = os.path.join(HERE, "..", "..", "gui", "src", "terminus_glyphs.gen.h")
 STRIKES = [16, 32]      # the only strikes that are integer multiples of 8x16
-GLYPHS = "SF"           # Settings, Find. Add characters here, rerun, commit both.
+# The full printable-ASCII set MINUS lowercase (0x20 space through 0x7E '~',
+# skipping 'a'-'z'): drawTerminusText folds ASCII lowercase to its capital's
+# glyph at lookup time, so baking lowercase too would double the table for
+# entries nothing ever looks up. Baking the WHOLE set up front, rather than
+# one letter at a time the way `S`/`F` were, means a future Settings copy
+# change never needs a re-bake -- only a genuinely new (non-ASCII) character
+# would. Verified empirically during planning: all 69 chars bake cleanly at
+# both strikes, no grey pixels, no missing glyphs (see the design spec).
+GLYPHS = "".join(chr(c) for c in range(0x20, 0x7F) if not (0x61 <= c <= 0x7A))
 
 
 def bake(size, ch):
@@ -53,7 +61,7 @@ def bake(size, ch):
             if v:
                 bits |= 1 << x            # bit 0 is the LEFTMOST pixel
         rows.append(bits)
-    if not any(rows):
+    if not any(rows) and ch != " ":
         sys.exit(f"{path}: {ch!r} baked empty")
     return cw, size, rows
 

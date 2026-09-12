@@ -18,3 +18,22 @@ bool drawTerminusGlyph(Canvas& c, const LayoutRect& rc, char32_t cp, float targe
         c.rect(ox + (float)r.x, oy + (float)r.y, (float)r.w, (float)r.h, col);
     return true;
 }
+
+bool drawTerminusText(Canvas& c, const std::string& text, float x, float y,
+                      float targetPx, const Color& col) {
+    std::vector<const terminus::Glyph*> glyphs;
+    int scale = 1;
+    if (!terminus::resolveText(text, targetPx, glyphs, scale)) return false;
+    if (glyphs.empty()) return true;   // nothing to draw; not a failure
+    const float cellH = (float)(glyphs[0]->cellH * scale);
+    const float oy = std::floor(y + (targetPx - cellH) * 0.5f);
+    float pen = std::floor(x);
+    std::vector<terminus::Run> rs;
+    for (const terminus::Glyph* g : glyphs) {
+        terminus::runs(*g, scale, rs);
+        for (const terminus::Run& r : rs)
+            c.rect(pen + (float)r.x, oy + (float)r.y, (float)r.w, (float)r.h, col);
+        pen += (float)(g->cellW * scale);
+    }
+    return true;
+}

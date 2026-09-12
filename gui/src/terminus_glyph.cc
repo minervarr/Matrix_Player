@@ -47,4 +47,30 @@ void runs(const Glyph& g, int scale, std::vector<Run>& out) {
     }
 }
 
+bool resolveText(const std::string& text, float targetPx,
+                 std::vector<const Glyph*>& out, int& outScale) {
+    out.clear();
+    out.reserve(text.size());
+    outScale = 1;
+    for (unsigned char ch : text) {
+        const char32_t up = (ch >= 'a' && ch <= 'z') ? (char32_t)(ch - 'a' + 'A')
+                                                     : (char32_t)ch;
+        const Pick p = pickStrike(up, targetPx);
+        if (!p.glyph) return false;
+        out.push_back(p.glyph);
+        outScale = p.scale;   // identical for every glyph at this targetPx
+    }
+    return true;
+}
+
 } // namespace terminus
+
+float terminusTextWidth(const std::string& text, float targetPx) {
+    if (text.empty()) return 0.0f;
+    std::vector<const terminus::Glyph*> glyphs;
+    int scale = 1;
+    if (!terminus::resolveText(text, targetPx, glyphs, scale)) return -1.0f;
+    float total = 0.0f;
+    for (const terminus::Glyph* g : glyphs) total += (float)(g->cellW * scale);
+    return total;
+}
