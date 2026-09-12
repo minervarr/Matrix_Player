@@ -1,5 +1,18 @@
 # Settings-panel chrome in Terminus — design
 
+> **Superseded in part, 2026-09-11 (later the same day).** The chrome-only /
+> serif-fallback rule below is void. Settings is a Terminus surface end to
+> end: titles, buttons, radios, lists, search, toggles, descriptions, folder
+> paths, device names, EQ profile names. Computer Modern does not appear
+> inside the five Settings panels. Unrepresentable scalars fold (em dash →
+> `-`, middle dot → `/`) or become `?`. List/radio/toggle/search drawing for
+> Settings lives in `gui/src/panels/settings_panels.cc` so `vk_canvas` is not
+> patched. Audio Output docks Apply below a clipped, scrollable body. The
+> EQ Every-source separator is ASCII `" / "`, never a double-encoded `·`.
+> Keep this file unedited below the banner — same convention as
+> `2026-08-08-android-native-port-design.md`. The live rule is in
+> `CLAUDE.md` and `docs/UI_DESIGN_SYSTEM.md` §8.6.
+
 **Goal:** Draw Settings' fixed UI vocabulary — panel headers, button labels,
 section captions, toggle words, short status lines — in Terminus (the bitmap
 face already used for bar A's Settings and Find cells), in ALL CAPS, so the

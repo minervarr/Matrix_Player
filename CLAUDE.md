@@ -1413,17 +1413,25 @@ draw/click/hover logic lives in `player_view.cc` (`drawManageFolders`,
 `drawAudioSettings`, `drawEqSettings`, `drawFolderPicker`, and the
 `onPanel*` dispatchers).
 
-**Settings' chrome (headers, buttons, fixed captions) draws in Terminus**,
-ALL CAPS, via `drawTerminusText`/`terminusTextWidth`
-(`gui/src/terminus_glyph.hh`) — see `docs/superpowers/specs/
-2026-09-11-settings-terminus-chrome-design.md` and its plan for the full
-design. The classification rule is NOT "is this ASCII" alone: a call site
-built from runtime data (a device name, a database key, an assembled
-notice) is written as a plain, permanently-serif `canvas.textStyled` call
-regardless of that data's script — only a call whose whole string is a
-compile-time literal is wrapped. `panels::drawHeader`/`panels::drawButton`
-take an opt-in `terminusChrome` flag for exactly this reason: `EqSwitcher`
-and the signal chain reuse the same two widgets and must stay untouched.
+**Settings is a Terminus surface.** Everything inside the five Settings
+panels — titles, buttons, radio labels, descriptions, file-manager rows,
+EQ profile names, search, toggles — draws in Terminus (1-bit bitmap,
+integer scale, ALL CAPS), never Computer Modern. Unrepresentable
+codepoints fold (em dash / en dash → `-`, middle dot / bullet → `/`) or
+become `?`; `terminusFold` is the one table. Paragraphs wrap at a cell
+(`terminusWrap`); single-line rows ellipsize at a cell
+(`terminusEllipsize`). List/radio/toggle/search for Settings are
+app-side (`panels::drawTerminusScrollList` and siblings in
+`settings_panels.cc`) because `widgets::drawScrollList` /
+`drawRadioRow` / `drawToggle` live in the vk_canvas submodule and always
+call `Canvas::text`. Audio Output docks Apply below a clipped,
+scrollable body so codec copy cannot paint over it (Terminus is rects;
+the renderer emits glyphs last). `panels::drawHeader` /
+`panels::drawButton` still take `terminusChrome = false` by default so
+EqSwitcher and the signal chain stay serif. Bar A's Find field stays
+`drawSearchField`. See `docs/superpowers/specs/
+2026-09-11-settings-terminus-chrome-design.md` (superseded in part:
+chrome-only / serif fallback is void).
 
 ### Visual language
 

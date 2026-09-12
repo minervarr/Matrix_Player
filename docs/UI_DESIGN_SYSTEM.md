@@ -21,7 +21,8 @@ the look, update both the code and this doc.
    no native buttons, lists, scrollbars, or dialogs — settings are full-page
    overlays, not modal windows.
 2. **Dark, serif-typographic, single-accent.** A near-black stack of surfaces,
-   New Computer Modern (a serif) for all text, and exactly one accent — a vivid green
+   New Computer Modern (a serif) for music-facing text, Terminus (a 1-bit
+   bitmap, ALL CAPS) for the Settings surface, and exactly one accent — a vivid green
    (`CLR_ACCENT` `rgb(0,200,83)`).
 3. **Square throughout.** Artwork, structural surfaces, and interactive chrome
    (buttons, hover/selection highlights, search fields) all use square corners
@@ -712,36 +713,27 @@ and only the GUI can tell them apart.
 Full-page overlays. Shared `panels::drawHeader` (Bold title + Close) and
 `panels::drawButton` (filled: primary = solid accent + dark label; secondary =
 elevated grey), both at `UI_CORNER_RADIUS`. Row lists via
-`widgets::drawScrollList` and radio groups via `widgets::drawRadioRow` (framework
-widgets) styled by `matrixListStyle()` / `matrixRadioStyle()` — the shared
-selection family. Search fields via §8.6's shared field.
+`panels::drawTerminusScrollList` and radio groups via
+`panels::drawTerminusRadioRow` — Terminus, same selection family
+(`matrixListStyle()` / `matrixRadioStyle()` colours). Search via
+`panels::drawTerminusSearchField`. The vk_canvas `widgets::drawScrollList` /
+`drawRadioRow` stay for Playlists and other music-facing lists.
 
-**Settings' chrome draws in Terminus, ALL CAPS** — headers, buttons, section
-captions, toggle words, short status lines — reusing the SAME bitmap face
-bar A's Settings/Find cells use (§8.1a), extended from "one centred glyph"
-to running text: `terminus::resolveText`/`terminusTextWidth`/
-`drawTerminusText` (`gui/src/terminus_glyph.hh`), over the FULL printable
-ASCII set (baked once, not one letter at a time — a future Settings copy
-change never needs a re-bake). `panels::drawHeader`/`panels::drawButton` take
-`terminusChrome = false` by default (so `EqSwitcher` and the signal chain,
-which reuse the same widgets, are untouched); only the five Settings panels
-pass `true`.
-
-**The classification rule is not "is this ASCII."** A call whose whole string
-is a compile-time literal is wrapped — Terminus if every character resolves,
-serif automatically otherwise (several literals use an em dash and are
-EXPECTED to fall back — that is the mechanism protecting non-Latin text, not
-a special case). A call whose string is built by concatenating a literal with
-RUNTIME data (a device name, a database key, a profile name, an assembled
-notice) is written as a plain, permanently-serif call instead, regardless of
-whether that data happens to be ASCII today — `"Now: " + codecSummary` must
-read exactly as the Bluetooth stack reports it, never reformatted, and a
-device's real name must never be shouted. Two things stay serif for a
-different reason entirely: anything drawn by `widgets::drawScrollList`,
-`drawRadioRow` or `drawToggle` (their own internal label text is a `vk_canvas`
-submodule call, off-limits to change) — which is also where the actual row
-DATA (folder paths, device names, profile names) already lives, so the two
-reasons point the same way.
+**Settings is a Terminus surface, ALL CAPS** — titles, buttons, radio labels,
+descriptions, file-manager rows, EQ names, search, toggles. Same 1-bit
+bitmap face bar A's Settings cell uses (§8.1a), as running text:
+`terminusFold` / `terminusWrap` / `terminusEllipsize` /
+`drawTerminusText` (`gui/src/terminus_glyph.hh`). Unrepresentable
+codepoints fold (em dash → `-`, middle dot → `/`) or become `?`; there
+is no Computer Modern inside the five panels. List/radio/toggle/search
+are `panels::drawTerminusScrollList` and siblings in
+`settings_panels.cc` — not `widgets::drawScrollList` / `drawRadioRow` /
+`drawToggle`, which live in the vk_canvas submodule and always call
+`Canvas::text`. `panels::drawHeader`/`panels::drawButton` take
+`terminusChrome = false` by default so EqSwitcher and the signal chain
+stay serif. Audio Output docks Apply below a clipped, scrollable body
+so overlapping copy cannot hide it (Terminus is rects; glyphs draw last).
+EQ Every-source rows use ASCII `" / "` between name, source and rig.
 
 **One rendering trap this exposed:** Terminus draws as raw overlapping
 rectangles (run-length fills), not through the MSDF text layer plain
