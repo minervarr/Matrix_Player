@@ -4807,8 +4807,12 @@ void PlayerWindow::drawActivePanel(Canvas& canvas, const LayoutRect& area) {
     case SettingsPanel::None:
         break;
     }
+    // Covers Manage Folders, Audio Settings, EQ Settings and the folder
+    // picker's Close in one place. "Close" is a fixed literal — Terminus,
+    // no fallback expected.
     if (closeRc)
-        panels::drawButton(canvas, *closeRc, "Close", hoverClose, metrics_.text.body);
+        panels::drawButton(canvas, *closeRc, "Close", hoverClose, metrics_.text.body,
+                           false, true);
 }
 
 void PlayerWindow::onPanelMouseMove(int x, int y) {

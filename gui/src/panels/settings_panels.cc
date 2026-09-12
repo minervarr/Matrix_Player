@@ -3,6 +3,7 @@
 #include "canvas.hh"
 #include "widgets.hh"
 #include "msdf.hh"
+#include "terminus_glyph.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -27,7 +28,7 @@ Color lift(ColorRef c, int amt) {
 namespace panels {
 
 void drawButton(Canvas& canvas, const LayoutRect& rc, const std::string& label,
-                 bool hover, float textSize, bool primary) {
+                 bool hover, float textSize, bool primary, bool terminusChrome) {
     (void)textSize;   // drawFitButton sizes the label to the button proportionally
     Rect r = toRect(rc);
     float radius = UI_CORNER_RADIUS;   // uniform rounding — reads as a real button
@@ -41,20 +42,42 @@ void drawButton(Canvas& canvas, const LayoutRect& rc, const std::string& label,
         bg = lift(CLR_BG_MAIN, hover ? 56 : 34);
         fg = toColor(CLR_TEXT_PRIMARY);
     }
+
+    if (terminusChrome) {
+        // Terminus is monospace, so there is no shrink-to-fit curve to
+        // replicate: either the label fits on one line at drawFitButton's
+        // own nominal size (r.h * 0.34, "Canvas::button's label proportion")
+        // or the ORIGINAL serif path — with its shrink and two-line logic —
+        // runs unchanged below. Every label a Settings button actually uses
+        // fits at this size (terminus_glyph_test enumerates them); this is
+        // the escape hatch for the day one doesn't.
+        const float s    = r.h * 0.34f;
+        const float maxW = r.w - r.h * 0.35f;
+        const float tw   = terminusTextWidth(label, s);
+        if (tw >= 0.0f && tw <= maxW) {
+            canvas.rect(r.x, r.y, r.w, r.h, bg, radius);
+            drawTerminusText(canvas, label, r.x + (r.w - tw) * 0.5f,
+                             r.y + (r.h - s) * 0.5f, s, fg);
+            return;
+        }
+    }
     // Single line: shrink-then-ellipsis rather than wrapping a button label.
     widgets::drawFitButton(canvas, r, label, bg, fg, radius, widgets::kTextFit, false);
 }
 
 LayoutRect drawHeader(Canvas& canvas, const LayoutRect& area, const std::string& title,
-                      float scale, float headerTextSize, LayoutRect& closeRc) {
+                      float scale, float headerTextSize, LayoutRect& closeRc,
+                      bool terminusChrome) {
     Rect a = toRect(area);
     canvas.rect(a.x, a.y, a.w, a.h, toColor(CLR_BG_MAIN));
 
     // Values authored at the 1080 reference height (see gui/src/ui_metrics.hh);
     // `scale` is UiMetrics::scale, 1.0 there.
     float headerH = 91.0f * scale;
-    canvas.textStyled(title, a.x + 39.0f * scale, a.y + headerH * 0.5f - headerTextSize * 0.5f,
-                      headerTextSize, toColor(CLR_TEXT_PRIMARY), FontStyle::Bold);
+    const float tx = a.x + 39.0f * scale, ty = a.y + headerH * 0.5f - headerTextSize * 0.5f;
+    const Color primaryCol = toColor(CLR_TEXT_PRIMARY);
+    if (!terminusChrome || !drawTerminusText(canvas, title, tx, ty, headerTextSize, primaryCol))
+        canvas.textStyled(title, tx, ty, headerTextSize, primaryCol, FontStyle::Bold);
     canvas.rect(a.x, a.y + headerH, a.w, std::max(1.0f, std::round(scale)),
                 toColor(CLR_SEPARATOR));
 

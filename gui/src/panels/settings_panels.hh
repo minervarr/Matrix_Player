@@ -43,14 +43,23 @@ namespace panels {
 
 // A small rectangular action button (Done/Cancel/Remove/Assign/Select),
 // right-aligned text inside a border, matching the settings-page row style.
+// terminusChrome: draw the label in Terminus (ALL CAPS, falling back to the
+// normal fit-button label automatically if it isn't representable or
+// doesn't fit at Terminus's own nominal size) instead of the proportional
+// serif label. Default false so EqSwitcher/drawSignalChain, which also call
+// this, are untouched -- only Settings passes true.
 void drawButton(Canvas& canvas, const LayoutRect& rc, const std::string& label,
-                 bool hover, float textSize, bool primary = false);
+                 bool hover, float textSize, bool primary = false,
+                 bool terminusChrome = false);
 
 // Panel chrome: title bar + "Close" affordance. Returns the content area
 // below the header (what the panel's own drawing should treat as its rect).
 // closeRc receives the close button's hit-test rect (top-right corner).
+// terminusChrome: draw the title in Terminus. Same default-false reasoning
+// as drawButton above.
 LayoutRect drawHeader(Canvas& canvas, const LayoutRect& area, const std::string& title,
-                      float scale, float headerTextSize, LayoutRect& closeRc);
+                      float scale, float headerTextSize, LayoutRect& closeRc,
+                      bool terminusChrome = false);
 
 // Overflow indicator for a widgets::drawScrollList viewport: a thin track +
 // proportional thumb docked inside the list's right edge. Draws nothing when
