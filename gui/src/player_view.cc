@@ -5311,12 +5311,21 @@ void PlayerWindow::onAudioSettings() {
 }
 
 void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
-    LayoutRect content = panels::drawHeader(canvas, area, "Audio Output Settings", metrics_.scale, metrics_.text.header, asCloseRc_);
+    LayoutRect content = panels::drawHeader(canvas, area, "Audio Output Settings", metrics_.scale,
+                                            metrics_.text.header, asCloseRc_, true);
     Rect c = toRect(content);
     float pad = metrics_.space(SP_LG);
     float y = c.y + pad;
+    // Every direct call in this function is a fixed literal (no runtime data
+    // concatenated in) — see drawBluetoothCodecSection below for the ones
+    // that are NOT and must stay unwrapped.
+    auto chromeText = [&](const std::string& s, float x, float yy, float sz,
+                          ColorRef col, FontStyle style) {
+        if (!drawTerminusText(canvas, s, x, yy, sz, toColor(col)))
+            canvas.textStyled(s, x, yy, sz, toColor(col), style);
+    };
 
-    canvas.textStyled("Output backend:", c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+    chromeText("Output backend:", c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Roman);
     y += metrics_.text.body * 1.8f;
 
     float rowH = metrics_.space(55.0f);
@@ -5355,7 +5364,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     };
 
     if (sel == AudioBackend::Usb) {
-        canvas.textStyled("USB DAC:", c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+        chromeText("USB DAC:", c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Roman);
         y += metrics_.text.body * 1.6f;
         std::vector<std::string> labels;
         for (auto& d : asUsbDevices_) labels.push_back(d.name);
@@ -5368,14 +5377,14 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
                               asDeviceScrollY_, metrics_.scale);
         if (labels.empty()) {
             Rect a = toRect(asDeviceListArea_);
-            canvas.textStyled("No USB audio devices found.", a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
-                              metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+            chromeText("No USB audio devices found.", a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
+                      metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
         }
         y += listH + metrics_.space(SP_MD);
     }
 #ifdef _WIN32
     else if (sel == AudioBackend::Wasapi) {
-        canvas.textStyled("Device:", c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+        chromeText("Device:", c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Roman);
         y += metrics_.text.body * 1.6f;
         std::vector<std::string> labels;
         labels.push_back("(Default device)");
@@ -5389,7 +5398,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
                               asDeviceScrollY_, metrics_.scale);
         y += listH + metrics_.space(SP_MD);
 
-        canvas.textStyled("Mode:", c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+        chromeText("Mode:", c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Roman);
         y += metrics_.text.body * 1.6f;
         static const char* kModeLabels[2] = {
             "Shared \xE2\x80\x94 other apps can play simultaneously",
@@ -5407,7 +5416,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
 #else
 #ifdef MATRIX_HAVE_ALSA
     else if (sel == AudioBackend::Alsa) {
-        canvas.textStyled("Device:", c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+        chromeText("Device:", c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Roman);
         y += metrics_.text.body * 1.6f;
         std::vector<std::string> labels;
         labels.push_back("(System default)");
@@ -5424,7 +5433,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
 #endif
 #ifdef MATRIX_HAVE_JACK
     else if (sel == AudioBackend::Jack) {
-        canvas.textStyled("Starting port:", c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+        chromeText("Starting port:", c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Roman);
         y += metrics_.text.body * 1.6f;
         std::vector<std::string> labels;
         labels.push_back("(Auto-connect to first available ports)");
@@ -5438,17 +5447,16 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
                               asDeviceScrollY_, metrics_.scale);
         if (asJackPorts_.empty()) {
             Rect a = toRect(asDeviceListArea_);
-            canvas.textStyled("No running JACK server found (or no physical playback ports).",
-                              a.x + metrics_.space(22.0f), a.y + metrics_.space(98.0f),
-                              metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+            chromeText("No running JACK server found (or no physical playback ports).",
+                      a.x + metrics_.space(22.0f), a.y + metrics_.space(98.0f),
+                      metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
         }
         y += listH + metrics_.space(SP_MD);
     }
 #endif
 #ifdef MATRIX_HAVE_BLUETOOTH
     else if (sel == AudioBackend::Bluetooth) {
-        canvas.textStyled("Headphones:", c.x + pad, y, metrics_.text.body,
-                          toColor(CLR_TEXT_DIM), FontStyle::Roman);
+        chromeText("Headphones:", c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Roman);
         y += metrics_.text.body * 1.6f;
         std::vector<std::string> labels;
         for (auto& d : asBtDevices_) {
@@ -5470,19 +5478,19 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
                               asDeviceScrollY_, metrics_.scale);
         if (asBtDevices_.empty()) {
             Rect a = toRect(asDeviceListArea_);
-            canvas.textStyled("No paired A2DP device. Pair and connect a pair of headphones first.",
-                              a.x + metrics_.space(22.0f), a.y + metrics_.space(98.0f),
-                              metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+            chromeText("No paired A2DP device. Pair and connect a pair of headphones first.",
+                      a.x + metrics_.space(22.0f), a.y + metrics_.space(98.0f),
+                      metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
         }
         y += listH + metrics_.space(SP_MD);
 
         // The one thing this backend is not, stated where it is chosen rather
         // than left to the signal chain to reveal after a track has started.
-        canvas.textStyled("SBC is a lossy encode — this route can never be bit-perfect.",
-                          c.x + pad, y, metrics_.text.body, toColor(CLR_WARNING), FontStyle::Italic);
+        chromeText("SBC is a lossy encode — this route can never be bit-perfect.",
+                  c.x + pad, y, metrics_.text.body, CLR_WARNING, FontStyle::Italic);
         y += metrics_.text.body * 1.8f;
-        canvas.textStyled("Release the device in your sound server first; only one app can stream to it.",
-                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        chromeText("Release the device in your sound server first; only one app can stream to it.",
+                  c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
         y += metrics_.text.body * 1.6f + metrics_.space(SP_MD);
     }
 #endif
@@ -5494,14 +5502,14 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         // them.
         asDeviceListArea_ = {};
         asDeviceListRows_.clear();
-        canvas.textStyled("Android chooses the output route itself, and follows it when you",
-                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        chromeText("Android chooses the output route itself, and follows it when you",
+                  c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
         y += metrics_.text.body * 1.4f;
-        canvas.textStyled("plug in headphones \xE2\x80\x94 there is no device to pick here.",
-                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        chromeText("plug in headphones \xE2\x80\x94 there is no device to pick here.",
+                  c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
         y += metrics_.text.body * 1.9f;
-        canvas.textStyled("16-bit output. Not a bit-perfect path for deeper sources.",
-                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        chromeText("16-bit output. Not a bit-perfect path for deeper sources.",
+                  c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
         y += metrics_.space(SP_MD) + metrics_.text.body;
 
         // The one thing on this route that CAN be chosen. Android owns which
@@ -5517,17 +5525,17 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
         // so a stale list rect would keep dead rows clickable).
         asDeviceListArea_ = {};
         asDeviceListRows_.clear();
-        canvas.textStyled("Playback goes through the AOAS service, which owns the USB",
-                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        chromeText("Playback goes through the AOAS service, which owns the USB",
+                  c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
         y += metrics_.text.body * 1.4f;
-        canvas.textStyled("permission and the DAC's isochronous stream \xE2\x80\x94 bit-exact,",
-                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        chromeText("permission and the DAC's isochronous stream \xE2\x80\x94 bit-exact,",
+                  c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
         y += metrics_.text.body * 1.4f;
-        canvas.textStyled("and silent across app switches. AOAS must be installed and",
-                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        chromeText("and silent across app switches. AOAS must be installed and",
+                  c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
         y += metrics_.text.body * 1.4f;
-        canvas.textStyled("signed with the same key as this app. There is no device to pick here.",
-                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        chromeText("signed with the same key as this app. There is no device to pick here.",
+                  c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
         y += metrics_.space(SP_MD) + metrics_.text.body;
     }
 #endif
@@ -5537,7 +5545,7 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     auto asRects = panels::layoutButtonRow(content, pad, 1, metrics_.space(196.0f), 0.0f,
                                            metrics_.space(panels::kMinActionBtnW), by, (int)btnH);
     asBtnApply_ = asRects[0];
-    panels::drawButton(canvas, asBtnApply_, "Apply", asHoverApply_, metrics_.text.body, true);
+    panels::drawButton(canvas, asBtnApply_, "Apply", asHoverApply_, metrics_.text.body, true, true);
 }
 
 // ── Bluetooth codec, inside the Audio Settings panel ────────────────────────
@@ -5625,18 +5633,25 @@ void PlayerWindow::drawBluetoothCodecSection(Canvas& canvas, const Rect& c, floa
     const bt_codec::Capability cap = asBtCap_;   // cached; see the declaration
     if (cap == bt_codec::Capability::Unavailable && btDevice_.empty()) return;
 
+    auto chromeText = [&](const std::string& s, float x, float yy, float sz,
+                          ColorRef col, FontStyle style) {
+        if (!drawTerminusText(canvas, s, x, yy, sz, toColor(col)))
+            canvas.textStyled(s, x, yy, sz, toColor(col), style);
+    };
+
     const float lineH = metrics_.text.body * 1.5f;
-    canvas.textStyled("Bluetooth codec", c.x + pad, y, metrics_.text.body,
-                      toColor(CLR_TEXT_DIM), FontStyle::Bold);
+    chromeText("Bluetooth codec", c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Bold);
     y += lineH * 1.2f;
 
     if (btDevice_.empty()) {
-        canvas.textStyled("No Bluetooth headphones connected.", c.x + pad, y,
-                          metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        chromeText("No Bluetooth headphones connected.", c.x + pad, y,
+                  metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
         y += lineH;
         return;
     }
 
+    // The device NAME is pure data — stays serif unconditionally, never
+    // attempts Terminus even though most Bluetooth names are ASCII.
     canvas.textStyled(btDevice_.name, c.x + pad, y, metrics_.text.body,
                       toColor(CLR_TEXT_PRIMARY), FontStyle::Roman);
     y += lineH;
@@ -5645,28 +5660,31 @@ void PlayerWindow::drawBluetoothCodecSection(Canvas& canvas, const Rect& c, floa
     // single most useful line on the page for a listener on Bluetooth.
     const std::string now = btActive_.valid() ? bt_codec::summary(btActive_)
                                               : std::string("unknown");
+    // LITERAL PREFIX + DATA (the negotiated codec summary) — unwrapped, per
+    // the two-part rule: "Now: SBC 44100Hz 16bit" must read exactly as the
+    // stack reports it, never reformatted.
     canvas.textStyled("Now: " + now, c.x + pad, y, metrics_.text.body,
                       toColor(btActive_.valid() ? CLR_WARNING : CLR_TEXT_DIM), FontStyle::Roman);
     y += lineH * 1.3f;
 
     if (cap != bt_codec::Capability::Writable) {
-        canvas.textStyled("This phone has not granted codec control. Two ways to get it:",
-                          c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        chromeText("This phone has not granted codec control. Two ways to get it:",
+                  c.x + pad, y, metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
         y += lineH;
 
         const float btnH = metrics_.space(50.0f);
         asBtEnableRc_ = { (int)(c.x + pad), (int)y,
                           (int)(c.x + pad + metrics_.space(330.0f)), (int)(y + btnH) };
         panels::drawButton(canvas, asBtEnableRc_, "Pair as companion device",
-                           asHoverBtEnable_, metrics_.text.body);
+                           asHoverBtEnable_, metrics_.text.body, false, true);
         y += btnH + metrics_.space(SP_SM);
 
-        canvas.textStyled("...or, from a computer, once:", c.x + pad, y,
-                          metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        chromeText("...or, from a computer, once:", c.x + pad, y,
+                  metrics_.text.body, CLR_TEXT_DIM, FontStyle::Italic);
         y += lineH;
-        // The literal line to type. Shown in full rather than summarised: it is
-        // useless paraphrased, and there is no clipboard on this route worth
-        // relying on.
+        // The literal adb command is DATA (it embeds this device's MAC) —
+        // stays serif unconditionally. It is also the one string on this
+        // page a listener may need to copy character-for-character.
         canvas.textStyled(bt_codec::adbGrantCommand(), c.x + pad, y,
                           metrics_.text.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Roman);
         y += lineH * 1.4f;
@@ -5701,6 +5719,8 @@ void PlayerWindow::drawBluetoothCodecSection(Canvas& canvas, const Rect& c, floa
         // An empty list means the QUESTION went unanswered, never "this device
         // supports nothing" — see bt_codec.hh. Drawing no rows and saying
         // nothing would read as the second, which is a claim we cannot make.
+        // LITERAL both before AND after the embedded device name — unwrapped
+        // per the two-part rule; the name must not be re-cased mid-sentence.
         canvas.textStyled("This phone will not say which codecs " + btDevice_.name +
                           " supports, so none can be offered.",
                           c.x + pad, y, metrics_.text.body, toColor(CLR_TEXT_DIM),
@@ -5712,16 +5732,19 @@ void PlayerWindow::drawBluetoothCodecSection(Canvas& canvas, const Rect& c, floa
     // Rate, depth and LDAC quality cycle in place. Three more radio groups
     // would be fifteen rows for settings that are picked once and then left,
     // and the panel has a bottom.
+    // Rate, depth and LDAC quality: each label is chosen from a small, fixed,
+    // developer-authored set (see bt_codec.hh), not open-ended data — chrome,
+    // wrapped like any other button.
     const float btnH = metrics_.space(50.0f);
     const float btnW = metrics_.space(200.0f);
     float bx = (float)c.x + pad;
     asBtRateRc_ = { (int)bx, (int)y, (int)(bx + btnW), (int)(y + btnH) };
     panels::drawButton(canvas, asBtRateRc_, bt_codec::sampleRateLabel(asBtEdit_.sampleRate),
-                       asHoverBtRate_, metrics_.text.body);
+                       asHoverBtRate_, metrics_.text.body, false, true);
     bx += btnW + metrics_.space(SP_SM);
     asBtBitsRc_ = { (int)bx, (int)y, (int)(bx + btnW), (int)(y + btnH) };
     panels::drawButton(canvas, asBtBitsRc_, bt_codec::bitDepthLabel(asBtEdit_.bits),
-                       asHoverBtBits_, metrics_.text.body);
+                       asHoverBtBits_, metrics_.text.body, false, true);
     bx += btnW + metrics_.space(SP_SM);
     // Only LDAC has a quality. Drawing the control for the others would be
     // offering a setting that codec does not have.
@@ -5729,7 +5752,7 @@ void PlayerWindow::drawBluetoothCodecSection(Canvas& canvas, const Rect& c, floa
         asBtQualityRc_ = { (int)bx, (int)y, (int)(bx + btnW), (int)(y + btnH) };
         panels::drawButton(canvas, asBtQualityRc_,
                            bt_codec::ldacQualityLabel(asBtEdit_.ldacQuality),
-                           asHoverBtQuality_, metrics_.text.body);
+                           asHoverBtQuality_, metrics_.text.body, false, true);
     }
     y += btnH + metrics_.space(SP_SM);
 
@@ -5737,16 +5760,16 @@ void PlayerWindow::drawBluetoothCodecSection(Canvas& canvas, const Rect& c, floa
     if (db_.loadBtCodec(btDevice_.mac, existing)) {
         asBtForgetRc_ = { (int)(c.x + pad), (int)y,
                           (int)(c.x + pad + metrics_.space(200.0f)), (int)(y + btnH) };
-        panels::drawButton(canvas, asBtForgetRc_, "Forget", asHoverBtForget_, metrics_.text.body);
+        panels::drawButton(canvas, asBtForgetRc_, "Forget", asHoverBtForget_, metrics_.text.body, false, true);
         y += btnH + metrics_.space(SP_SM);
     }
 
-    canvas.textStyled("Apply saves this against these headphones and re-applies it "
-                      "whenever they reconnect.",
-                      c.x + pad, y, metrics_.text.secondary, toColor(CLR_TEXT_DIM),
-                      FontStyle::Italic);
+    chromeText("Apply saves this against these headphones and re-applies it "
+              "whenever they reconnect.",
+              c.x + pad, y, metrics_.text.secondary, CLR_TEXT_DIM, FontStyle::Italic);
     y += lineH;
     if (!btNotice_.empty()) {
+        // An assembled runtime notice — data, stays serif unconditionally.
         canvas.textStyled(btNotice_, c.x + pad, y, metrics_.text.secondary,
                           toColor(CLR_WARNING), FontStyle::Italic);
         y += lineH;
