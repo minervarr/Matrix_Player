@@ -6,6 +6,7 @@
 #include "ui_fonts.hh"
 #include "ui_icons.hh"
 #include "bar_a.hh"
+#include "terminus_glyph.hh"
 #include "art_texture.hh"
 #include "img_decode.hh"
 #include "text_util.hh"
@@ -5142,7 +5143,8 @@ void PlayerWindow::onManageFolders() {
 }
 
 void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
-    LayoutRect content = panels::drawHeader(canvas, area, "Music Folders", metrics_.scale, metrics_.text.header, mfCloseRc_);
+    LayoutRect content = panels::drawHeader(canvas, area, "Music Folders", metrics_.scale,
+                                            metrics_.text.header, mfCloseRc_, true);
     float pad = metrics_.space(SP_LG);
     float btnH = metrics_.space(58.0f);
 
@@ -5150,14 +5152,21 @@ void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
                             content.right, (int)(content.bottom - (btnH + pad * 2)) };
     mfListArea_ = listArea;
     float mfRowH = panelRowH();
+    // Folder PATHS are data and go through the (untouchable) submodule row
+    // list unchanged -- see CLAUDE.md's bar_a.cc rule, same reasoning here.
     mfListRows_ = widgets::drawScrollList(canvas, toRect(listArea), mfRoots_,
                                           mfSelectedRow_, (float)mfScrollY_, mfRowH,
                                           mfHoverRow_, widgets::kTextFree, matrixListStyle());
     panels::drawScrollbar(canvas, listArea, (int)((float)mfRoots_.size() * mfRowH), mfScrollY_, metrics_.scale);
     if (mfRoots_.empty()) {
         Rect a = toRect(listArea);
-        canvas.textStyled("No music folders added yet.", a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
-                          metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        const float ex = a.x + metrics_.space(22.0f), ey = a.y + metrics_.space(22.0f);
+        // A fixed literal: Terminus, falling back to the serif italic if it
+        // ever isn't representable.
+        if (!drawTerminusText(canvas, "No music folders added yet.", ex, ey,
+                              metrics_.text.body, toColor(CLR_TEXT_DIM)))
+            canvas.textStyled("No music folders added yet.", ex, ey,
+                              metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
     }
 
     float btnW = metrics_.space(277.0f);
@@ -5167,8 +5176,9 @@ void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
         metrics_.space(panels::kMinActionBtnW), metrics_.space(SP_MD), by, (int)btnH);
     mfBtnRemove_ = mfRects.first;
     mfBtnDone_   = mfRects.second;
-    panels::drawButton(canvas, mfBtnRemove_, "Remove Selected", mfHoverRemove_, metrics_.text.body);
-    panels::drawButton(canvas, mfBtnDone_, "Done", mfHoverDone_, metrics_.text.body, true);
+    panels::drawButton(canvas, mfBtnRemove_, "Remove Selected", mfHoverRemove_,
+                       metrics_.text.body, false, true);
+    panels::drawButton(canvas, mfBtnDone_, "Done", mfHoverDone_, metrics_.text.body, true, true);
 }
 
 // ── Audio Settings panel ─────────────────────────────────────────────────────
@@ -6796,13 +6806,14 @@ void PlayerWindow::onAddFolder() {
 }
 
 void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
-    LayoutRect content = panels::drawHeader(canvas, area, "Select Music Folder", metrics_.scale, metrics_.text.header, fpCloseRc_);
+    LayoutRect content = panels::drawHeader(canvas, area, "Select Music Folder", metrics_.scale,
+                                            metrics_.text.header, fpCloseRc_, true);
     Rect c = toRect(content);
     float pad = metrics_.space(SP_LG);
 
-    // A filesystem path is machine text (same rule as the EQ device line). The
-    // measure passed to truncateToWidth MUST use the style it is drawn in, or
-    // the ellipsis lands at the wrong character.
+    // A filesystem path is DATA and stays serif unconditionally — it is
+    // exactly the string the two-part rule (see the plan's preamble) exists
+    // to protect, regardless of whether it happens to be pure ASCII today.
     canvas.textStyled(truncateToWidth(canvas, fpCurrentDir_, c.w - 2.0f * pad, metrics_.text.secondary, FontStyle::Math),
                       c.x + pad, c.y + pad, metrics_.text.secondary, toColor(CLR_TEXT_DIM), FontStyle::Math);
 
@@ -6824,8 +6835,11 @@ void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
     panels::drawScrollbar(canvas, listArea, (int)((float)labels.size() * fpRowH), fpScrollY_, metrics_.scale);
     if (labels.empty()) {
         Rect a = toRect(listArea);
-        canvas.textStyled("No subfolders here.", a.x + metrics_.space(22.0f), a.y + metrics_.space(22.0f),
-                          metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        const float ex = a.x + metrics_.space(22.0f), ey = a.y + metrics_.space(22.0f);
+        if (!drawTerminusText(canvas, "No subfolders here.", ex, ey,
+                              metrics_.text.body, toColor(CLR_TEXT_DIM)))
+            canvas.textStyled("No subfolders here.", ex, ey,
+                              metrics_.text.body, toColor(CLR_TEXT_DIM), FontStyle::Italic);
     }
 
     float btnW = metrics_.space(326.0f);
@@ -6835,8 +6849,8 @@ void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
         metrics_.space(panels::kMinActionBtnW), metrics_.space(SP_MD), by, (int)btnH);
     fpBtnCancel_ = fpRects.first;
     fpBtnSelect_ = fpRects.second;
-    panels::drawButton(canvas, fpBtnCancel_, "Cancel", fpHoverCancel_, metrics_.text.body);
-    panels::drawButton(canvas, fpBtnSelect_, "Select This Folder", fpHoverSelect_, metrics_.text.body, true);
+    panels::drawButton(canvas, fpBtnCancel_, "Cancel", fpHoverCancel_, metrics_.text.body, false, true);
+    panels::drawButton(canvas, fpBtnSelect_, "Select This Folder", fpHoverSelect_, metrics_.text.body, true, true);
 }
 
 // ── Album / Track selection (simplified for custom UI) ──────────────────────
