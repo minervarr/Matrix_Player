@@ -24,12 +24,12 @@
 // height, so the text band under it always fits inside its own row. Nothing
 // is ever cut at the bottom of the grid, by construction rather than by luck.
 //
-// SCROLL. The grid scrolls by whole rows and never shows a partial one. There
-// is no animation: the offset is either one row or the next, and the next
-// frame simply draws it. The input is still tracked continuously -- a finger's
-// own pixels, or a wheel notch scaled to one row -- so the host's kinetic throw
-// works unchanged and still decides how FAR a flick carries. Only where the
-// grid SNAPS is quantised. See scrollRows().
+// SCROLL. Every list in the app scrolls this way: by whole steps, never a
+// partial one, and with no animation. The offset is either one row or the
+// next, and the next frame simply draws it. The input is still tracked
+// continuously -- a finger's own pixels, or a wheel notch scaled to one row --
+// so a drag's distance is the finger's travel. A lift is a stop; there is no
+// coasting. See scrollRows().
 namespace grid {
 
 struct Shape {
@@ -76,8 +76,8 @@ struct RowScroll {
 // resting finger would strobe between two rows. Instead a REVERSAL re-anchors
 // the input to the row on screen, so turning back costs the same small
 // threshold as going forward did. Continuous travel in one direction is never
-// re-anchored, which is what keeps a throw's distance exactly what the host's
-// kinetic scroller computed: travel / pitch rows, no more and no less.
+// re-anchored, which is what keeps a drag's distance equal to travel / pitch
+// rows, no more and no less.
 bool scrollRows(RowScroll& s, float dpx, int pitch, int maxRow);
 
 } // namespace grid

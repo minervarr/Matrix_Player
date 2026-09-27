@@ -417,23 +417,25 @@ private:
     // what collapses the filter letters, and closing it takes the query back.
     // ── Scrolling: one rule, one place ──────────────────────────────────────
     //
-    // Every scroll surface used to restate the same two decisions itself --
-    // which way a delta moves the content (`- delta`, written out eight times)
-    // and where the offset is allowed to stop. Eight copies of a rule is eight
-    // chances for one of them to be wrong, and one of them was: the signal
-    // chain clamped against the wrong viewport and could not be scrolled at
-    // all when rotated. These two put the rule in one readable place.
-    //
-    // scrollDelta() applies the DIRECTION and nothing else: it turns a host's
-    // raw wheel delta into "how far the content should move", honouring the
-    // preference for whichever input this host has. scrollTo() then applies
-    // the BOUNDS through clampScroll(), which already exists and is already
-    // pinned by layout_test.
+    // Every surface snaps by its own pitch, the same way the album grid does:
+    // no animation, no in-between frame, a row after 0.2 of a row's travel
+    // and then once per row. scrollDelta() applies the DIRECTION (a host's
+    // raw wheel into the app's sense). scrollDiscrete() is the rest -- it
+    // feeds grid::scrollRows and writes offset = row * pitch. snapScroll()
+    // is the draw-time heal: an already-snapped offset that has to come back
+    // inside a shorter list, still on a whole step.
     int  scrollDelta(int rawDelta) const;
-    static int scrollTo(int offset, int delta, int contentH, int viewH);
-    // The album grid's own scroll: whole rows only, no animation, one wheel
-    // notch = one row on a desktop, the finger's own travel on a touch screen.
+    static int snapScroll(int offset, int contentH, int viewH, int pitch);
+    void scrollDiscrete(grid::RowScroll& s, int& offsetPx, int delta,
+                        int pitch, int contentH, int viewH);
+    // The album grid: scrollDiscrete on gridRowScroll_ / gridScrollY_,
+    // pitch gridStepY_. Kept as a one-liner so onMouseWheel stays short.
     void scrollGridRows(int delta);
+    // Album view: discrete track-row steps. The list clamps on the last
+    // track; a NEW gesture after that (next wheel notch, or a new drag) is
+    // what opens the artist page. The same stroke cannot do both.
+    void scrollAlbumView(int delta);
+    bool albumListAtEnd() const;
 
     // Reverse the direction, per input kind, because touch and a wheel start
     // from opposite conventions and one flag would necessarily be wrong on
@@ -540,6 +542,9 @@ private:
     // when no such database is found.
     void openAlbumView(int albumIdx);
     void loadAlbumViewContent(int albumIdx);
+    void drawAlbumView(Canvas& canvas);
+    bool hasArtistWorldContent() const;
+    int  albumViewArtTargetSize() const;
 
     // The downloader library that owns `albumDir`, or nullptr when that album
     // is not inside one. Resolves on first use and caches; see streamerDbs_.
@@ -670,6 +675,7 @@ private:
     int  mfHoverRow_    = -1;
     int  mfSelectedRow_ = -1;
     int  mfScrollY_     = 0;
+    grid::RowScroll mfRowScroll_;
     bool mfChanged_     = false;
     LayoutRect mfListArea_ = {}, mfCloseRc_ = {}, mfBtnRemove_ = {}, mfBtnDone_ = {};
     bool mfHoverClose_ = false, mfHoverRemove_ = false, mfHoverDone_ = false;
@@ -687,7 +693,9 @@ private:
     int  asUsbSel_      = -1;
     int  asHoverDeviceRow_ = -1;
     int  asDeviceScrollY_ = 0;
+    grid::RowScroll asDeviceRowScroll_;
     int  asBodyScrollY_   = 0;
+    grid::RowScroll asBodyRowScroll_;
     int  asBodyContentH_  = 0;
     LayoutRect asBodyArea_ = {};
     LayoutRect asDeviceListArea_ = {};
@@ -757,7 +765,9 @@ private:
     int  eqHoverRow_    = -1;
     int  eqSelectedRow_ = -1;
     int  eqScrollY_     = 0;
+    grid::RowScroll eqRowScroll_;
     int  eqBodyScrollY_ = 0;
+    grid::RowScroll eqBodyRowScroll_;
     int  eqBodyContentH_ = 0;
     LayoutRect eqBodyArea_ = {};
     std::string eqDeviceKey_;
@@ -800,6 +810,7 @@ private:
     bool fpHasParent_  = false;
     int  fpHoverRow_   = -1;
     int  fpScrollY_    = 0;
+    grid::RowScroll fpRowScroll_;
     LayoutRect fpListArea_ = {}, fpCloseRc_ = {}, fpBtnSelect_ = {}, fpBtnCancel_ = {};
     bool fpHoverClose_ = false, fpHoverSelect_ = false, fpHoverCancel_ = false;
     std::vector<panels::TerminusListRow> fpListRows_;  // cached during draw, read by hit-test
@@ -856,9 +867,8 @@ private:
     // Where the INPUT is, continuously, plus the row it has snapped to and the
     // direction it last moved (grid::RowScroll). gridScrollY_ is always
     // rowScroll.row * gridStepY_ -- a whole number of rows -- and it is the
-    // only offset anything draws or hit-tests with. Keeping the two apart is
-    // what lets the host's kinetic throw keep deciding how far a flick goes
-    // while the grid itself only ever shows whole rows. See scrollGridRows().
+    // only offset anything draws or hit-tests with. A drag's travel decides
+    // how far; a lift stops. See scrollGridRows().
     grid::RowScroll gridRowScroll_;
 
     // Sidebar search box — live-filters the album grid. gridIndices_ is the
@@ -932,8 +942,8 @@ private:
     // albums_ is fresh. Read under albumsMu_ like albums_ itself.
     std::unordered_map<std::string, std::pair<int, int>> trackKeyIndex_;
     // The other members of an album's group, best first, EXCLUDING the album
-    // itself — what the album view lists below the artist bio. Empty when the
-    // album has no siblings.
+    // itself — what the album view lists after the tracks, still in album
+    // world. Empty when the album has no siblings.
     std::vector<int> otherVariantsOf(int albumIdx) const;
     // Draws a remix group's 2x2 cover mosaic in place of the single tile
     // cover. False when this album is not a multi-member remix group's
@@ -941,16 +951,34 @@ private:
     bool drawVariantMosaic(Canvas& canvas, int albumIdx,
                            float x, float y, float a);
 
-    // Album view scroll + hit-test anchors. trackListLeft_/Right_ and
-    // trackRowTop_ are written by drawFrame() (the album page lays itself out
-    // while drawing, same pattern as rcDspBadge_) and read by
-    // trackPanelHitTest(). albumViewContentH_ bounds onMouseWheel()'s scroll.
-    // The view closes via Escape only — no on-screen close button.
+    // Album view: two territories, never both on screen. Album world is the
+    // pinned identity (cover + name + details) plus a discrete-scrolled track
+    // list (and OTHER VERSIONS). Artist world is ABOUT / photo / bio, reached
+    // by one more snap past the last album-world row. The view closes via
+    // Escape — no on-screen close button — and the first Escape from artist
+    // world returns to album world rather than the grid.
+    enum class AlbumWorld { Album, Artist };
+    AlbumWorld albumWorld_ = AlbumWorld::Album;
     int trackScrollY_   = 0;
+    grid::RowScroll trackRowScroll_;
+    int artistScrollY_  = 0;
+    grid::RowScroll artistRowScroll_;
     int trackRowHeight_  = 40;
     int  trackListLeft_  = 0;
     int  trackListRight_ = 0;
-    int  albumViewContentH_ = 0;
+    LayoutRect rcAlbumList_ = {};
+    int  albumWorldContentH_  = 0;
+    int  artistWorldContentH_ = 0;
+    // True after a gesture has already RESTED on the last album-world row.
+    // The next toward-end delta is what opens the artist page. A single
+    // drag that merely arrives at the end must not also leave it — that is
+    // the sensitivity the listener reported. Wheel notches are each a
+    // gesture, so this is only load-bearing on touch (armed from onDragEnd).
+    bool albumPagerArmed_ = false;
+    // Height of the pinned DISC n bar at the top of the list, 0 when the
+    // album is a single disc. Written by drawAlbumView; hit-testing reads
+    // it so a click on the sticky label is not a track.
+    int  albumDiscStickyH_ = 0;
     // Scroll-0 window Y of each track row, one entry per album.tracks index,
     // rewritten by the album view's draw block. Rows are no longer on a fixed
     // i*trackRowHeight_ grid (a "DISC n" separator shifts everything below
@@ -966,19 +994,19 @@ private:
     std::vector<std::string> artistBioLines_;
     float                    albumTextWrapW_ = -1.0f;
     TextureHandle            artistImgTex_ = kInvalidTexture;
-    // Where the artist photo landed this frame, written by drawFrame() (same
+    // Where the artist photo landed this frame, written by drawAlbumView (same
     // pattern as rcDspBadge_) and read by handleClick to open the viewer.
-    // It is the CROPPED rect — clicking the sliver that is actually on screen
-    // is what a user can aim at. Empty when the photo is off-screen.
+    // Live only in artist world. It is the CROPPED rect — clicking the sliver
+    // that is actually on screen is what a user can aim at. Empty otherwise.
     LayoutRect               rcArtistImg_ = {};
-    // The album view's prose column (description + bio), written by
-    // drawFrame() like rcArtistImg_. Not clickable and deliberately without a
-    // hover background — it exists so the cursor can say "text" there.
+    // The artist world's prose column (description + bio), written by
+    // drawAlbumView like rcArtistImg_. Not clickable and deliberately without
+    // a hover background — it exists so the cursor can say "text" there.
     LayoutRect               rcAlbumText_ = {};
-    // The "OTHER VERSIONS" strip below the artist bio: where each variant
-    // thumbnail landed this frame and which album it stands for. Written by
-    // drawFrame() and read by handleClick/cursorForPoint, the same
-    // draw-then-hit-test pattern as rcArtistImg_. Cleared on every album
+    // The "OTHER VERSIONS" strip after the tracks (album world): where each
+    // variant thumbnail landed this frame and which album it stands for.
+    // Written by drawAlbumView and read by handleClick/cursorForPoint, the
+    // same draw-then-hit-test pattern as rcArtistImg_. Cleared on every album
     // switch by loadAlbumViewContent().
     std::vector<std::pair<LayoutRect, int>> rcVariantTiles_;
     std::string              artistImgPath_;   // source file, for ArtWindow
@@ -1048,13 +1076,14 @@ private:
     bool ejectArtToSecondScreen();
     void drawSignalChain(Canvas& canvas, const LayoutRect& area);
     int  scScrollY_ = 0;
-    int  scContentH_ = 0;      // measured by the draw, like albumViewContentH_
+    grid::RowScroll scRowScroll_;
+    int  scContentH_ = 0;      // measured by the draw, like albumWorldContentH_
     // The viewport the draw actually laid out into, PUBLISHED for the wheel.
     //
     // Not rcGrid_'s height: drawSignalChain lays out into what
     // panels::drawHeader returns, which is rcGrid_ minus its 91*scale header.
     // The wheel handler used rcGrid_ and so computed a maximum 91 px SMALLER
-    // than the draw's, and the draw's clampScroll can only lower a too-large
+    // than the draw's, and the draw's snap can only lower a too-large
     // offset -- it never raises the wheel's ceiling. When the laid-out height
     // landed between the two the page refused to scroll at all while still
     // having content below the fold, which is every rotated phone: 629 px of
@@ -1084,6 +1113,7 @@ private:
     bool hoverEsClose_ = false;
     int  esHoverRow_   = -1;
     int  esScrollY_    = 0;
+    grid::RowScroll esRowScroll_;
     int  esContentH_   = 0;           // measured by the draw
     int  esViewH_      = 0;           // published by the draw, like scViewH_
 
@@ -1186,6 +1216,7 @@ private:
     // read by the wheel clamp and the scrollbar so all three agree.
     int  plRowH_      = 0;
     int  plScrollY_   = 0;
+    grid::RowScroll plRowScroll_;
     int  plHoverRow_  = -1;
     int  plHoverTile_       = -1;   // 0..2, the tile grid's hovered list
     int  plHoverRangeTab_   = -1;
@@ -1239,6 +1270,7 @@ private:
         AlbumTypeFilter filter         = AlbumTypeFilter::Album;
         bool            settingsOpen   = false;
         bool            trackPanelOpen = false;
+        bool            artistWorld    = false;
         int             selectedAlbum  = -1;
         PlaylistKind    plKind         = PlaylistKind::None;
     };
@@ -1552,11 +1584,14 @@ private:
     // an A2DP codec bounces the link, so the device disappears and returns —
     // which reads as a new device to onBtRouteChanged() and would start the
     // apply over, forever, with no audio the whole time. See the two guards in
-    // applySavedBtCodec(). The panel's own Apply does not consult this.
+    // applySavedBtCodec(). The panel's Apply still marks this MAC so a bounce
+    // cannot stack an automatic apply on top; it also skips the stack call
+    // when the running codec already matches, for the same silent-music reason.
     std::string btAutoAppliedMac_;
 
     // steady_clock ms until which the A2DP link is expected to be renegotiating,
-    // 0 when it is not. Set whenever a codec request is actually SENT.
+    // 0 when it is not. Set whenever a codec request is actually SENT — both
+    // the automatic path and the Audio Settings Apply, when the codec changed.
     //
     // Setting a codec is not a property write: the stack drops the link and
     // builds it again, and for two or three seconds there is no transport to

@@ -317,11 +317,12 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # but <string>. The rule worth guarding is the teens (11th, not 11st) and
     # its repeat every hundred (111th, not 111st): wrong, it reads as a typo
     # rather than as a bug, which is exactly how such things survive.
-    # scroll_test — the direction and bounds rules every scroll surface shares.
-    # Restates the two three-line helpers rather than linking player_view.cc,
-    # which would drag in Canvas, Host, sqlite and the audio backends; this
-    # stays a pure-logic test with no library behind it, same as its siblings.
-    add_executable(scroll_test src/scroll_test.cc)
+    # scroll_test — the direction and discrete-step rules every scroll surface
+    # shares. Restates scrollDelta/scrollDiscrete/snapScroll rather than
+    # linking player_view.cc, which would drag in Canvas, Host, sqlite and the
+    # audio backends; links the REAL grid_layout.cc so the snap rule cannot
+    # drift. Pure-logic, same as its siblings.
+    add_executable(scroll_test src/scroll_test.cc src/grid_layout.cc)
     target_include_directories(scroll_test PRIVATE src ${CMAKE_SOURCE_DIR}/framework/app_shell)
     if(NOT MSVC)
         target_compile_options(scroll_test PRIVATE -Wall)

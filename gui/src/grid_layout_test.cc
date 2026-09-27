@@ -130,9 +130,9 @@ int main() {
         }
     }
 
-    // A throw is continuous travel in one direction, never re-anchored, so its
-    // distance in rows is exactly what the host's kinetic scroller computed.
-    // 1500 px: rows change at 60, 360, 660, 960 and 1260 -> row 5.
+    // Continuous travel in one direction is never re-anchored, so its
+    // distance in rows is travel / pitch. 1500 px: rows change at 60, 360,
+    // 660, 960 and 1260 -> row 5.
     {
         RowScroll s;
         assert(feed(s, 30, 50.0f, P, maxRow) == 5);

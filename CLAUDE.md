@@ -505,7 +505,7 @@ scripts/linux/build.sh --debug
 ./build/linux_debug/core/facets_test       # guided search: suggestions, counts, empty reasons
 ./build/linux_debug/core/streamer_db_test  # where the foreign .streamer/library.db is looked for
 ./build/linux_debug/core/scan_source_test  # the media index and the walk must agree
-./build/linux_debug/gui/scroll_test        # scroll direction + bounds, one rule for eight surfaces
+./build/linux_debug/gui/scroll_test        # scroll direction + discrete steps, one rule for every surface
 ./build/linux_debug/gui/grid_layout_test   # the grid's shape (whole rows) and its row-snapped scroll
 ./build/linux_debug/gui/terminus_glyph_test # the baked Terminus glyph, and its pixel runs
 ```
@@ -1574,10 +1574,12 @@ extracted drawing. `AndroidPlayerView` was deleted.
    shaders), and **not** for the music library — album art and audio files are
    ordinary absolute paths everywhere and still go through `FileByteReader`.
 4. **Touch is translated, not pretended.** `AndroidHost`'s slop is **24 px**:
-   under it the gesture is a tap and the press is delivered at RELEASE (so a
-   finger that slides off cancels, the way a button works everywhere); past it
-   the gesture becomes wheel deltas for good and the press never happens.
-   Hover follows the finger, which is the only honest hover a touch screen has.
+   under it the gesture is a tap and the press is delivered at contact (a
+   stroke that turns into a scroll is retracted by `onDragEnd`); past it the
+   gesture becomes wheel deltas 1:1 with the finger and the click is cancelled
+   for good. There is no fling: a lift is a stop. Every surface then snaps
+   that travel by its own pitch (`scrollDiscrete`). Hover follows the finger,
+   which is the only honest hover a touch screen has.
 
 `ArtWindow` gets a third branch in `art_view.hh` that declines: it is a second
 top-level window for a second monitor, and a phone has neither. It declines

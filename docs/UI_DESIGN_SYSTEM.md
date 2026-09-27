@@ -249,12 +249,14 @@ then stretched or trimmed so **whole rows fill the height exactly**; the art is
 bounded by both its column and its row, so the text band under it always fits
 inside its own row. Square art + centered title + artist · year.
 
-**The grid scrolls by whole rows and never animates.** `scrollGridRows()`
-tracks the input continuously (`grid::RowScroll`) but `gridScrollY_` is only
-ever a whole number of rows: a row changes after 0.2 of a row's travel and then
-once per row, a wheel notch is one row, and the host's kinetic throw still
-decides how far a flick carries. No partial row is drawn — `lastRow` is exactly
-`firstRow + gridRows_ − 1`.
+**Every list scrolls by whole steps and never animates.** `scrollDiscrete()`
+tracks the input continuously (`grid::RowScroll`) but the drawn offset is only
+ever a whole number of the surface's pitch: a step after 0.2 of a pitch's
+travel and then once per pitch, a wheel notch is one step, a finger drag is
+1:1 into wheel units, and a lift is a stop — there is no fling. The album
+grid's pitch is a row (`gridStepY_`); album-view tracks, playlists, the EQ
+switcher, Settings lists and the signal chain each use their own. No partial
+grid row is drawn — `lastRow` is exactly `firstRow + gridRows_ − 1`.
 
 **Row heights** (three, by context): `kPanelRowH 44` (settings list rows — note
 it is passed *bare*, never pre-scaled, so it keeps the number 44),
@@ -539,10 +541,33 @@ the gap inside it (`space(24)` between time and badge). At 16 it did not, and th
 reading and the state read as one run of text pushed against the edge.
 
 ### 8.4 Track panel (album view)
-Full-page (replaces grid). Large scrolling art + wrapped title/artist + quality
-badge + separator, then track rows: track # (Mono) · title · duration (Mono).
+Full-page (replaces grid). **Two territories, never both on screen.**
+
+**Album world.** Cover + name + details are FIXED. Only the track list (and
+OTHER VERSIONS tiles) scroll, with the same discrete snap as every other list.
+The album name wraps and is never ellipsized. Layout follows `curOrientation_`:
+
+- **Horizontal** (wide content): two columns, both full content height. Left is
+  the square artwork with the album name, modifier, artist and year · quality
+  *under* it (title Bold, modifier dim italic, artist secondary italic, badge
+  caption Math). Right is disc separators + track rows — the protagonist.
+  Left-column width is art size + pads; art is a square that fits that column
+  without starving the list (in the spirit of `min(panelW * 0.28, panelH * 0.42)`
+  now that the title no longer sits beside the art). The identity hairline is
+  **not** drawn under the year — it would not separate the list from the art.
+  A vertical hairline between the columns is the same cut, rotated.
+- **Vertical** (tall content): one column. Top band pinned (square art, then
+  name/mod/artist/year/quality under it); track list full-width below. The
+  identity band must leave ~4 track rows (`trackRowHeight_` = `space(SP_XL)`);
+  shrink art to make that true. A very long title may use the remaining identity
+  budget, but the name is still never ellipsized. Art is `imageFg` /
+  `drawArtOrPlaceholder` and is never drawn with `- trackScrollY_`. A horizontal
+  hairline under the year · quality is the cut between identity and the list.
+
 Row hover = grey pill; **playing row** = accent-tint pill + left bar + accent
-Bold text (the shared selection family).
+Bold text (the shared selection family). Track rows keep the current design:
+number, title, quality mark, duration, DISC n rules, reading-measure cap
+`space(820)`.
 
 **Quality is a mark, not a border.** Each row carries one small `UiIcon::Quality`
 glyph — a four-point spark — in its own column immediately left of the duration,
@@ -580,14 +605,29 @@ Both rules stop `space(SP_MD)` short of the row box, and the row is deliberately
 taller than the label needs so the separator carries its own breathing room
 rather than crowding the tracks around it. Separators occupy
 layout space but never a track index; row tops are recorded per track for
-hit-testing rather than derived from a fixed row pitch.
+hit-testing rather than derived from a fixed row pitch. **The current disc
+stays pinned** at the top of the list while its tracks are on screen: track
+numbers reset per disc, and without the sticky label the listener loses which
+disc they are in. An in-flow header that has reached that band is the sticky
+(not drawn twice). Clicks on the bar are not track hits. Glyphs composite
+after every rect, so a fill on the bar cannot hide titles sliding under it —
+the list is clipped *below* the bar and a row whose glyph band would be
+sliced is not drawn.
 
-**The sidecar block reads as a printed page.** Below the track list sit "ABOUT
-THIS ALBUM", the artist photo and the artist bio. **Nothing in it takes a hover
-treatment** — a background that lights up under the cursor is the wrong
-vocabulary for a page of prose. The photo is the one clickable thing (it opens
-full-window, Escape or a click to dismiss); its only intended affordance is a
-cursor change, not a highlight.
+**Artist world is a second page, not a sticky header.** ABOUT THIS ALBUM, the
+artist photo and the artist bio occupy the full content rect — no album cover,
+no track list. The track list **clamps on the last track**. A new gesture after
+that rest (next wheel notch, or a new drag — the same stroke cannot arrive and
+leave) opens the artist page, and only when sidecar content exists. At that
+rest a small DIM down-chevron sits in a reserved footer, centered, not a hit
+target: more this way, not a control. Left by a snap back from row 0 (album
+list stays on its last row) or by `goBack()`/Escape (one step: artist → album
+world; a second Escape closes the album view to the grid). If there is no
+sidecar at all, album world clamps as a single page and draws no chevron. **Nothing in it takes a hover treatment** — a background that
+lights up under the cursor is the wrong vocabulary for a page of prose. The
+photo is the one clickable thing (it opens the art scene); its only intended
+affordance is a cursor change, not a highlight. `rcAlbumText_` / `rcArtistImg_`
+are live only here.
 
 Two traps live here, both already paid for. **Cull by cropping, not by
 skipping:** the photo draws through `imageFg`, which composites above the vector
@@ -600,11 +640,14 @@ visible slice via `imageFg`'s UV sub-rect instead. And **decode at draw size
 with `mips=false`** — a mip chain softens anything drawn even slightly below
 1:1 (`art_texture.hh`), which is what made the photo look washed out.
 
-**The variant strip closes the page.** When the album belongs to a variant
-group — the same release also held as another edition, at another quality, or
-as another remix set (see `core/include/core/variants.h`) — a strip of tiles
-sits below the bio, one per *other* member. The album you are looking at is
-never in its own strip.
+**The variant strip stays in album world**, after the last track, in the
+scrolling column. Other copies of this record are not the artist page. When
+the album belongs to a variant group — the same release also held as another
+edition, at another quality, or as another remix set (see
+`core/include/core/variants.h`) — a strip of tiles sits there, one per *other*
+member. The album you are looking at is never in its own strip. The pinned
+cover remaining visible above/beside them is allowed; album cover + artist
+photo on screen together is not.
 
 Its caption follows what the group actually is: **`OTHER VERSIONS`** for
 albums, EPs and singles, **`MORE REMIXES`** on a remix page. "Other versions"
@@ -618,8 +661,9 @@ so it is drawn as one; a shrunken tile would say it were a lesser thing. Drawing
 at grid size also puts the art at 1:1 with the density `getGridArtTexture()`
 decoded it for. One subtraction and one addition against §8.2:
 
-- **No shrink-to-fit and no truncation.** The page scrolls as one, so a second
-  row costs only height — and dropping a version defeats the whole strip.
+- **No shrink-to-fit and no truncation.** Extra rows add to album-world
+  content height and still snap by a track-row pitch — dropping a version
+  defeats the whole strip.
 - **A format line**, below the artist. **Not** a quality readout: sample rate
   and bit depth do not tell you which version you want (in a FLAC library every
   tile would repeat much the same figure), so the §8.4 tier mark and the
@@ -640,8 +684,9 @@ Hover is the grid's neutral grey frame, drawn *before* the art so it reads as a
 halo — never accent (§1.4: accent is state). Clicking a tile **opens that
 version in the same panel**, and the strip recomputes to list the one you just
 left, so moving between versions is one click each way. The tiles are `imageFg`
-like the artist photo above, so they are cropped to the visible band by the same
-UV sub-rect trick, for the same reason.
+like the artist photo, so they are cropped to the *list* viewport by the same
+UV sub-rect trick, for the same reason — a tile scrolling under the pinned
+cover must not paint over it.
 
 ### 8.5 Essential / mini mode
 A separate compact layout: centered large art + Bold title + three big centered
