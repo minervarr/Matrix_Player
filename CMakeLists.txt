@@ -271,6 +271,8 @@ else()
 endif()
 
 # ---------- soxr resampler ----------
+include(${CMAKE_CURRENT_SOURCE_DIR}/patches/ApplySoxr.cmake)
+matrix_apply_soxr_patch("${CMAKE_CURRENT_SOURCE_DIR}")
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/third_party/soxr/cmake/Modules")
 set(BUILD_TESTS OFF CACHE BOOL "" FORCE)

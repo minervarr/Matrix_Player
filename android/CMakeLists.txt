@@ -203,6 +203,8 @@ set(VK_CANVAS_ANDROID_PLATFORM ${REPO_ROOT}/framework/vk_canvas/platform/android
 # soxr: the resampler player_view.cc uses for the Reference EQ path. Portable
 # C, add_subdirectory'd exactly as the desktop root CMakeLists.txt does — it is
 # not optional here, because the app being compiled IS the desktop app.
+include(${REPO_ROOT}/patches/ApplySoxr.cmake)
+matrix_apply_soxr_patch("${REPO_ROOT}")
 list(APPEND CMAKE_MODULE_PATH "${REPO_ROOT}/third_party/soxr/cmake/Modules")
 set(BUILD_TESTS       OFF CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES    OFF CACHE BOOL "" FORCE)
