@@ -148,7 +148,9 @@ static Color toColor(ColorRef c, float a = 1.0f) {
 // override them with Matrix Player's green accent + bottom-border selection.
 static widgets::RadioStyle matrixRadioStyle() {
     widgets::RadioStyle s;
-    s.dotOn   = toColor(CLR_ACCENT);   s.dotOff  = toColor(CLR_SEPARATOR);
+    // The idle mark is a 2px bitmap ring. Separator is a hairline grey and
+    // vanishes at that stroke; dim is the same ink as the captions.
+    s.dotOn   = toColor(CLR_ACCENT);   s.dotOff  = toColor(CLR_TEXT_DIM);
     s.textOn  = toColor(CLR_ACCENT);   s.textOff = toColor(CLR_TEXT_PRIMARY);
     s.hoverBg = toColor(CLR_HOVER);              // grey pill behind a hovered row
     s.selBg   = toColor(CLR_ACCENT, 0.16f);      // accent-tint pill behind the selected row
@@ -611,6 +613,20 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
 
     // Load audio mode
     bitperfectMode_.store(db_.loadSetting("audio_mode") == "bitperfect");
+
+    // Chrome theme. Missing or unknown stays Matrix, which is what the tokens
+    // already are, so a fresh database does not change the look.
+#ifndef NDEBUG
+    checkBuiltinThemes();
+#endif
+    // Before the saved id is applied, so a file dropped beside the database
+    // is already in the list when that id is looked up.
+    reloadImportedThemes(app_paths::stateDir() + "themes");
+    {
+        const std::string savedTheme = db_.loadSetting("ui_theme");
+        if (!applyTheme(savedTheme.c_str()))
+            applyTheme("matrix");
+    }
 
     // Scroll direction, one per input kind. Defaults are each platform's own
     // norm, so an empty database behaves exactly as the app always has: a
@@ -1320,7 +1336,12 @@ void PlayerWindow::drawFrame() {
         return;
     }
 
-    drawBarA(canvas, barAModel());
+    // The main Settings session owns the safe area. The rails are empty then
+    // (see recalcLayout); skipping the draw keeps a zero bar from being asked
+    // to lay itself out. The catalogue opened from the AutoEQ switcher is not
+    // that session — panelFromSidebar_ keeps the rails.
+    if (!settingsImmersive())
+        drawBarA(canvas, barAModel());
 
     // ── Main content: album grid, settings page, or (below) the full-page
     // album view that replaces the grid while an album is focused ─────────
@@ -1334,7 +1355,7 @@ void PlayerWindow::drawFrame() {
         Rect cs = toRect(rcChips_);
         canvas.rect(cs.x, cs.y, cs.w, cs.h, toColor(CLR_BG_MAIN));
         canvas.rect(cs.x, cs.y + cs.h - metrics_.stroke(1.0f), cs.w,
-                    metrics_.stroke(1.0f), toColor(CLR_SEPARATOR));
+                    metrics_.stroke(1.0f), toColor(themeRule()));
 
         const float sz    = metrics_.text.secondary;
         const float padX  = metrics_.space(10.0f);
@@ -1642,27 +1663,19 @@ void PlayerWindow::drawFrame() {
         // replacing the settings-page row list below until closed.
         drawActivePanel(canvas, rcGrid_);
     } else if (settingsOpen_) {
-        Rect g = toRect(rcGrid_);
-        canvas.rect(g.x, g.y, g.w, g.h, toColor(CLR_BG_MAIN));
+        // The header is the way out. Exit is only drawn here; a sub-menu
+        // replaces this page and its own header says Return.
+        panels::drawHeader(canvas, rcGrid_, "Settings", metrics_.scale,
+                           metrics_.text.header, rcSettingsExit_, true,
+                           hoverSettingsExit_, "Exit", metrics_.text.body);
 
-        // Centering is done by measuring the styled text ourselves —
-        // Canvas::textCentered() measures with the curve font while the UI
-        // renders from the MTSDF atlas, and its baseline convention differs,
-        // so labels came out visibly off-center both ways.
         auto centeredIn = [&](const std::string& s, const Rect& r, float sz,
-                              ColorRef clr, FontStyle st) {
-            (void)st;
+                              ColorRef clr) {
             const std::string shown = terminusEllipsize(s, sz, r.w);
             const float w = terminusTextWidth(shown, sz);
             drawTerminusText(canvas, shown, r.x + std::max(0.0f, (r.w - w) * 0.5f),
                              r.y + r.h * 0.5f - sz * 0.5f, sz, toColor(clr));
         };
-        {
-            // space(24), not a bare 24: the rows below it are scaled, so a
-            // fixed title pad drifts toward them as the display grows.
-            Rect hdr = { g.x, g.y + metrics_.space(24.0f), g.w, metrics_.text.header };
-            centeredIn("Settings", hdr, metrics_.text.header, CLR_TEXT_PRIMARY, FontStyle::Bold);
-        }
 
         bool bp = bitperfectMode_.load();
         std::string modeLabel = bp
@@ -1671,22 +1684,20 @@ void PlayerWindow::drawFrame() {
 
         struct SettItem { LayoutRect rc; std::string label; int idx; };
         SettItem items[] = {
-            { rcSettingsAddFolder_, "Add Music Folder",      0 },
-            { rcSettingsManage_,    "Manage Music Folders",  1 },
-            { rcSettingsAudio_,     "Audio Output Settings", 2 },
-            { rcSettingsEq_,        "EQ / AutoEQ Profiles",  3 },
-            { rcSettingsInterface_, "Interface",             4 },
-            { rcSettingsBitperfect_, modeLabel,              5 },
+            { rcSettingsAddFolder_,  "Add Music Folder",      0 },
+            { rcSettingsManage_,     "Manage Music Folders",  1 },
+            { rcSettingsAudio_,      "Audio Output Settings", 2 },
+            { rcSettingsEq_,         "EQ / AutoEQ Profiles",  3 },
+            { rcSettingsInterface_,  "Interface",             4 },
+            { rcSettingsThemes_,     "Themes",                5 },
+            { rcSettingsBitperfect_, modeLabel,              6 },
         };
         for (auto& item : items) {
             Rect r = toRect(item.rc);
-            bool isActiveModeRow = (item.idx == 5 && bp);
-            // Hover fills the box (below the border so the outline stays crisp).
+            bool isActiveModeRow = (item.idx == 6 && bp);
             if (hoverSettingsItem_ == item.idx && !isActiveModeRow)
                 canvas.rect(r.x, r.y, r.w, r.h, toColor(CLR_HOVER), UI_CORNER_RADIUS);
-            // Outlined box: a full 4-side rectangle border per row. The active
-            // bitperfect toggle gets a 2px accent border; the rest a 1px hairline.
-            ColorRef border = isActiveModeRow ? CLR_ACCENT : CLR_SEPARATOR;
+            ColorRef border = isActiveModeRow ? CLR_ACCENT : themeRule();
             float bt = isActiveModeRow ? metrics_.stroke(2.0f) : metrics_.stroke(1.0f);
             canvas.rect(r.x, r.y, r.w, bt, toColor(border));
             canvas.rect(r.x, r.y + r.h - bt, r.w, bt, toColor(border));
@@ -1694,7 +1705,7 @@ void PlayerWindow::drawFrame() {
             canvas.rect(r.x + r.w - bt, r.y, bt, r.h, toColor(border));
             ColorRef textClr = (item.idx == 3 && bp) ? CLR_TEXT_DIM
                              : isActiveModeRow ? CLR_ACCENT : CLR_TEXT_PRIMARY;
-            centeredIn(item.label, r, metrics_.text.body, textClr, FontStyle::Roman);
+            centeredIn(item.label, r, metrics_.text.body, textClr);
         }
     }
 
@@ -1725,7 +1736,10 @@ void PlayerWindow::drawFrame() {
     }
 
     // ── Bar B: the transport ─────────────────────────────────────────────
-    {
+    // Hidden for the same reason bar A is: the main Settings session has
+    // collapsed both rails. Drawing this block against an empty transport
+    // rect paints the buttons at the origin.
+    if (!settingsImmersive()) {
         Rect t = toRect(rcTransport_);
 
         // ── One authoring frame, two orientations ───────────────────────────
@@ -1764,8 +1778,8 @@ void PlayerWindow::drawFrame() {
         // The hairline goes on the bar's INNER edge, the one facing the
         // content: the top in Vertical, the left in Horizontal.
         const float bHair = metrics_.stroke(1.0f);
-        if (barBVert) canvas.rect(t.x, t.y, t.w, bHair, toColor(CLR_SEPARATOR));
-        else          canvas.rect(t.x, t.y, bHair, t.h, toColor(CLR_SEPARATOR));
+        if (barBVert) canvas.rect(t.x, t.y, t.w, bHair, toColor(themeRule()));
+        else          canvas.rect(t.x, t.y, bHair, t.h, toColor(themeRule()));
 
         Rect artR = toRect(rcTransportArt_);
         drawArtOrPlaceholder(canvas, transportArtTex_, artR.x, artR.y, artR.w, artR.h);
@@ -2015,7 +2029,11 @@ void PlayerWindow::drawFrame() {
             {
                 const Rect cR = authored(rcTransportClock_);
                 const float blockH = secSz + lineGap + capSz;
-                auto [cx, cy] = mapPoint(cR.x + cR.w * 0.5f, cR.y + cR.h * 0.5f);
+                // A real float, not a structured binding: the lambda below
+                // captures the x, and capturing a binding is C++20.
+                const auto clock = mapPoint(cR.x + cR.w * 0.5f, cR.y + cR.h * 0.5f);
+                const float cx = clock.first;
+                const float cy = clock.second;
                 float ly = cy - blockH * 0.5f;
                 auto line = [&](const char* str, float sz, ColorRef clr) {
                     float w = canvas.textWidthStyled(str, sz, FontStyle::Math);
@@ -2153,7 +2171,15 @@ void PlayerWindow::recalcLayout() {
     // cutout, which is a hole in the glass and cannot be drawn under at any
     // brightness. Everything else in the app derives from these three rects, so
     // this is the only place that has to know.
-    if (curOrientation_ == UiOrientation::Vertical) {
+    //
+    // The main Settings session drops both rails and gives the page the whole
+    // safe rect, in either orientation. Empty rail rects fail every hit test,
+    // which is what keeps a letter from being a way out.
+    if (settingsImmersive()) {
+        rcBarA_ = {};
+        rcBarB_ = {};
+        rcGrid_ = { L, T, R, B };
+    } else if (curOrientation_ == UiOrientation::Vertical) {
         rcBarA_ = { L, T, R, T + barThickness };
         rcBarB_ = { L, B - barThickness, R, B };
         rcGrid_ = { L, T + barThickness, R, B - barThickness };
@@ -2170,7 +2196,12 @@ void PlayerWindow::recalcLayout() {
     // Where everything inside bar A goes. Pure arithmetic, and deliberately
     // not inlined here: see rail_layout.hh, and rail_layout_test, which pins
     // every anchor in all eight states without needing a window.
-    {
+    if (settingsImmersive()) {
+        rail_ = {};
+        rcNavAlbum_ = rcNavEp_ = rcNavSingle_ = rcNavCompilation_ = {};
+        rcNavLive_ = rcNavRemix_ = rcNavPlaylists_ = rcNavSettings_ = {};
+        rcSearch_ = {};
+    } else {
         RailInput ri;
         ri.bar         = rcBarA_;
         ri.orient      = curOrientation_;
@@ -2181,19 +2212,19 @@ void PlayerWindow::recalcLayout() {
         ri.pad         = (int)metrics_.space(10.0f);
         ri.gap         = (int)metrics_.space(16.0f);
         rail_ = computeRailLayout(ri);
-    }
 
-    // The existing hit-testing and drawing read these rects by name, so the
-    // rail feeds them rather than replacing them — one source of geometry.
-    rcNavAlbum_       = rail_.letters[kRailAlbums];
-    rcNavEp_          = rail_.letters[kRailEps];
-    rcNavSingle_      = rail_.letters[kRailSingles];
-    rcNavCompilation_ = rail_.letters[kRailCompilations];
-    rcNavLive_        = rail_.letters[kRailLive];
-    rcNavRemix_       = rail_.letters[kRailRemixes];
-    rcNavPlaylists_   = rail_.letters[kRailPlaylists];
-    rcNavSettings_    = rail_.settings;
-    rcSearch_         = rail_.search;
+        // The existing hit-testing and drawing read these rects by name, so the
+        // rail feeds them rather than replacing them — one source of geometry.
+        rcNavAlbum_       = rail_.letters[kRailAlbums];
+        rcNavEp_          = rail_.letters[kRailEps];
+        rcNavSingle_      = rail_.letters[kRailSingles];
+        rcNavCompilation_ = rail_.letters[kRailCompilations];
+        rcNavLive_        = rail_.letters[kRailLive];
+        rcNavRemix_       = rail_.letters[kRailRemixes];
+        rcNavPlaylists_   = rail_.letters[kRailPlaylists];
+        rcNavSettings_    = rail_.settings;
+        rcSearch_         = rail_.search;
+    }
     // "MATRIX PLAYER" has no home in a 130px rail and is gone: the brand was
     // a sidebar header, and there is no sidebar. Kept empty rather than
     // deleted so nothing that still reads it draws at a stale position.
@@ -2301,6 +2332,22 @@ void PlayerWindow::recalcLayout() {
     const int maxRow = std::max(0, albumRows - gridRows_);
     gridTotalHeight_ = maxRow * gridStepY_ + (rcGrid_.bottom - rcGrid_.top);
 
+    // An empty bar still produces positive-area button rects near the origin:
+    // barB() adds its offsets to rcBarB_'s edges, and a click would land on a
+    // control nobody can see. The warning strip does not belong to the bar, so
+    // it is laid out in both branches.
+    if (settingsImmersive()) {
+        rcTransportArt_ = {};
+        rcTransportInfo_ = {};
+        rcTransportClock_ = {};
+        rcBtnPrev_ = {};
+        rcBtnPlay_ = {};
+        rcBtnNext_ = {};
+        rcDspBadge_ = {};
+        int warnH = (int)metrics_.space(45.0f);
+        rcAudioNotice_ = { rcGrid_.left, rcGrid_.bottom - warnH,
+                           rcGrid_.right, rcGrid_.bottom };
+    } else {
     // ── Bar B (the transport), in whichever orientation ─────────────────────
     //
     // Laid out along the bar's own long axis and mapped at the end, the same
@@ -2472,6 +2519,7 @@ void PlayerWindow::recalcLayout() {
     const int modeA1 = clockInkA0;
     const int modeA0 = btnA0 + totalBtnL;
     rcDspBadge_ = barB(modeA0, modeA1, tPad, barThickness - tPad);
+    }
 
     // (The album view has no on-screen close button — Escape closes it.)
 
@@ -2489,9 +2537,14 @@ void PlayerWindow::recalcLayout() {
     // drawn over the "Settings" title and up into the rail itself. Reading
     // rcGrid_.top costs nothing on the desktop — it is 0 there, so not one
     // pixel moves — and it is the only version that is right on a phone.
+    //
+    // The header is the same 91-unit bar drawHeader paints, and the first row
+    // starts one pad below it. The main session gives this page the whole safe
+    // rect, so that header is the top of the window rather than a title
+    // floating under bar A.
     const int settPad = (int)metrics_.space(24.0f);
     int settCx   = (rcGrid_.left + rcGrid_.right) / 2;
-    int settTop  = rcGrid_.top + (int)metrics_.space(147.0f);
+    int settTop  = rcGrid_.top + (int)(91.0f * metrics_.scale) + settPad;
     // The rows are a fixed 718 wide at the reference, which is wider than a
     // 720px phone is: clamped to the content area so they keep a margin
     // instead of running edge to edge, or past the edge once a cutout eats in.
@@ -2499,14 +2552,14 @@ void PlayerWindow::recalcLayout() {
                             std::max(0, (rcGrid_.right - rcGrid_.left) / 2 - settPad));
     int rowH     = (int)metrics_.space(84.0f);
     int rowGap   = (int)metrics_.space(22.0f);
-    // Five rows, and this list has no scroll of its own — onPanelWheel serves
+    // Seven rows, and this list has no scroll of its own — onPanelWheel serves
     // the PANELS, and the settings page is not one — so the last row has to be
     // reachable at every height. A phone in Horizontal is ~720 tall and the
     // rhythm authored at 1080 does not fit in it: give up the gap first, then
     // the row height, and each only as far as it actually has to go. At every
     // size where today's rhythm already fits, neither branch is entered.
     {
-        const int kSettRows = 6;
+        const int kSettRows = 7;
         const int avail = std::max(0, rcGrid_.bottom - settPad - settTop);
         if (kSettRows * rowH + (kSettRows - 1) * rowGap > avail) {
             rowGap = std::max(0, (avail - kSettRows * rowH) / (kSettRows - 1));
@@ -2524,7 +2577,8 @@ void PlayerWindow::recalcLayout() {
     rcSettingsAudio_      = settRow(2);
     rcSettingsEq_         = settRow(3);
     rcSettingsInterface_  = settRow(4);
-    rcSettingsBitperfect_ = settRow(5);
+    rcSettingsThemes_     = settRow(5);
+    rcSettingsBitperfect_ = settRow(6);
 
     // Put the anchor tile back at the top-left, now that gridCols_ and
     // gridTotalHeight_ are final, and clamp — because the new grid may be
@@ -2879,7 +2933,7 @@ static void drawAlbumIdentityText(Canvas& canvas, const UiMetrics& metrics,
     }
     y += metrics.space(SP_XS);
     if (drawRule)
-        canvas.rect(x, y, textW, metrics.stroke(1.0f), toColor(CLR_SEPARATOR));
+        canvas.rect(x, y, textW, metrics.stroke(1.0f), toColor(themeRule()));
 }
 
 // A small filled down-triangle, DIM, no icon font. Wide at the top, point
@@ -3089,7 +3143,7 @@ void PlayerWindow::drawAlbumView(Canvas& canvas) {
     if (wide) {
         const float vx = artX + artSize + metrics_.space(SP_XL) * 0.5f;
         canvas.rect(vx, tp.y + pad, metrics_.stroke(1.0f), tp.h - pad * 2.0f,
-                    toColor(CLR_SEPARATOR));
+                    toColor(themeRule()));
     }
 
     bool multiDisc = false;
@@ -3143,11 +3197,11 @@ void PlayerWindow::drawAlbumView(Canvas& canvas) {
         float ruleY = midY - rule * 0.5f;
         if (labelX - gap > discRuleL)
             canvas.rect(discRuleL, ruleY, (labelX - gap) - discRuleL, rule,
-                        toColor(CLR_SEPARATOR));
+                        toColor(themeRule()));
         if (discRuleR > labelX + lblW + gap)
             canvas.rect(labelX + lblW + gap, ruleY,
                         discRuleR - (labelX + lblW + gap), rule,
-                        toColor(CLR_SEPARATOR));
+                        toColor(themeRule()));
     };
 
     trackRowTop_.assign(album.tracks.size(), 0);
@@ -4068,7 +4122,8 @@ int PlayerWindow::settingsHitTest(int x, int y) const {
     if (ptInRect(rcSettingsAudio_, x, y)) return 2;
     if (ptInRect(rcSettingsEq_, x, y)) return 3;
     if (ptInRect(rcSettingsInterface_, x, y)) return 4;
-    if (ptInRect(rcSettingsBitperfect_, x, y)) return 5;
+    if (ptInRect(rcSettingsThemes_, x, y)) return 5;
+    if (ptInRect(rcSettingsBitperfect_, x, y)) return 6;
     return -1;
 }
 
@@ -4127,6 +4182,7 @@ void PlayerWindow::onMouseMove(int x, int y) {
     int oldHoverSidebar = hoverSidebarItem_;
     int oldHoverTransBtn = hoverTransportBtn_;
     int oldHoverSettings = hoverSettingsItem_;
+    bool oldHoverExit = hoverSettingsExit_;
     bool oldHoverDsp = hoverDspBadge_;
     int oldPlRow = plHoverRow_, oldPlTile = plHoverTile_, oldPlTab = plHoverRangeTab_;
 
@@ -4136,6 +4192,7 @@ void PlayerWindow::onMouseMove(int x, int y) {
     hoverSidebarItem_ = -1;
     hoverTransportBtn_ = -1;
     hoverSettingsItem_ = -1;
+    hoverSettingsExit_ = false;
     hoverDspBadge_ = false;
     // Cleared here with the rest, not inside the section's own hit-test, so a
     // pointer that leaves the content area for the sidebar drops this hover
@@ -4154,8 +4211,13 @@ void PlayerWindow::onMouseMove(int x, int y) {
         // the same way rcSearch_ beats the sidebar rows in cursorForPoint().
         hoverTrackIdx_   = hoverVariantIdx_ >= 0 ? -1 : trackPanelHitTest(x, y);
     } else if (ptInRect(rcGrid_, x, y)) {
-        if (settingsOpen_)
-            hoverSettingsItem_ = settingsHitTest(x, y);
+        if (settingsOpen_) {
+            // Exit sits in the header, inside the same content rect as the
+            // rows. A point on it is not also a row.
+            hoverSettingsExit_ = ptInRect(rcSettingsExit_, x, y) != 0;
+            if (!hoverSettingsExit_)
+                hoverSettingsItem_ = settingsHitTest(x, y);
+        }
         else if (navSection_ == NavSection::Playlists)
             onPlaylistsMouseMove(x, y);
         else
@@ -4171,6 +4233,7 @@ void PlayerWindow::onMouseMove(int x, int y) {
                     hoverSidebarItem_ != oldHoverSidebar ||
                     hoverTransportBtn_ != oldHoverTransBtn ||
                     hoverSettingsItem_ != oldHoverSettings ||
+                    hoverSettingsExit_ != oldHoverExit ||
                     hoverDspBadge_ != oldHoverDsp);
     if (changed)
         invalidate();
@@ -4194,6 +4257,7 @@ CursorShape PlayerWindow::cursorForPoint(int x, int y) const {
     if (hoverVariantIdx_    >= 0) return CursorShape::Hand;
     if (hoverAlbumIdx_      >= 0) return CursorShape::Hand;
     if (hoverSettingsItem_  >= 0) return CursorShape::Hand;
+    if (settingsOpen_ && ptInRect(rcSettingsExit_, x, y)) return CursorShape::Hand;
     if (navSection_ == NavSection::Playlists && !settingsOpen_ &&
         (plHoverRow_ >= 0 || plHoverTile_ >= 0 || plHoverRangeTab_ >= 0))
         return CursorShape::Hand;
@@ -4242,22 +4306,88 @@ void PlayerWindow::applyCursor() {
 }
 
 void PlayerWindow::onMouseLeave() {
+    // Win32 arms WM_MOUSELEAVE per entry; the next move asks again. Every
+    // other host ignores the flag. The highlight clear is the whole function.
     mouseTracking_ = false;
-    hoverAlbumIdx_ = -1;
-    hoverTrackIdx_ = -1;
-    hoverVariantIdx_ = -1;
-    hoverSidebarItem_ = -1;
-    hoverTransportBtn_ = -1;
-    hoverSettingsItem_ = -1;
-    hoverDspBadge_ = false;
-    plHoverRow_ = plHoverTile_ = plHoverRangeTab_ = -1;
-    invalidate();
+
+    // Every control that draws a hover. A finger lift, a cancelled gesture,
+    // a stroke that became a scroll, and a pointer leaving the window all
+    // arrive here, and all of them mean there is nothing under a pointer.
+    //
+    // The music-page set used to be the whole clear. A Settings row, a chip,
+    // a theme, an EQ profile, the signal-chain close — anything not in it —
+    // stayed grey after the finger had slid off and lifted, until the next
+    // contact happened to move the pointer. The same stuck letter the
+    // sidebar showed. A new hover flag that is not dropped here sticks the
+    // same way.
+    bool lit = false;
+    auto dropI = [&](int& v)  { if (v != -1) { v = -1; lit = true; } };
+    auto dropB = [&](bool& v) { if (v)       { v = false; lit = true; } };
+
+    dropI(hoverAlbumIdx_);
+    dropI(hoverTrackIdx_);
+    dropI(hoverVariantIdx_);
+    dropI(hoverSidebarItem_);
+    dropI(hoverTransportBtn_);
+    dropI(hoverSettingsItem_);
+    dropB(hoverSettingsExit_);
+    dropB(hoverDspBadge_);
+    dropI(hoverChipIdx_);
+    dropI(hoverSuggestIdx_);
+    dropB(hoverScClose_);
+    dropB(hoverEsClose_);
+    dropI(esHoverRow_);
+    dropI(plHoverRow_);
+    dropI(plHoverTile_);
+    dropI(plHoverRangeTab_);
+
+    dropI(mfHoverRow_);
+    dropB(mfHoverClose_);
+    dropB(mfHoverRemove_);
+
+    dropI(asHoverBackendRow_);
+    dropI(asHoverDeviceRow_);
+    dropI(asHoverBtCodecRow_);
+    dropB(asHoverBtRate_);
+    dropB(asHoverBtBits_);
+    dropB(asHoverBtQuality_);
+    dropB(asHoverBtEnable_);
+    dropB(asHoverBtForget_);
+#ifdef _WIN32
+    dropI(asHoverModeRow_);
+#endif
+    dropB(asHoverClose_);
+    dropB(asHoverApply_);
+
+    dropI(eqHoverRow_);
+    dropB(eqHoverClose_);
+    dropB(eqHoverAssign_);
+    dropB(eqHoverClear_);
+    dropB(eqHoverTabRecommended_);
+    dropB(eqHoverTabAll_);
+    dropB(eqHoverTabMine_);
+    dropB(eqHoverPin_);
+    dropB(eqHoverRemove_);
+
+    dropI(fpHoverRow_);
+    dropB(fpHoverClose_);
+    dropB(fpHoverSelect_);
+
+    dropB(isHoverClose_);
+    dropI(isHoverRow_);
+    dropB(thHoverClose_);
+    dropI(thHoverRow_);
+
+    if (lit) invalidate();
 }
 
 // The press ARMS the click and does nothing else — see the declaration for
-// why. Hover has already been updated by the host's own onMouseMove, which on
-// a touch screen is synthesised at contact, so what is under the finger is
-// already lit by the time this runs.
+// why. Hover has already been updated by the host's own onMouseMove. On a
+// touch screen that move is synthesised at contact and again for every
+// sample while the stroke is still a tap, so what is under the finger is
+// already lit — and a slide off the control has already unlit it — by the
+// time this runs. The lift drops the highlight through onMouseLeave; this
+// function does not, because on the desktop the cursor is still there.
 void PlayerWindow::onLButtonDown(int x, int y) {
     pressX_ = x;
     pressY_ = y;
@@ -4497,7 +4627,7 @@ void PlayerWindow::handleClick(int x, int y) {
             }
         } else if (nav == kSidebarSettingsHit) {
             closeOverlay();
-            if (!settingsOpen_) { settingsOpen_ = true; navForwardValid_ = false; invalidate(); }
+            if (!settingsOpen_) enterSettings();
         } else if (nav >= 0) {
             closeOverlay();
             const bool atRoot = !settingsOpen_ && !trackPanelOpen_ &&
@@ -4558,15 +4688,18 @@ void PlayerWindow::handleClick(int x, int y) {
         return;
     }
 
-    // Settings page
+    // Settings page. Exit is the only on-screen way out: both rails are gone
+    // for this session, so the letter that opened it cannot close it.
     if (settingsOpen_ && ptInRect(rcGrid_, x, y)) {
+        if (ptInRect(rcSettingsExit_, x, y)) { leaveSettings(); return; }
         int sett = settingsHitTest(x, y);
         if (sett == 0) onAddFolder();
         if (sett == 1) onManageFolders();
         if (sett == 2) onAudioSettings();
         if (sett == 3) onEqSettings();
         if (sett == 4) onInterfaceSettings();
-        if (sett == 5) toggleBitperfectMode();
+        if (sett == 5) onThemesSettings();
+        if (sett == 6) toggleBitperfectMode();
         return;
     }
 }
@@ -4940,8 +5073,44 @@ void PlayerWindow::toggleBitperfectMode() {
 // (full-page overlay, not a modal popup: Wayland has no owned-window
 // primitive to build a real modal on).
 
+void PlayerWindow::enterSettings() {
+    if (settingsOpen_) return;
+    settingsOpen_ = true;
+    panelFromSidebar_ = false;
+    hoverSettingsItem_ = -1;
+    hoverSettingsExit_ = false;
+    navForwardValid_ = false;
+    // Once, on the way in. A sub-menu does not stop the music again, and
+    // leaving does not start it. The switcher-borrowed EQ panel never comes
+    // through here, so that path keeps playing.
+    if (isPlaying_) onStop();
+    recalcLayout();
+    invalidate();
+}
+
+void PlayerWindow::leaveSettings() {
+    settingsOpen_ = false;
+    hoverSettingsItem_ = -1;
+    hoverSettingsExit_ = false;
+    recalcLayout();
+    invalidate();
+}
+
 void PlayerWindow::closeActivePanel() {
+    // Return, Escape and the back gesture all come through here. Music
+    // Folders used to rescan only from its Done button, so leaving by Return
+    // kept a removed root on screen until the next launch.
+    if (activePanel_ == SettingsPanel::ManageFolders && mfChanged_) {
+        mfChanged_ = false;
+        watcher_.unwatchAll();
+        setupWatchers();
+        startBackgroundScan();
+    }
     activePanel_ = SettingsPanel::None;
+    // The row that opened this sub-menu stays gray unless this is cleared.
+    // onMouseMove never reaches the settings page while a panel is up, so the
+    // index freezes on the click and would still be lit on the way back.
+    hoverSettingsItem_ = -1;
     updateTimerNeed();   // ...and stops watching, unless playback still needs it
     // The panel is what held the focused field, so the keyboard goes with it.
     // syncKeyboard() reads activePanel_, hence after the assignment.
@@ -4982,6 +5151,10 @@ void PlayerWindow::drawActivePanel(Canvas& canvas, const LayoutRect& area) {
         drawInterfaceSettings(canvas, area);
         closeRc = &isCloseRc_; hoverClose = isHoverClose_;
         break;
+    case SettingsPanel::Themes:
+        drawThemes(canvas, area);
+        closeRc = &thCloseRc_; hoverClose = thHoverClose_;
+        break;
     case SettingsPanel::None:
         break;
     }
@@ -4998,7 +5171,6 @@ void PlayerWindow::onPanelMouseMove(int x, int y) {
     case SettingsPanel::ManageFolders: {
         bool hc = ptInRect(mfCloseRc_, x, y);  if (hc != mfHoverClose_)  { mfHoverClose_  = hc; changed = true; }
         bool hr = ptInRect(mfBtnRemove_, x, y); if (hr != mfHoverRemove_) { mfHoverRemove_ = hr; changed = true; }
-        bool hd = ptInRect(mfBtnDone_, x, y);   if (hd != mfHoverDone_)   { mfHoverDone_   = hd; changed = true; }
         int row = hitTestListRows(mfListRows_, x, y);
         if (row != mfHoverRow_) { mfHoverRow_ = row; changed = true; }
         break;
@@ -5054,7 +5226,6 @@ void PlayerWindow::onPanelMouseMove(int x, int y) {
     case SettingsPanel::FolderPicker: {
         bool hc = ptInRect(fpCloseRc_, x, y);   if (hc != fpHoverClose_)  { fpHoverClose_  = hc; changed = true; }
         bool hs = ptInRect(fpBtnSelect_, x, y); if (hs != fpHoverSelect_) { fpHoverSelect_ = hs; changed = true; }
-        bool ha = ptInRect(fpBtnCancel_, x, y); if (ha != fpHoverCancel_) { fpHoverCancel_ = ha; changed = true; }
         int row = hitTestListRows(fpListRows_, x, y);
         if (row != fpHoverRow_) { fpHoverRow_ = row; changed = true; }
         break;
@@ -5063,6 +5234,16 @@ void PlayerWindow::onPanelMouseMove(int x, int y) {
         bool hc = ptInRect(isCloseRc_, x, y); if (hc != isHoverClose_) { isHoverClose_ = hc; changed = true; }
         int row = ptInRect(isRowTouch_, x, y) ? 0 : (ptInRect(isRowWheel_, x, y) ? 1 : -1);
         if (row != isHoverRow_) { isHoverRow_ = row; changed = true; }
+        break;
+    }
+    case SettingsPanel::Themes: {
+        bool hc = ptInRect(thCloseRc_, x, y);
+        if (hc != thHoverClose_) { thHoverClose_ = hc; changed = true; }
+        int row = -1;
+        if (ptInRect(thBody_, x, y))
+            for (int i = 0; i < (int)thRowRc_.size(); i++)
+                if (ptInRect(thRowRc_[(size_t)i], x, y)) { row = i; break; }
+        if (row != thHoverRow_) { thHoverRow_ = row; changed = true; }
         break;
     }
     case SettingsPanel::None:
@@ -5074,8 +5255,7 @@ void PlayerWindow::onPanelMouseMove(int x, int y) {
 void PlayerWindow::onPanelClick(int x, int y) {
     switch (activePanel_) {
     case SettingsPanel::ManageFolders: {
-        if (ptInRect(mfCloseRc_, x, y) || ptInRect(mfBtnDone_, x, y)) {
-            if (mfChanged_) { watcher_.unwatchAll(); setupWatchers(); startBackgroundScan(); }
+        if (ptInRect(mfCloseRc_, x, y)) {
             closeActivePanel();
             return;
         }
@@ -5223,8 +5403,20 @@ void PlayerWindow::onPanelClick(int x, int y) {
         }
         return;
     }
+    case SettingsPanel::Themes: {
+        if (ptInRect(thCloseRc_, x, y)) { closeActivePanel(); return; }
+        if (!ptInRect(thBody_, x, y)) return;
+        for (int i = 0; i < (int)thRowRc_.size() && i < themeCount(); i++) {
+            if (!ptInRect(thRowRc_[(size_t)i], x, y)) continue;
+            if (applyTheme(themeAt(i).id.c_str()))
+                db_.saveSetting("ui_theme", themeAt(i).id);
+            invalidate();
+            return;
+        }
+        return;
+    }
     case SettingsPanel::FolderPicker: {
-        if (ptInRect(fpCloseRc_, x, y) || ptInRect(fpBtnCancel_, x, y)) { closeActivePanel(); return; }
+        if (ptInRect(fpCloseRc_, x, y)) { closeActivePanel(); return; }
         if (ptInRect(fpBtnSelect_, x, y)) {
             commitAddFolder(fpCurrentDir_);
             closeActivePanel();
@@ -5306,6 +5498,11 @@ void PlayerWindow::onPanelWheel(int x, int y, int delta) {
         }
         return;
     }
+    case SettingsPanel::Themes: {
+        int viewH = thBody_.bottom - thBody_.top;
+        scrollDiscrete(thRowScroll_, thScrollY_, delta, pitch, thContentH_, viewH);
+        return;
+    }
     case SettingsPanel::Interface:
         // Nothing to scroll: two rows and a sentence, sized to fit.
     case SettingsPanel::None:
@@ -5317,19 +5514,21 @@ void PlayerWindow::onPanelWheel(int x, int y, int delta) {
 // ── Manage Folders panel ─────────────────────────────────────────────────────
 
 void PlayerWindow::onManageFolders() {
+    hoverSettingsItem_ = -1;
     mfRoots_ = db_.loadMusicRoots();
     mfSelectedRow_ = -1;
     mfHoverRow_ = -1;
     mfScrollY_ = 0;
     mfChanged_ = false;
-    mfHoverClose_ = mfHoverRemove_ = mfHoverDone_ = false;
+    mfHoverClose_ = mfHoverRemove_ = false;
     activePanel_ = SettingsPanel::ManageFolders;
     invalidate();
 }
 
 void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
     LayoutRect content = panels::drawHeader(canvas, area, "Music Folders", metrics_.scale,
-                                            metrics_.text.header, mfCloseRc_, true, mfHoverClose_);
+                                            metrics_.text.header, mfCloseRc_, true, mfHoverClose_,
+                                            "Return", metrics_.text.body);
     float pad = metrics_.space(SP_LG);
     float btnH = metrics_.space(58.0f);
 
@@ -5349,16 +5548,16 @@ void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
                                   metrics_.text.body * 1.4f, toColor(CLR_TEXT_DIM));
     }
 
+    // Return is the way out (and it rescans). Done used to sit opposite
+    // Remove and do the same thing, in the accent, which read as a commit.
     float btnW = metrics_.space(277.0f);
     int by = (int)(content.bottom - (btnH + pad));
-    auto mfRects = panels::layoutEdgePair(
-        content, pad, btnW, btnW,
-        metrics_.space(panels::kMinActionBtnW), metrics_.space(SP_MD), by, (int)btnH);
-    mfBtnRemove_ = mfRects.first;
-    mfBtnDone_   = mfRects.second;
+    auto mfRects = panels::layoutButtonRow(
+        content, pad, 1, btnW, 0.0f,
+        metrics_.space(panels::kMinActionBtnW), by, (int)btnH, false);
+    mfBtnRemove_ = mfRects.empty() ? LayoutRect{} : mfRects[0];
     panels::drawButton(canvas, mfBtnRemove_, "Remove Selected", mfHoverRemove_,
                        metrics_.text.body, false, true);
-    panels::drawButton(canvas, mfBtnDone_, "Done", mfHoverDone_, metrics_.text.body, true, true);
 }
 
 // ── Audio Settings panel ─────────────────────────────────────────────────────
@@ -5480,6 +5679,7 @@ void PlayerWindow::onAudioSettings() {
 #ifdef _WIN32
     asHoverModeRow_ = -1;
 #endif
+    hoverSettingsItem_ = -1;
     activePanel_ = SettingsPanel::AudioSettings;
     btPollTick_ = 0;
     updateTimerNeed();   // the panel watches the route while it is on screen
@@ -5494,7 +5694,8 @@ void PlayerWindow::onAudioSettings() {
 
 void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     LayoutRect content = panels::drawHeader(canvas, area, "Audio Output Settings", metrics_.scale,
-                                            metrics_.text.header, asCloseRc_, true, asHoverClose_);
+                                            metrics_.text.header, asCloseRc_, true, asHoverClose_,
+                                            "Return", metrics_.text.body);
     Rect c = toRect(content);
     float pad = metrics_.space(SP_LG);
     float btnH = metrics_.space(58.0f);
@@ -6135,6 +6336,7 @@ void PlayerWindow::applyAudioSettingsPanel() {
 // ── EQ Settings panel ────────────────────────────────────────────────────────
 
 void PlayerWindow::onEqSettings() {
+    hoverSettingsItem_ = -1;
     panelFromSidebar_ = false;   // the sidebar path re-arms this after calling
     eqDeviceKey_ = getActiveDeviceKey();
     markEqAssignmentDirty();     // the device just changed under the header line
@@ -6223,7 +6425,8 @@ const EqHeadphone* PlayerWindow::eqSelectedHeadphone() const {
 void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     ensureEqProfiles();
     LayoutRect content = panels::drawHeader(canvas, area, "EQ / AutoEQ Profiles", metrics_.scale,
-                                            metrics_.text.header, eqCloseRc_, true, eqHoverClose_);
+                                            metrics_.text.header, eqCloseRc_, true, eqHoverClose_,
+                                            "Return", metrics_.text.body);
     Rect c = toRect(content);
     float pad = metrics_.space(SP_LG);
     float y = c.y + pad;
@@ -7003,15 +7206,17 @@ void PlayerWindow::commitAddFolder(const std::string& root) {
 bool PlayerWindow::hasMusicRoots() { return !db_.loadMusicRoots().empty(); }
 
 void PlayerWindow::onAddFolder() {
+    hoverSettingsItem_ = -1;
     fpLoadDir(fpCurrentDir_.empty() ? userHomeDir() : fpCurrentDir_);
-    fpHoverClose_ = fpHoverSelect_ = fpHoverCancel_ = false;
+    fpHoverClose_ = fpHoverSelect_ = false;
     activePanel_ = SettingsPanel::FolderPicker;
     invalidate();
 }
 
 void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
     LayoutRect content = panels::drawHeader(canvas, area, "Select Music Folder", metrics_.scale,
-                                            metrics_.text.header, fpCloseRc_, true, fpHoverClose_);
+                                            metrics_.text.header, fpCloseRc_, true, fpHoverClose_,
+                                            "Return", metrics_.text.body);
     Rect c = toRect(content);
     float pad = metrics_.space(SP_LG);
 
@@ -7021,15 +7226,16 @@ void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
 
     float listTop = pad * 2.0f + metrics_.text.secondary * 1.4f;
     float btnH = metrics_.space(58.0f);
+    // Return already leaves without choosing. Cancel was that same action
+    // again, on the left, so the commit is the only button left down here.
     float btnW = metrics_.space(326.0f);
     int by = (int)(content.bottom - (btnH + pad));
-    auto fpRects = panels::layoutEdgePair(
-        content, pad, btnW, btnW,
-        metrics_.space(panels::kMinActionBtnW), metrics_.space(SP_MD), by, (int)btnH);
-    fpBtnCancel_ = fpRects.first;
-    fpBtnSelect_ = fpRects.second;
-    panels::drawButton(canvas, fpBtnCancel_, "Cancel", fpHoverCancel_, metrics_.text.body, false, true);
-    panels::drawButton(canvas, fpBtnSelect_, "Select This Folder", fpHoverSelect_, metrics_.text.body, true, true);
+    auto fpRects = panels::layoutButtonRow(
+        content, pad, 1, btnW, 0.0f,
+        metrics_.space(panels::kMinActionBtnW), by, (int)btnH, true);
+    fpBtnSelect_ = fpRects.empty() ? LayoutRect{} : fpRects[0];
+    panels::drawButton(canvas, fpBtnSelect_, "Select This Folder", fpHoverSelect_,
+                       metrics_.text.body, true, true);
 
     LayoutRect listArea = { content.left, (int)(content.top + listTop),
                             content.right, (int)(content.bottom - (btnH + pad * 2.0f)) };
@@ -7355,6 +7561,13 @@ void PlayerWindow::clearEqProfile() {
 }
 
 void PlayerWindow::onPlay(StartCause cause) {
+    // The main Settings session stopped playback on the way in and keeps it
+    // stopped: Space, a media key and the gapless handoff all come through
+    // here. Refusing before the clears below leaves a notice that was already
+    // on screen where it was. The switcher-borrowed EQ panel is not this
+    // session, and playback there is the point of that page.
+    if (settingsImmersive()) return;
+
     // A fresh play attempt always dismisses a stale bitperfect warning,
     // including the stale-selection early-return path just below.
     audioNotice_.clear();
@@ -8987,6 +9200,7 @@ void PlayerWindow::drawEqSwitcher(Canvas& canvas, const LayoutRect& area) {
 // are each about one piece of hardware or one directory, and the Settings page
 // itself has no scroll of its own and should not grow a column of toggles.
 void PlayerWindow::onInterfaceSettings() {
+    hoverSettingsItem_ = -1;
     panelFromSidebar_ = false;
     isHoverRow_   = -1;
     isHoverClose_ = false;
@@ -8998,7 +9212,7 @@ void PlayerWindow::onInterfaceSettings() {
 void PlayerWindow::drawInterfaceSettings(Canvas& canvas, const LayoutRect& area) {
     LayoutRect content = panels::drawHeader(canvas, area, "Interface",
                                             metrics_.scale, metrics_.text.header, isCloseRc_, true,
-                                            isHoverClose_);
+                                            isHoverClose_, "Return", metrics_.text.body);
     Rect c = toRect(content);
     const float pad  = metrics_.space(SP_LG);
     const float rowH = panelRowH();
@@ -9028,8 +9242,11 @@ void PlayerWindow::drawInterfaceSettings(Canvas& canvas, const LayoutRect& area)
         if (isHoverRow_ == i)
             canvas.rect((float)rc.left, (float)rc.top, (float)(rc.right - rc.left),
                         (float)(rc.bottom - rc.top), toColor(CLR_HOVER), UI_CORNER_RADIUS);
+        // Off draws the track's outline, so the idle colour has to be a text
+        // ink. Separator filled the old vector pill; at a 2px stroke it is
+        // the page.
         panels::drawTerminusToggle(canvas, rc, rows[i].on, rows[i].title, metrics_.text.body,
-                                   toColor(CLR_ACCENT), toColor(CLR_SEPARATOR),
+                                   toColor(CLR_ACCENT), toColor(CLR_TEXT_DIM),
                                    toColor(CLR_TEXT_PRIMARY), toColor(CLR_TEXT_PRIMARY));
         y += rowH;
         y = panels::drawTerminusLabel(canvas, rows[i].on ? rows[i].onS : rows[i].offS,
@@ -9043,14 +9260,126 @@ void PlayerWindow::drawInterfaceSettings(Canvas& canvas, const LayoutRect& area)
                               c.x + pad, y, metrics_.text.secondary, maxW,
                               metrics_.text.secondary * 1.4f, toColor(CLR_TEXT_DIM));
 
-    // No inline Close button here: this function is only ever called from
-    // drawActivePanel's switch, which draws Close for every panel right
-    // after (the shared *closeRc call at the end of drawActivePanel). A
-    // second, redundant draw used to sit here — harmless while both drew
-    // through the MSDF text layer, but visibly broken now that Terminus
-    // draws as raw overlapping rects: two identical Close labels overlapping
-    // pixel-for-pixel left only the first row of the second draw's "E"
-    // showing, discovered via a headless capture during this change.
+    // Return is drawn by drawHeader, before this body. A second copy used to
+    // be stamped here as well: two Terminus labels on the same pixels left
+    // only the first row of the second "E", which a headless capture caught.
+}
+
+void PlayerWindow::onThemesSettings() {
+    hoverSettingsItem_ = -1;
+    panelFromSidebar_ = false;
+    thHoverRow_ = -1;
+    thHoverClose_ = false;
+    thScrollY_ = 0;
+    thRowScroll_ = {};
+    // A file dropped while the page was closed shows up on the way in.
+    // Opening again is the refresh; the page does not watch the directory.
+    reloadImportedThemes(app_paths::stateDir() + "themes");
+    activePanel_ = SettingsPanel::Themes;
+    invalidate();
+}
+
+// Groups, then rows. The group is one Terminus strike taller than the name
+// under it and drawn in the primary ink, with a rule — the old caption was
+// the same size and the same dim colour as the sentence under each name, so
+// a group and a blurb were the same thing. The name is the row. The active
+// name is the accent, and a hover on any other row is the neutral fill. A
+// pick applies immediately; there is no Apply.
+void PlayerWindow::drawThemes(Canvas& canvas, const LayoutRect& area) {
+    LayoutRect content = panels::drawHeader(canvas, area, "Themes",
+                                            metrics_.scale, metrics_.text.header,
+                                            thCloseRc_, true, thHoverClose_,
+                                            "Return", metrics_.text.body);
+    Rect c = toRect(content);
+    thBody_ = content;
+    canvas.setClip(c.x, c.y, c.w, c.h);
+
+    const float pad = metrics_.space(SP_LG);
+    const float indent = metrics_.space(SP_MD);
+    const float maxW = std::max(0.0f, c.w - 2.0f * pad);
+    const float textW = std::max(0.0f, maxW - indent);
+    const float nameTarget = metrics_.text.body;
+    const float blurbTarget = metrics_.text.secondary;
+    const float groupTarget = terminusTallerTarget(nameTarget);
+    const float groupDrawn = terminusDrawnHeight(groupTarget);
+    const float nameH = std::max(nameTarget * 1.45f, terminusDrawnHeight(nameTarget));
+    const float lineH = std::max(blurbTarget * 1.45f, terminusDrawnHeight(blurbTarget));
+    const float groupLineH = std::max(groupDrawn, groupTarget);
+    const float rowGap = metrics_.space(SP_MD);
+    const float textX = c.x + pad + indent;
+    // The line box is taller than the strike, and the strike's own blank rows
+    // sit mostly under the capitals. Both spares used to fall below the
+    // sentence, so a tint that started at the text origin met the top of the
+    // name. Dropping the block by half that difference puts the same air
+    // above the name as below the sentence. The row box does not move, so
+    // the gap to the next row stays put. "M" is the cap top; "," is the
+    // lowest mark a sentence here actually draws.
+    const float nameDrawn = terminusDrawnHeight(nameTarget);
+    const float blurbDrawn = terminusDrawnHeight(blurbTarget);
+    const float nameInkTop = (nameTarget - nameDrawn) * 0.5f
+                           + terminusInk("M", nameTarget).top;
+    const float blurbInkBot = (blurbTarget - blurbDrawn) * 0.5f
+                            + terminusInk(",", blurbTarget).bottom;
+    const float slackBelow = lineH - blurbInkBot;
+    const float textShift = std::round((slackBelow - nameInkTop) * 0.5f);
+    float y = c.y + pad - (float)thScrollY_;
+
+    thRowRc_.assign((size_t)themeCount(), LayoutRect{});
+    for (int i = 0; i < themeCount(); i++) {
+        const Palette& p = themeAt(i);
+        const bool newGroup = (i == 0) || p.group != themeAt(i - 1).group;
+        if (newGroup) {
+            if (i > 0) y += rowGap;
+            y = panels::drawTerminusLabel(canvas, p.group, c.x + pad, y,
+                                          groupTarget, maxW, groupLineH,
+                                          toColor(CLR_TEXT_PRIMARY));
+            const float rule = metrics_.stroke(2.0f);
+            canvas.rect(c.x + pad, y, maxW, rule, toColor(CLR_TEXT_SECONDARY));
+            y += rule + metrics_.space(SP_SM);
+        }
+        const std::vector<std::string> lines = terminusWrap(p.blurb, blurbTarget, textW);
+        const int nLines = std::max(1, (int)lines.size());
+        const float blockH = nameH + (float)nLines * lineH;
+        LayoutRect rc = { (int)(c.x + pad), (int)y,
+                          (int)(c.x + c.w - pad), (int)(y + blockH) };
+        thRowRc_[(size_t)i] = rc;
+        const bool active = i == activeThemeIndex();
+        // The accent tint is what says "this one is on". The name is also
+        // drawn in the accent, which is enough on a dark page and not on
+        // Paper, where the accent and the body type are both black.
+        if (active)
+            canvas.rect((float)rc.left, (float)rc.top,
+                        (float)(rc.right - rc.left), (float)(rc.bottom - rc.top),
+                        toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
+        else if (thHoverRow_ == i)
+            canvas.rect((float)rc.left, (float)rc.top,
+                        (float)(rc.right - rc.left), (float)(rc.bottom - rc.top),
+                        toColor(CLR_HOVER), UI_CORNER_RADIUS);
+        panels::drawTerminusLabel(canvas, p.name, textX, y + textShift,
+                                  nameTarget, textW, nameH,
+                                  toColor(active ? CLR_ACCENT : CLR_TEXT_PRIMARY));
+        y += nameH;
+        panels::drawTerminusLabel(canvas, p.blurb, textX, y + textShift,
+                                  blurbTarget, textW, lineH,
+                                  toColor(CLR_TEXT_DIM));
+        if (!lines.empty()) y += (float)lines.size() * lineH;
+        y += rowGap;
+    }
+
+    y += rowGap * 0.5f;
+    const std::string note =
+        "A .theme file, or an Alacritty colors file, in "
+        + app_paths::stateDir() + "themes shows up here the next time this page is opened.";
+    y = panels::drawTerminusLabel(canvas, note, c.x + pad, y,
+                                  blurbTarget, maxW, lineH, toColor(CLR_TEXT_DIM));
+
+    canvas.clearClip();
+    thContentH_ = (int)(y + (float)thScrollY_ - c.y + pad);
+    const int viewH = content.bottom - content.top;
+    const int pitch = std::max(1, (int)panelRowH());
+    const int maxOff = std::max(0, ((thContentH_ - viewH) / pitch) * pitch);
+    if (thScrollY_ > maxOff) { thScrollY_ = maxOff; markDirty(); }
+    panels::drawScrollbar(canvas, content, thContentH_, thScrollY_, metrics_.scale);
 }
 
 void PlayerWindow::drawSignalChain(Canvas& canvas, const LayoutRect& area) {
@@ -9858,10 +10187,9 @@ bool PlayerWindow::goBack() {
     } else if (settingsOpen_) {
         // Settings replaces the content area, so leaving it hands back
         // whichever section was underneath — exactly what closeActivePanel()
-        // does for a panel the sidebar opened.
-        settingsOpen_ = false;
-        recalcLayout();
-        invalidate();
+        // does for a panel the sidebar opened. Exit is the on-screen control;
+        // Escape and the back button take the same step.
+        leaveSettings();
         moved = true;
     } else if (navSection_ == NavSection::Playlists && plKind_ != PlaylistKind::None) {
         // Two levels deep, same as the album section: leaving the LIST is not
@@ -10278,7 +10606,12 @@ bool PlayerWindow::captureFrame(std::vector<uint8_t>& rgba, uint32_t& w, uint32_
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     drawFrame();
-    return renderer_->readbackLastFrame(rgba, w, h);
+    const bool ok = renderer_->readbackLastFrame(rgba, w, h);
+    if (captureThemeArmed_) {
+        applyTheme(captureRestoreTheme_.c_str());
+        captureThemeArmed_ = false;
+    }
+    return ok;
 }
 
 bool PlayerWindow::captureGoTo(const std::string& state) {
@@ -10311,6 +10644,7 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
     auto reset = [&] {
         activePanel_    = SettingsPanel::None;
         settingsOpen_   = false;
+        panelFromSidebar_ = false;
         trackPanelOpen_ = false;
         albumWorld_     = AlbumWorld::Album;
         overlay_        = ContentOverlay::None;
@@ -10425,6 +10759,50 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
     if (state == "3b-interface") {
         click(rcNavSettings_); drawFrame();
         click(rcSettingsInterface_);
+        return true;
+    }
+    // The gray row is a frozen hover index: the move onto Return happens
+    // while the panel swallows mouse moves, so nothing clears it unless
+    // closeActivePanel does. No further move after the click — that would
+    // hide the bug.
+    if (state == "3c-settings-return") {
+        click(rcNavSettings_);
+        drawFrame();
+        click(rcSettingsInterface_);
+        if (activePanel_ != SettingsPanel::Interface) return false;
+        drawFrame();
+        click(isCloseRc_);
+        return hoverSettingsItem_ < 0 && settingsOpen_ &&
+               activePanel_ == SettingsPanel::None;
+    }
+    if (state == "3d-theme-paper" || state == "3e-theme-hyper") {
+        const char* id = state == "3d-theme-paper" ? "paper" : "hyper";
+        captureRestoreTheme_ = db_.loadSetting("ui_theme");
+        click(rcNavSettings_);
+        drawFrame();
+        click(rcSettingsThemes_);
+        if (activePanel_ != SettingsPanel::Themes) return false;
+        drawFrame();
+        int idx = -1;
+        for (int i = 0; i < themeCount(); i++)
+            if (themeAt(i).id == id) idx = i;
+        if (idx < 0 || idx >= (int)thRowRc_.size()) return false;
+        // Hyper sits further down once the list grew past one screen. A click
+        // whose centre is outside the body never lands, so scroll the row's
+        // top up to the body and draw once more before aiming.
+        {
+            const LayoutRect& row = thRowRc_[(size_t)idx];
+            if (row.bottom > thBody_.bottom - 8 || row.top < thBody_.top + 8) {
+                thScrollY_ += row.top - (thBody_.top + 8);
+                if (thScrollY_ < 0) thScrollY_ = 0;
+                drawFrame();
+            }
+        }
+        if (idx >= (int)thRowRc_.size()) return false;
+        click(thRowRc_[(size_t)idx]);
+        if (std::strcmp(activeThemeId(), id) != 0) return false;
+        db_.saveSetting("ui_theme", captureRestoreTheme_);
+        captureThemeArmed_ = true;
         return true;
     }
     if (state == "34-eq-all-profiles") {

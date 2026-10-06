@@ -44,6 +44,26 @@ int main() {
     assert(terminus::pickStrike(U'S', 100.0f).scale == 6);      // round(100/16)
     assert(terminus::pickStrike(U'S', 1.0f).scale >= 1);        // never 0
 
+    // The drawn height is the strike, not the request. A heading that wants
+    // to sit one step above body text has to ask for the next band: 20 and
+    // 22 both draw 16, so "a little bigger" is the same size.
+    assert(terminusDrawnHeight(20.0f) == 16.0f);
+    assert(terminusDrawnHeight(30.0f) == 32.0f);
+    // Capitals occupy rows 2..11 of the 16px cell. Q and the comma reach row
+    // 12. A highlight wrapped around the cell therefore hangs below the type.
+    {
+        const TerminusInk m = terminusInk("M", 20.0f);
+        assert(m.top == 2.0f && m.bottom == 12.0f);
+        const TerminusInk comma = terminusInk(",", 20.0f);
+        assert(comma.bottom == 13.0f);
+        const TerminusInk big = terminusInk("M", 30.0f);
+        assert(big.top == 4.0f && big.bottom == 24.0f);   // same rows, x2
+        assert(terminusInk("", 20.0f).bottom == 0.0f);
+    }
+    assert(terminusDrawnHeight(terminusTallerTarget(20.0f)) == 32.0f);
+    assert(terminusDrawnHeight(terminusTallerTarget(30.0f)) == 48.0f);
+    assert(terminusDrawnHeight(terminusTallerTarget(48.0f)) == 64.0f);
+
     // A glyph that was not baked is reported, not drawn as garbage. `Q` was
     // the example while only `S`/`F` were baked; the whole printable ASCII
     // set is baked now, so the negative case has to be genuinely outside it.

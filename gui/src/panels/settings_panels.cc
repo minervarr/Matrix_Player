@@ -4,6 +4,7 @@
 #include "widgets.hh"
 #include "msdf.hh"
 #include "terminus_glyph.hh"
+#include "pixel_marks.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -15,13 +16,13 @@ Rect toRect(const LayoutRect& r) {
 Color toColor(ColorRef c, float a = 1.0f) {
     return { GetRValue(c) / 255.0f, GetGValue(c) / 255.0f, GetBValue(c) / 255.0f, a };
 }
-// A theme color lifted toward white by `amt` (0-255 per channel) — used to
-// synthesize hover/elevated button fills from the base palette.
-Color lift(ColorRef c, int amt) {
-    auto cl = [](int v) { return std::clamp(v, 0, 255); };
-    return { cl(GetRValue(c) + amt) / 255.0f,
-             cl(GetGValue(c) + amt) / 255.0f,
-             cl(GetBValue(c) + amt) / 255.0f, 1.0f };
+
+void paintPx(Canvas& canvas, float x, float y, const panels::PxMark& m, int scale,
+             const Color& col) {
+    std::vector<panels::PxRun> rs;
+    panels::pxRuns(m, scale, rs);
+    for (const panels::PxRun& r : rs)
+        canvas.rect(x + (float)r.x, y + (float)r.y, (float)r.w, (float)r.h, col);
 }
 } // namespace
 
@@ -29,25 +30,26 @@ namespace panels {
 
 void drawButton(Canvas& canvas, const LayoutRect& rc, const std::string& label,
                  bool hover, float textSize, bool primary, bool terminusChrome) {
-    (void)textSize;   // drawFitButton sizes the label to the button proportionally
     Rect r = toRect(rc);
     float radius = UI_CORNER_RADIUS;   // uniform rounding — reads as a real button
     Color bg, fg;
     if (primary) {
-        // High-emphasis action: solid accent fill, dark label for contrast.
-        bg = hover ? lift(CLR_ACCENT, 28) : toColor(CLR_ACCENT);
+        // The one filled accent: the commit. The label is the page color,
+        // which paletteAcceptable keeps readable on the accent.
+        bg = toColor(themeButtonFill(true, hover));
         fg = toColor(CLR_BG_MAIN);
     } else {
-        // Secondary action: subtle elevated fill above the page background.
-        bg = lift(CLR_BG_MAIN, hover ? 56 : 34);
+        bg = toColor(themeButtonFill(false, hover));
         fg = toColor(CLR_TEXT_PRIMARY);
     }
 
     if (terminusChrome) {
-        // Terminus is monospace: no shrink-to-fit. Ellipsize at a cell if the
-        // label is wider than the button -- never fall back to Computer Modern.
-        const float s    = r.h * 0.34f;
-        const float maxW = std::max(0.0f, r.w - r.h * 0.35f);
+        // Terminus lands on a strike. The caller's text size is that strike's
+        // target; a fraction of the button height is how Exit stayed on the
+        // 16 px step after the body buttons had already stepped to 32.
+        const float s = textSize > 0.0f ? textSize : r.h * 0.46f;
+        const float drawn = terminusDrawnHeight(s);
+        const float maxW = std::max(0.0f, r.w - std::max(r.h * 0.35f, drawn * 0.70f));
         const std::string shown = terminusEllipsize(label, s, maxW);
         const float tw = terminusTextWidth(shown, s);
         canvas.rect(r.x, r.y, r.w, r.h, bg, radius);
@@ -56,22 +58,39 @@ void drawButton(Canvas& canvas, const LayoutRect& rc, const std::string& label,
                              r.y + (r.h - s) * 0.5f, s, fg);
         return;
     }
+    (void)textSize;   // the serif path sizes the label to the button itself
     // Single line: shrink-then-ellipsis rather than wrapping a button label.
     widgets::drawFitButton(canvas, r, label, bg, fg, radius, widgets::kTextFit, false);
 }
 
 LayoutRect drawHeader(Canvas& canvas, const LayoutRect& area, const std::string& title,
                       float scale, float headerTextSize, LayoutRect& closeRc,
-                      bool terminusChrome, bool closeHover) {
+                      bool terminusChrome, bool closeHover, const char* actionLabel,
+                      float actionTextSize) {
     Rect a = toRect(area);
     canvas.rect(a.x, a.y, a.w, a.h, toColor(CLR_BG_MAIN));
 
     // Values authored at the 1080 reference height (see gui/src/ui_metrics.hh);
-    // `scale` is UiMetrics::scale, 1.0 there.
+    // `scale` is UiMetrics::scale, 1.0 there. The Terminus button is sized
+    // from the label's strike first, so the box follows the glyph instead of
+    // the glyph being a fraction of a box that was authored for another face.
+    const char* lab = (actionLabel && actionLabel[0]) ? actionLabel : "Return";
     float headerH = 91.0f * scale;
     float closeW = 147.0f * scale, closeH = 52.0f * scale;
     float closeMargin = 32.0f * scale;
-    const float tx = a.x + 39.0f * scale, ty = a.y + headerH * 0.5f - headerTextSize * 0.5f;
+    float labelPx = 0.0f;
+    if (terminusChrome) {
+        labelPx = actionTextSize > 0.0f ? actionTextSize : headerTextSize;
+        const float drawn = terminusDrawnHeight(labelPx);
+        const float tw = terminusTextWidth(lab, labelPx);
+        const float padX = std::max(14.0f * scale, drawn * 0.55f);
+        const float padY = std::max(8.0f * scale, drawn * 0.38f);
+        closeW = std::max(closeW, tw + padX * 2.0f);
+        closeH = std::max(closeH, drawn + padY * 2.0f);
+        headerH = std::max(headerH, closeH + 20.0f * scale);
+    }
+    const float tx = a.x + 39.0f * scale;
+    const float ty = a.y + headerH * 0.5f - headerTextSize * 0.5f;
     const Color primaryCol = toColor(CLR_TEXT_PRIMARY);
     if (terminusChrome) {
         const float maxW = std::max(0.0f, a.w - 39.0f * scale - closeW - closeMargin - 8.0f * scale);
@@ -81,7 +100,7 @@ LayoutRect drawHeader(Canvas& canvas, const LayoutRect& area, const std::string&
         canvas.textStyled(title, tx, ty, headerTextSize, primaryCol, FontStyle::Bold);
     }
     canvas.rect(a.x, a.y + headerH, a.w, std::max(1.0f, std::round(scale)),
-                toColor(CLR_SEPARATOR));
+                toColor(themeRule()));
 
     closeRc = { (int)(area.right - closeW - closeMargin), (int)(area.top + (headerH - closeH) * 0.5f),
                 (int)(area.right - closeMargin),          (int)(area.top + (headerH + closeH) * 0.5f) };
@@ -90,7 +109,7 @@ LayoutRect drawHeader(Canvas& canvas, const LayoutRect& area, const std::string&
     // a Settings page with a list dropped it (and the action buttons) while
     // Manage Folders -- almost no body glyphs -- still showed it.
     if (terminusChrome)
-        drawButton(canvas, closeRc, "Close", closeHover, headerTextSize * 0.6f, false, true);
+        drawButton(canvas, closeRc, lab, closeHover, labelPx, false, true);
 
     return { area.left, (int)(area.top + headerH), area.right, area.bottom };
 }
@@ -103,7 +122,7 @@ void drawScrollbar(Canvas& canvas, const LayoutRect& listArea,
     float barW = 9.0f * scale;
     float x    = a.x + a.w - barW - SP_XS * scale;
 
-    canvas.rect(x, a.y, barW, a.h, toColor(CLR_SEPARATOR));
+    canvas.rect(x, a.y, barW, a.h, toColor(themeRule()));
 
     // Thumb length is the visible fraction of the content, floored so it stays
     // grabbable-looking on very long lists.
@@ -173,11 +192,17 @@ LayoutRect drawTerminusRadioRow(Canvas& canvas, const LayoutRect& row,
                                 const Color& textOn, const Color& textOff,
                                 const Color& hoverBg, const Color& selBg, const Color& selBar) {
     Rect r = toRect(row);
-    const float dotD = r.h * 0.40f;
-    const float pad  = r.h * 0.34f;
-    const float gap  = r.h * 0.32f;
-    Rect dot{ r.x + pad, r.y + (r.h - dotD) * 0.5f, dotD, dotD };
-    const float labelX = dot.x + dot.w + gap;
+    const float textY = r.y + (r.h - textSize) * 0.5f;
+    const panels::PxMark& disc = radioDisc();
+    const float pref = r.x + r.h * 0.34f;
+    PxPlace mark = placePxMark(r.x, textY, textSize, pref, disc.h);
+    // The selected row's accent bar is 3 device px. The mark has to clear it
+    // or the bar slices the ring.
+    const float minLeft = r.x + 3.0f + (float)mark.scale;
+    while (mark.x < minLeft)
+        mark.x += (float)mark.scale;
+    const float labelX = mark.x + (float)(disc.w * mark.scale) + (float)(kPxCell * mark.scale);
+    const float pad = r.h * 0.34f;
     const float maxW = std::max(0.0f, r.x + r.w - pad - labelX);
     const std::string shown = terminusEllipsize(label, textSize, maxW);
     const float tw = std::max(0.0f, terminusTextWidth(shown, textSize));
@@ -191,8 +216,17 @@ LayoutRect drawTerminusRadioRow(Canvas& canvas, const LayoutRect& row,
     if (selected && selBar.a > 0.0f)
         canvas.rect(hit.x, hit.y, 3.0f, hit.h, selBar, rad);
 
-    canvas.rect(dot.x, dot.y, dot.w, dot.h, selected ? dotOn : dotOff, dot.w * 0.5f);
-    drawTerminusText(canvas, shown, labelX, r.y + (r.h - textSize) * 0.5f, textSize,
+    // Ring when idle, ring plus the inner dot when chosen. Both are the
+    // disc's own pixels, so selecting does not change the silhouette.
+    if (selected) {
+        paintPx(canvas, mark.x, mark.y, radioRing(), mark.scale, dotOn);
+        const int inset = radioDotOffset() * mark.scale;
+        paintPx(canvas, mark.x + (float)inset, mark.y + (float)inset,
+                radioDot(), mark.scale, dotOn);
+    } else {
+        paintPx(canvas, mark.x, mark.y, radioRing(), mark.scale, dotOff);
+    }
+    drawTerminusText(canvas, shown, labelX, textY, textSize,
                      selected ? textOn : textOff);
     return { (int)hit.x, (int)hit.y, (int)(hit.x + hit.w), (int)(hit.y + hit.h) };
 }
@@ -247,18 +281,25 @@ void drawTerminusToggle(Canvas& canvas, const LayoutRect& row, bool on,
                         const Color& onColor, const Color& offColor, const Color& knobColor,
                         const Color& labelColor) {
     Rect r = toRect(row);
-    const float h = r.h * 0.66f;
-    const float w = h * 1.8f;
-    Rect sw{ r.x + r.w - w, r.y + (r.h - h) * 0.5f, w, h };
-    const float maxW = std::max(0.0f, sw.x - r.x - r.h * 0.34f);
+    const float textY = r.y + (r.h - textSize) * 0.5f;
+    const panels::PxMark& track = toggleFill();
+    PxPlace probe = placePxMark(r.x, textY, textSize, r.x, track.h);
+    const float tw = (float)(track.w * probe.scale);
+    float pref = r.x + r.w - tw;
+    PxPlace mark = placePxMark(r.x, textY, textSize, pref, track.h);
+    if (mark.x + tw > r.x + r.w + 0.01f)
+        mark.x -= (float)mark.scale;
+    const float maxW = std::max(0.0f, mark.x - r.x - (float)(kPxCell * mark.scale));
     const std::string shown = terminusEllipsize(label, textSize, maxW);
-    drawTerminusText(canvas, shown, r.x, r.y + (r.h - textSize) * 0.5f, textSize, labelColor);
-    canvas.rect(sw.x, sw.y, sw.w, sw.h, on ? onColor : offColor, sw.h * 0.5f);
-    const float knob = sw.h * 0.82f;
-    const float ky = sw.y + (sw.h - knob) * 0.5f;
-    const float kx = on ? (sw.x + sw.w - knob - (sw.h - knob) * 0.5f)
-                        : (sw.x + (sw.h - knob) * 0.5f);
-    canvas.rect(kx, ky, knob, knob, knobColor, knob * 0.5f);
+    drawTerminusText(canvas, shown, r.x, textY, textSize, labelColor);
+    // Off is the outline: a separator-grey fill at this size is a smudge,
+    // and the 2px stroke is the same weight as the letters. On fills the
+    // track. The knob is the same disc either way.
+    paintPx(canvas, mark.x, mark.y, on ? toggleFill() : toggleOutline(), mark.scale,
+            on ? onColor : offColor);
+    const float kx = mark.x + (float)(toggleKnobColumn(on) * mark.scale);
+    const float ky = mark.y + (float)(toggleKnobRow() * mark.scale);
+    paintPx(canvas, kx, ky, toggleKnob(), mark.scale, knobColor);
 }
 
 void drawTerminusSearchField(Canvas& canvas, const LayoutRect& rc,

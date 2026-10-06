@@ -150,6 +150,11 @@ public:
     // Draws exactly one frame and reads the swapchain image back as
     // tightly-packed RGBA8 (Renderer::readbackLastFrame).
     bool captureFrame(std::vector<uint8_t>& rgba, uint32_t& w, uint32_t& h);
+    // A theme shot applies a palette and writes ui_theme, then puts the
+    // previous value back in the database before the frame is taken.
+    // captureFrame restores the in-memory palette after the readback.
+    std::string captureRestoreTheme_;
+    bool captureThemeArmed_ = false;
 
     // Replaces the library with a deterministic synthetic one, so a capture
     // run says something on a machine with no music on it.
@@ -452,6 +457,18 @@ private:
     bool isHoverClose_ = false;
     int  isHoverRow_ = -1;
 
+    // Themes: which palette the chrome tokens currently are. The main
+    // Settings page opens it; a pick applies immediately and is saved.
+    void onThemesSettings();
+    void drawThemes(Canvas& canvas, const LayoutRect& area);
+    LayoutRect thCloseRc_{}, thBody_{};
+    std::vector<LayoutRect> thRowRc_;
+    bool thHoverClose_ = false;
+    int  thHoverRow_ = -1;
+    int  thScrollY_ = 0;
+    int  thContentH_ = 0;
+    grid::RowScroll thRowScroll_;
+
     void openSearch();
     void closeSearch();
 
@@ -484,6 +501,9 @@ private:
     // four native dialogs, identical on both platforms. See
     // panels/settings_panels.hh for the shared row-list/button/header
     // widgets these draw with.
+    void enterSettings();
+    void leaveSettings();
+    bool settingsImmersive() const { return settingsOpen_ && !panelFromSidebar_; }
     void closeActivePanel();
     void onPanelMouseMove(int x, int y);
     void onPanelClick(int x, int y);
@@ -658,7 +678,10 @@ private:
     LayoutRect rcSettingsAudio_        = {};
     LayoutRect rcSettingsEq_           = {};
     LayoutRect rcSettingsInterface_    = {};
+    LayoutRect rcSettingsThemes_       = {};
     LayoutRect rcSettingsBitperfect_   = {};
+    LayoutRect rcSettingsExit_         = {};
+    bool       hoverSettingsExit_      = false;
 
     // ── Settings panels state (Phase 7) ──────────────────────────────────
     SettingsPanel activePanel_ = SettingsPanel::None;
@@ -677,8 +700,8 @@ private:
     int  mfScrollY_     = 0;
     grid::RowScroll mfRowScroll_;
     bool mfChanged_     = false;
-    LayoutRect mfListArea_ = {}, mfCloseRc_ = {}, mfBtnRemove_ = {}, mfBtnDone_ = {};
-    bool mfHoverClose_ = false, mfHoverRemove_ = false, mfHoverDone_ = false;
+    LayoutRect mfListArea_ = {}, mfCloseRc_ = {}, mfBtnRemove_ = {};
+    bool mfHoverClose_ = false, mfHoverRemove_ = false;
     std::vector<panels::TerminusListRow> mfListRows_;  // cached during draw, read by hit-test
 
     // Audio Settings. asBackendOptions_ lists whichever backends this build
@@ -811,8 +834,8 @@ private:
     int  fpHoverRow_   = -1;
     int  fpScrollY_    = 0;
     grid::RowScroll fpRowScroll_;
-    LayoutRect fpListArea_ = {}, fpCloseRc_ = {}, fpBtnSelect_ = {}, fpBtnCancel_ = {};
-    bool fpHoverClose_ = false, fpHoverSelect_ = false, fpHoverCancel_ = false;
+    LayoutRect fpListArea_ = {}, fpCloseRc_ = {}, fpBtnSelect_ = {};
+    bool fpHoverClose_ = false, fpHoverSelect_ = false;
     std::vector<panels::TerminusListRow> fpListRows_;  // cached during draw, read by hit-test
 
     // Grid state. gridTileSize_/gridArtSize_ are recomputed every recalcLayout()

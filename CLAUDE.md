@@ -486,7 +486,7 @@ exactly how it went unnoticed until an MP3 misnamed `.flac` surfaced it on a
 phone. The generated `config.h` for both linux and android IS committed; only
 the sources are fetched.
 
-**Tests**: there is no ctest/gtest framework, but there are thirteen assert-based
+**Tests**: there is no ctest/gtest framework, but there are fourteen assert-based
 pure-logic test executables, built **Debug-only** (see the bottom of
 `gui/CMakeLists.txt` and of `core/CMakeLists.txt`) and run directly. Convention
 matches `framework/vk_canvas/core/tests/*.cc`: plain `assert()`, `#undef NDEBUG`
@@ -499,6 +499,7 @@ scripts/linux/build.sh --debug
 ./build/linux_debug/gui/ui_icons_test      # icon codepoints + placement math
 ./build/linux_debug/gui/ui_text_test       # ordinal suffixes (the teens: 11th, not 11st)
 ./build/linux_debug/app_shell_build/ui_orientation_test # Horizontal/Vertical from shape
+./build/linux_debug/app_shell_build/touch_hover_test    # finger highlight: follow, drop, stay dropped
 ./build/linux_debug/gui/rail_layout_test   # bar A's anchors, and the 90-degree rotation
 ./build/linux_debug/core/variants_test     # album-variant grouping, edition terms, trackKey()
 ./build/linux_debug/core/stats_test        # listening log, aggregate queries, schema migration
@@ -1399,10 +1400,10 @@ a track that stopped. Nothing is derived at draw time. Four rules:
 
 ### Settings panels (`gui/src/panels/settings_panels.hh/.cc`)
 
-Four vk_canvas-native panels replaced the app's last native OS chrome —
-Manage Folders, Audio Settings, EQ Settings, and a from-scratch subfolder
+The Settings panels replaced the app's last native OS chrome —
+Manage Folders, Audio Settings, EQ Settings, a from-scratch subfolder
 browser (replacing `SHBrowseForFolderW` on **both** platforms, not just
-stubbing it on Linux). They're full-page overlays over the content area
+stubbing it on Linux), Interface, and Themes. They're full-page overlays over the content area
 (the same pattern the album view already used), not modal popups — Wayland
 has no child/owned-window primitive to build a real modal on. Shared
 row-list/button/header widgets live in `settings_panels.cc`; per-panel
@@ -1410,7 +1411,25 @@ draw/click/hover logic lives in `player_view.cc` (`drawManageFolders`,
 `drawAudioSettings`, `drawEqSettings`, `drawFolderPicker`, and the
 `onPanel*` dispatchers).
 
-**Settings is a Terminus surface.** Everything inside the five Settings
+The main Settings page fills the safe area in both orientations: bar A and
+bar B are not drawn and do not hit-test. Its header button says Exit.
+Opening that page stops playback once; a sub-menu does not stop it again,
+and leaving does not resume. While that session is open, `onPlay()` returns
+immediately. The AutoEQ switcher's catalogue is the exception
+(`panelFromSidebar_`): the rails stay and the music keeps playing. Every
+Settings sub-menu header says Return. Exit and Return use the body Terminus
+strike, the same one the other Settings buttons use — a fraction of the
+header role stayed on the 16 px strike after the body had stepped to 32.
+Select Music Folder has no Cancel, and Music Folders has no Done: Return is
+the way out, and leaving Music Folders rescans when a folder was removed.
+Themes lists the built-in palettes in `gui/src/theme_catalog.cc` (Matrix is
+the default; the original eight ids are unchanged) plus any `.theme` or
+Alacritty colors file in the themes directory beside the database. A pick
+is saved as `ui_theme`. Secondary button fills step the page toward the
+primary text; a primary button's hover steps the accent back toward the
+page. Structural hairlines go through `themeRule()`.
+
+**Settings is a Terminus surface.** Everything inside the Settings
 panels — titles, buttons, radio labels, descriptions, file-manager rows,
 EQ profile names, search, toggles — draws in Terminus (1-bit bitmap,
 integer scale, ALL CAPS), never Computer Modern. Sizes are the same
@@ -1578,8 +1597,12 @@ extracted drawing. `AndroidPlayerView` was deleted.
    stroke that turns into a scroll is retracted by `onDragEnd`); past it the
    gesture becomes wheel deltas 1:1 with the finger and the click is cancelled
    for good. There is no fling: a lift is a stop. Every surface then snaps
-   that travel by its own pitch (`scrollDiscrete`). Hover follows the finger,
-   which is the only honest hover a touch screen has.
+   that travel by its own pitch (`scrollDiscrete`). Hover follows the finger
+   while the stroke is still a tap — a slide that has already left the control
+   unlights it before the lift — and drops when the finger lifts, the gesture
+   is cancelled, or the stroke becomes a scroll. A scroll does not light the
+   rows it passes. Sampling the pointer only at contact left the control grey
+   after the finger had gone, on every hoverable control, until the next touch.
 
 `ArtWindow` gets a third branch in `art_view.hh` that declines: it is a second
 top-level window for a second monitor, and a phone has neither. It declines

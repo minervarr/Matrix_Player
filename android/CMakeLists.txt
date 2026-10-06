@@ -266,6 +266,7 @@ add_library(matrix_player_android SHARED
     ${MATRIX_GUI_SRC}/grid_layout.cc
     ${MATRIX_GUI_SRC}/terminus_glyph.cc
     ${MATRIX_GUI_SRC}/terminus_glyph_draw.cc
+    ${MATRIX_GUI_SRC}/theme_catalog.cc
     ${MATRIX_GUI_SRC}/ui_icons.cc
     ${MATRIX_GUI_SRC}/ui_icons_draw.cc
     ${MATRIX_GUI_SRC}/os/aaudio_output.cc

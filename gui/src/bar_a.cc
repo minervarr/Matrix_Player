@@ -59,11 +59,11 @@ void drawEqBox(Canvas& canvas, const BarAModel& m) {
     const float hair = m.metrics.stroke(1.0f);
     canvas.rect(box.x, box.y, box.w, box.h, toColor(CLR_BG_TRANSPORT));
     if (vertical) {
-        canvas.rect(box.x, box.y, hair, box.h, toColor(CLR_SEPARATOR));
-        canvas.rect(box.x + box.w - hair, box.y, hair, box.h, toColor(CLR_SEPARATOR));
+        canvas.rect(box.x, box.y, hair, box.h, toColor(themeRule()));
+        canvas.rect(box.x + box.w - hair, box.y, hair, box.h, toColor(themeRule()));
     } else {
-        canvas.rect(box.x, box.y, box.w, hair, toColor(CLR_SEPARATOR));
-        canvas.rect(box.x, box.y + box.h - hair, box.w, hair, toColor(CLR_SEPARATOR));
+        canvas.rect(box.x, box.y, box.w, hair, toColor(themeRule()));
+        canvas.rect(box.x, box.y + box.h - hair, box.w, hair, toColor(themeRule()));
     }
     // Selected while the switcher it opens is on screen; hover otherwise.
     if (m.eqSwitcherOpen)
@@ -107,9 +107,9 @@ void drawBarA(Canvas& canvas, const BarAModel& m) {
     // which is the bottom in Vertical and the right in Horizontal.
     const float hair = m.metrics.stroke(1.0f);
     if (m.orient == UiOrientation::Vertical)
-        canvas.rect(bar.x, bar.y + bar.h - hair, bar.w, hair, toColor(CLR_SEPARATOR));
+        canvas.rect(bar.x, bar.y + bar.h - hair, bar.w, hair, toColor(themeRule()));
     else
-        canvas.rect(bar.x + bar.w - hair, bar.y, hair, bar.h, toColor(CLR_SEPARATOR));
+        canvas.rect(bar.x + bar.w - hair, bar.y, hair, bar.h, toColor(themeRule()));
 
     // A cell's background: selected (accent tint + a 3px accent bar on the
     // inner edge, pointing at the content it filters) or hovered (neutral

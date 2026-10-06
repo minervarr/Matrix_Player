@@ -30,6 +30,16 @@ Pick pickStrike(char32_t cp, float targetPx) {
     return p;
 }
 
+Origin origin(float x, float y, float targetPx) {
+    const Pick p = pickStrike(U'M', targetPx);
+    Origin o;
+    o.scale = std::max(1, p.scale);
+    const int cellH = p.glyph ? p.glyph->cellH * o.scale : 16 * o.scale;
+    o.top = std::floor(y + (targetPx - (float)cellH) * 0.5f);
+    o.penX = std::floor(x);
+    return o;
+}
+
 void runs(const Glyph& g, int scale, std::vector<Run>& out) {
     out.clear();
     const int s = std::max(1, scale);
@@ -97,6 +107,42 @@ bool resolveText(const std::string& text, float targetPx,
 }
 
 } // namespace terminus
+
+float terminusDrawnHeight(float targetPx) {
+    const terminus::Pick p = terminus::pickStrike(U'M', targetPx);
+    if (!p.glyph) return targetPx;
+    return (float)(p.glyph->cellH * p.scale);
+}
+
+TerminusInk terminusInk(const std::string& text, float targetPx) {
+    std::vector<const terminus::Glyph*> glyphs;
+    int scale = 1;
+    TerminusInk ink;
+    if (!terminus::resolveText(text, targetPx, glyphs, scale) || glyphs.empty())
+        return ink;
+    int lo = 0x7fffffff, hi = -1;
+    for (const terminus::Glyph* g : glyphs) {
+        for (int row = 0; row < g->cellH; ++row) {
+            if (!g->rows[row]) continue;
+            if (row < lo) lo = row;
+            if (row > hi) hi = row;
+        }
+    }
+    if (hi < 0) return ink;
+    const float s = (float)scale;
+    ink.top = (float)lo * s;
+    ink.bottom = (float)(hi + 1) * s;
+    return ink;
+}
+
+float terminusTallerTarget(float targetPx) {
+    // pickStrike draws the 16 px strike at x1 for any target under 24, and
+    // otherwise 16 * round(target / 16). The next band starts at 24, then
+    // every 16 px, centred on the strike. drawn + 8 is the near edge of the
+    // next band (16 -> 24 -> 32, 32 -> 40 -> 48, 48 -> 56 -> 64).
+    const float drawn = terminusDrawnHeight(targetPx);
+    return drawn < 24.0f ? 24.0f : drawn + 8.0f;
+}
 
 namespace {
 char32_t nextCp(const std::string& s, size_t& i) {

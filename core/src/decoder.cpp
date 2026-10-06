@@ -1,7 +1,6 @@
 #include "core/decoder.h"
 #include <cstdio>
 #include <cstring>
-#include <algorithm>
 #include <memory>
 #include <vector>
 #include <string>
@@ -132,14 +131,6 @@ Decoder::Decoder() : impl_(new Impl) {}
 Decoder::~Decoder() {
     close();
     delete impl_;
-}
-
-static std::string fileExt(const std::string& path) {
-    auto pos = path.rfind('.');
-    if (pos == std::string::npos) return "";
-    std::string ext = path.substr(pos);
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    return ext;
 }
 
 #ifdef _WIN32

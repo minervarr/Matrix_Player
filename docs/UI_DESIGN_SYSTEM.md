@@ -20,22 +20,30 @@ the look, update both the code and this doc.
 1. **Custom-rendered, no OS chrome.** Every pixel is drawn by the app. There are
    no native buttons, lists, scrollbars, or dialogs — settings are full-page
    overlays, not modal windows.
-2. **Dark, serif-typographic, single-accent.** A near-black stack of surfaces,
-   New Computer Modern (a serif) for music-facing text, Terminus (a 1-bit
-   bitmap, ALL CAPS) for the Settings surface, and exactly one accent — a vivid green
-   (`CLR_ACCENT` `rgb(0,200,83)`).
+2. **Dark, serif-typographic, single-accent.** Matrix, the default theme, is a
+   near-black stack of surfaces, New Computer Modern (a serif) for music-facing
+   text, Terminus (a 1-bit bitmap, ALL CAPS) for the Settings surface, and
+   exactly one accent — a vivid green (`CLR_ACCENT` `rgb(0,200,83)`). The
+   catalogue in `gui/src/theme_catalog.cc` replaces these chrome tokens at
+   runtime: the built-in palettes, plus a `.theme` or Alacritty colors file
+   dropped in the themes directory beside the database. Each palette still
+   has exactly one accent, and that accent still means state only.
 3. **Square throughout.** Artwork, structural surfaces, and interactive chrome
    (buttons, hover/selection highlights, search fields) all use square corners
-   (`UI_CORNER_RADIUS = 0`). **The circular radio dot is the only rounded shape
-   left.** The album tiles' state rings used to be the other exception — a
+   (`UI_CORNER_RADIUS = 0`). Settings radios and switches are bitmap circles
+   on the Terminus grid (`gui/src/panels/pixel_marks.hh`), the same pixels as
+   the letters beside them — a vector disc is a different resolution from
+   that face. The album tiles' state rings used to be the other exception — a
    three-layer rounded glow — and they were squared: curves and a soft falloff
    read as another UI's vocabulary next to this one's hard edges, and the fade
    said nothing the solid band doesn't. Selection/hover highlights fill the full row
    height (matching the action-button height) and, in lists/radios, hug their
    text.
-4. **Accent = state, hover = neutral.** Green *only* signals state — focus,
-   selected, active, playing. Merely hovering something is always a **neutral
-   grey** treatment, never green. This is the rule that keeps the accent
+4. **Accent = state, hover = neutral.** The accent *only* signals state —
+   focus, selected, active, playing. On Matrix that accent is green; Ink and
+   Paper use black or white, and the night and terminal themes use their own
+   single hue. Merely hovering something is always a **neutral** step of the
+   page background, never the accent. This is the rule that keeps the accent
    meaningful.
 5. **Static and instant by design.** There is no animation. The UI redraws on
    dirty and flips between discrete states immediately (see §9).
@@ -68,18 +76,26 @@ converted to the engine's float `Color` via `toColor(ref, alpha=1)`.
 | `CLR_TILE_PLACEHOLDER` | 28 | Album-art placeholder fill |
 | `CLR_TILE_MORE_GREEN` | 30,104,62 | The mosaic tile's "and more" quadrant (§8.2) |
 | `CLR_WARNING` | 224,180,40 | Non-blocking warnings (bitperfect mismatch strip, §8.8) |
-| `CLR_ERROR` | 220,70,70 | Reserved for hard/fatal failures (not yet drawn) |
+| `CLR_ERROR` | 255,110,110 | Hard failures. Lightened so it clears 4.5:1 on every dark transport bar |
 
 **`CLR_TILE_MORE_GREEN` is deliberately not the accent.** It marks *"there are
 more than four here"* — information, not state — and principle #4 keeps the
-accent green for state alone. A deeper, less saturated green still reads
+accent for state alone. A deeper, less saturated green still reads
 unmistakably as green on the near-black tile without ever being read as "this
 is playing". The two meet on screen whenever a now-playing remix group is
 visible, which is the pairing to check if either is ever retuned.
 
+The table above is the **Matrix** default. `applyTheme()` copies one palette
+onto these tokens; an unknown or missing `ui_theme` setting stays on Matrix.
+Body text, the accent, the error and the warning each clear 4.5:1 on the page
+and on the transport bar, and the text ladder stays primary, then secondary,
+then dim. Hover is a neutral background step in every theme.
+
 **Quality-color tier (a second, scoped palette).** Album art borders (§8.2) and
 the track-list quality mark (§8.4) are colored by objective audio quality, not
-UI state — this is the one deliberate exception to "one palette":
+UI state — this is the one deliberate exception to "one palette". Dark themes
+keep the values below. Paper darkens them so the marks still read on a white
+page:
 
 | Token | RGB | Tier |
 |---|---|---|
@@ -271,10 +287,17 @@ each suits its density.
 - **One radius token:** `UI_CORNER_RADIUS = 0` — the whole app is square
   (buttons, hover/selection highlights, search fields, grid hover frame). This
   single token enforces it; nudge it up if a softer look is ever wanted.
-- **Exceptions (own radii):** the circular radio dot (`dot.w*0.5`), the
-  decorative multi-layer now-playing tile glow (10/12px, §8.2), and the
-  Settings gear icon's circular hub + rounded teeth (§7) — icon geometry,
-  not chrome, so it sits outside the `UI_CORNER_RADIUS` rule like the glow.
+- **Exceptions (own radii):** the decorative multi-layer now-playing tile
+  glow (10/12px, §8.2), and the Settings gear icon's circular hub + rounded
+  teeth (§7) — icon geometry, not chrome, so it sits outside the
+  `UI_CORNER_RADIUS` rule like the glow. The settings radio used to be the
+  other one (`dot.w*0.5`, an analytic disc). It is a bitmap mark now, and so
+  is the Interface switch: see below.
+- **Settings radios and switches** are 1-bit marks on the label's Terminus
+  grid. The circle steps one font-pixel at a time, at the face's 2px stroke.
+  Idle ink is `CLR_TEXT_DIM`; the chosen state is `CLR_ACCENT`. The switch's
+  off position draws the pill's outline and its on position fills it. The
+  knob is the same disc in both.
 - **Icons** use their own 36-unit design grid (§7).
 - **Highlights** fill the full row height (match the action-button height); in
   lists and radio groups they hug the row's text rather than spanning full
@@ -289,9 +312,17 @@ has no shadow/blur primitive). The four surfaces read as a gentle stack: base
 content is darkest (`CLR_BG_MAIN` 10) and recedes; chrome sits above (sidebar 18,
 transport 22); the album view (14) overlays the grid.
 
-Separators are all 1px `CLR_SEPARATOR`: sidebar right edge, transport top edge,
-panel-header underline, album-view column rule, and the unfocused search
-underline (which turns `CLR_ACCENT` on focus).
+Structural hairlines go through `themeRule()` (`theme.hh`): bar A's inner
+edge and the AutoEQ box, the transport edge, the panel-header underline, the
+album-view identity and column rules, disc rules, the chip-strip rule, and
+the scrollbar track. A separator that already clears 1.2:1 on the page is
+used as-is — Matrix, Paper and Hyper stay on `CLR_SEPARATOR`. One that would
+disappear into the page is walked toward `CLR_TEXT_DIM` until it clears about
+1.35:1. Search underlines stay on `CLR_SEPARATOR` and turn `CLR_ACCENT` when
+focused. Those are controls; the rule is structure. Settings radios and
+switches do not use the separator: a 2px bitmap stroke in that grey
+disappears into the page, so the idle mark is `CLR_TEXT_DIM` and the on
+state is `CLR_ACCENT`.
 
 ---
 
@@ -750,9 +781,62 @@ from having heard everything: the first is a dead end, the second an achievement
 and only the GUI can tell them apart.
 
 ### 8.6 Settings
-Full-page overlays. Shared `panels::drawHeader` (Bold title + Close) and
-`panels::drawButton` (filled: primary = solid accent + dark label; secondary =
-elevated grey), both at `UI_CORNER_RADIUS`. Row lists via
+The main Settings page fills the safe area in both orientations. Bar A and
+bar B are not drawn there and do not hit-test, so the letter that opened the
+page is not a way out. The header button says **Exit**. Opening this page
+stops playback; leaving it does not start the music again, and play is refused
+for the whole session. A sub-menu replaces that page, so Exit is gone and the
+header button says **Return** (back to the main Settings page). The AutoEQ
+switcher's route into the EQ catalogue is the exception: the rails stay, the
+music keeps playing, and Return goes back to the player.
+
+Exit and Return are the body Terminus strike, the same one the other Settings
+buttons use. Terminus only lands on a fixed set of sizes, and a label sized
+as a fraction of the header role stayed on the 16 px strike after the body
+had already stepped to 32. The button box grows from that strike, so the
+glyph is not clipped by a box authored for a smaller label.
+
+Music Folders keeps **Remove Selected** on the left. Return is the way out,
+and if a folder was removed it rescans — Escape and the back gesture take
+that same path. There is no Done. Select Music Folder keeps **Select This
+Folder** on the right, in the accent; Return leaves without choosing. There
+is no Cancel. The two used to sit beside Return and do the same thing.
+
+Themes is the page that picks the palette. Twenty-four built-ins in four
+groups, each group one run: Monochrome (Matrix, Ink, Paper), Night (Nordic,
+Nord, Dracula, Pink, Catppuccin, Tokyo Night, Rose Pine, Kanagawa, Everforest,
+Night Owl), Day (Catppuccin Latte, Gruvbox Light, Rose Pine Dawn, Solarized
+Light, Flexoki Light), Terminal (Hyper, Chicago95, Gruvbox, Solarized,
+Flexoki, Synthwave). The original eight ids are unchanged, so a saved
+`ui_theme` still names the same page. A group heading is one Terminus strike
+taller than the names under it, drawn in the primary ink, with a
+`CLR_TEXT_SECONDARY` rule under the heading. Names stay body size and primary;
+the active name is the accent, and the row also carries the accent tint,
+because on Paper the accent and the body type are both black. The tint has
+the same air above the name as below the sentence: the line box is taller
+than the strike, and the strike's blank rows sit mostly under the capitals,
+so a tint that started on the text origin met the top of the name. The sentence
+under a name stays the secondary size in dim. A pick applies immediately and
+is saved as `ui_theme`.
+
+A `.theme` file, or an Alacritty file with `[colors.primary]`,
+`[colors.normal]` and `[colors.bright]`, placed in `<state dir>/themes` joins
+the list at startup and again when this page is opened. A file that does not
+clear the contrast rules is refused and logged; a file whose id matches a
+built-in is ignored. The minimum direct file is `bg`, `text` and `accent`
+(`#RGB` or `#RRGGBB`). Optional keys (`bg.track`, `text.secondary`,
+`text.dim`, `hover`, `separator`, `error`, `warning`, the four `quality.*`
+marks, and the rest of the token list) override the derived slots. `id`,
+`name`, `group` and `blurb` name the row. Names stay ASCII: Terminus folds a
+codepoint it cannot draw to `?`.
+
+Full-page overlays. Shared `panels::drawHeader` (Terminus title + Return, or
+Exit on the main page) and
+`panels::drawButton`, both at `UI_CORNER_RADIUS`. A primary button is the
+accent with the page color as its label; hover steps that accent back toward
+the page. A secondary button steps the page toward the primary text (14% at
+rest, 24% on hover), so a blue page stays blue and a paper page stays paper.
+Row lists via
 `panels::drawTerminusScrollList` and radio groups via
 `panels::drawTerminusRadioRow` — Terminus, same selection family
 (`matrixListStyle()` / `matrixRadioStyle()` colours). Search via
@@ -760,14 +844,17 @@ elevated grey), both at `UI_CORNER_RADIUS`. Row lists via
 `drawRadioRow` stay for Playlists and other music-facing lists.
 
 **Settings is a Terminus surface, ALL CAPS** — titles, buttons, radio labels,
-descriptions, file-manager rows, EQ names, search, toggles. Sizes come
+descriptions, file-manager rows, EQ names, search, toggles. The radio
+(Audio Output, and the Bluetooth codec rows) and the Interface switches are
+bitmap marks on that same grid: a 13px ring, a dot inside it when the row
+is chosen, and a pill whose rounded ends are that ring. Sizes come
 from the same type roles as the rest of the app (`header` / `body` /
 `secondary` in `ui_metrics.hh`). Advance is optical (ink box + 1 px),
 not the monospace cell, so `AAUDIO` does not open a hole around I.
 `terminusFold` / `terminusWrap` / `terminusEllipsize` /
 `drawTerminusText` (`gui/src/terminus_glyph.hh`). Unrepresentable
 codepoints fold (em dash → `-`, middle dot → `/`) or become `?`; there
-is no Computer Modern inside the five panels. List inset matches the
+is no Computer Modern inside the Settings panels. List inset matches the
 captions (`SP_LG`), not `canvas.pad()`. Terminus is one SDF-shape quad
 per pixel-run; the shape VBO in `vk_canvas` grows rather than truncating
 at 2048 quads (that ceiling is what sliced the last letters of a line
@@ -842,7 +929,7 @@ nothing specific is the same silence with a border around it.
 
 ### 8.8 Scrollbar affordance (`panels::drawScrollbar`)
 A thin track + proportional thumb docked inside a scrolling list's right edge
-(`settings_panels.cc:69`). `CLR_SEPARATOR` track, `CLR_TEXT_SECONDARY` thumb —
+(`panels::drawScrollbar`). `themeRule()` track, `CLR_TEXT_SECONDARY` thumb —
 **chrome, not state**, so it never uses the accent. Draws nothing when the
 content fits, so callers can call it unconditionally. It is purely an
 affordance: not hit-tested, not draggable; scrolling stays on the wheel.
@@ -889,7 +976,9 @@ not a gap. If motion is ever added, it belongs behind the framework's
 1. **Hover is neutral, accent is state.** Never use `CLR_ACCENT` for a plain
    hover. Never leave a selected/active row with no accent.
 2. **One radius token.** All chrome uses `UI_CORNER_RADIUS` (currently 0 —
-   square). Only the radio dot and the tile glow define their own radii.
+   square). Settings radios and switches are bitmap marks on the Terminus
+   grid, not a private radius. The tile glow is the remaining own-radius
+   shape (§8.2).
 3. **One selection family for rows.** Reuse the accent-tint pill + left bar +
    accent text (see `matrixListStyle()` / `matrixRadioStyle()`); don't invent a
    new selected look.

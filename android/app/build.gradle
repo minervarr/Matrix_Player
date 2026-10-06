@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace "io.nava.matrixplayer"
+    namespace = "io.nava.matrixplayer"
 
     lint {
         disable 'ExpiredTargetSdkVersion'
@@ -14,7 +14,7 @@ android {
     // is not writable" — the SDK is root-owned, so the build could not even
     // start. Verified by running it, not inferred.
     compileSdkVersion 36
-    ndkVersion "29.0.14206865"
+    ndkVersion = "29.0.14206865"
 
     defaultConfig {
         applicationId "io.nava.matrixplayer"
@@ -51,7 +51,7 @@ android {
         // of the server repo's aidl/ files) compiles to the Java stubs
         // AoasClient.java binds through. Without this the build silently
         // ships no binder interface and the AOAS backend cannot exist.
-        aidl true
+        aidl = true
     }
 
     sourceSets {
@@ -105,7 +105,7 @@ android {
     buildTypes {
         release {
             minifyEnabled false
-            signingConfig signingConfigs.release
+            signingConfig = signingConfigs.release
         }
     }
 
@@ -117,10 +117,10 @@ android {
 
     splits {
         abi {
-            enable true
+            enable = true
             reset()
             include "armeabi-v7a", "arm64-v8a", "x86_64"
-            universalApk false
+            universalApk = false
         }
     }
 }

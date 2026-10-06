@@ -32,7 +32,7 @@ enum class FontStyle : unsigned char;
 // should reach it and nothing else. A scrolling preference has nowhere else to
 // live -- the other four are each about one piece of hardware or one folder.
 enum class SettingsPanel { None, ManageFolders, AudioSettings, EqSettings, FolderPicker,
-                           Interface };
+                           Interface, Themes };
 
 // The scrollable/selectable text row list these panels used to draw with a
 // local panels::drawRowList (+ rowRect/hitTestRows) now comes from the
@@ -42,13 +42,12 @@ enum class SettingsPanel { None, ManageFolders, AudioSettings, EqSettings, Folde
 
 namespace panels {
 
-// A small rectangular action button (Done/Cancel/Remove/Assign/Select),
-// right-aligned text inside a border, matching the settings-page row style.
-// terminusChrome: draw the label in Terminus (ALL CAPS, falling back to the
-// normal fit-button label automatically if it isn't representable or
-// doesn't fit at Terminus's own nominal size) instead of the proportional
-// serif label. Default false so EqSwitcher/drawSignalChain, which also call
-// this, are untouched -- only Settings passes true.
+// A small rectangular action button (Remove/Assign/Select, and the header's
+// Exit/Return). terminusChrome draws the label in Terminus. `textSize` is
+// the type role to ask for: Terminus then lands on its own strike, so a
+// header button and a body button that share a role share a size. Default
+// false so EqSwitcher and the signal chain, which also call this, stay on
+// the proportional serif label.
 void drawButton(Canvas& canvas, const LayoutRect& rc, const std::string& label,
                  bool hover, float textSize, bool primary = false,
                  bool terminusChrome = false);
@@ -56,6 +55,9 @@ void drawButton(Canvas& canvas, const LayoutRect& rc, const std::string& label,
 // Settings-only Terminus replacements for widgets::drawRadioRow / drawScrollList
 // / drawToggle / drawSearchField. Those live in the vk_canvas submodule and
 // always call Canvas::text (Computer Modern). Settings must not.
+// The radio and the switch are bitmap marks on the label's Terminus grid
+// (pixel_marks.hh), not vector circles: a smooth disc is a different
+// resolution from the face it sits beside.
 LayoutRect drawTerminusRadioRow(Canvas& canvas, const LayoutRect& row,
                                 bool selected, bool hovered, const std::string& label,
                                 float textSize, const Color& dotOn, const Color& dotOff,
@@ -83,14 +85,21 @@ float drawTerminusLabel(Canvas& canvas, const std::string& text,
                         float x, float y, float targetPx, float maxW, float lineH,
                         const Color& col);
 
-// Panel chrome: title bar + "Close" affordance. Returns the content area
-// below the header (what the panel's own drawing should treat as its rect).
-// closeRc receives the close button's hit-test rect (top-right corner).
-// terminusChrome: draw the title in Terminus. Same default-false reasoning
-// as drawButton above.
+// Panel chrome: title bar + the header action (Return on a Settings sub-menu,
+// Exit on the main Settings page). Returns the content area below the header.
+// closeRc receives the button's hit-test rect (top-right corner).
+// terminusChrome: draw the title and the action in Terminus. Same
+// default-false reasoning as drawButton above — EqSwitcher and the signal
+// chain pass false and draw their own Close.
+// actionLabel is what the Terminus button says. Settings sub-menus keep the
+// default, Return. actionTextSize is the type role for that label; 0 uses
+// the header's own size. Settings passes the body role so Exit and Return
+// land on the same Terminus strike as the buttons in the page.
 LayoutRect drawHeader(Canvas& canvas, const LayoutRect& area, const std::string& title,
                       float scale, float headerTextSize, LayoutRect& closeRc,
-                      bool terminusChrome = false, bool closeHover = false);
+                      bool terminusChrome = false, bool closeHover = false,
+                      const char* actionLabel = "Return",
+                      float actionTextSize = 0.0f);
 
 // Overflow indicator for a widgets::drawScrollList viewport: a thin track +
 // proportional thumb docked inside the list's right edge. Draws nothing when
@@ -130,9 +139,8 @@ std::vector<LayoutRect> layoutButtonRow(const LayoutRect& content, float pad,
                                         bool alignRight = true);
 
 // A pair of buttons pinned to OPPOSITE edges of `content` (left first, right
-// second) with open space between at rest — Manage Folders' Remove Selected/
-// Done and the folder picker's Cancel/Select This Folder, both of which sit
-// at opposite corners rather than clustered together like layoutButtonRow.
+// second) with open space between at rest. A page with one action uses
+// layoutButtonRow instead.
 std::pair<LayoutRect, LayoutRect> layoutEdgePair(
     const LayoutRect& content, float pad,
     float leftIdealW, float rightIdealW, float minBtnW, float minGap,

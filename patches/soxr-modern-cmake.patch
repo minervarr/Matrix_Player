@@ -1,0 +1,218 @@
+# soxr pinned at 945b592 (https://github.com/chirlu/soxr). Not our repo.
+# CMake 3.22 policy warnings, C99 bool, and Clang fixes kept on our side.
+# From Matrix_Player: git -C third_party/soxr apply ../../patches/soxr-modern-cmake.patch
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index ee48f6c..44d9dca 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -2,6 +2,18 @@
+ # Licence for this file: LGPL v2.1                  See LICENCE for details.
+ 
+ cmake_minimum_required (VERSION 3.1 FATAL_ERROR)
++# cmake_dependent_option below uses the original semicolon conditions.
++# Unset CMP0127 warns on every configure from CMake 3.22 onward.
++if (POLICY CMP0127)
++  cmake_policy (SET CMP0127 OLD)
++endif ()
++# check_include_files runs while CMAKE_REQUIRED_LIBRARIES is set for lrint.
++# Unset CMP0075 warns on CMake 3.12+. NEW links that list into the probe.
++# libm is present wherever lrint needs it, and these are header probes, so
++# the result does not change. OLD is itself deprecated.
++if (POLICY CMP0075)
++  cmake_policy (SET CMP0075 NEW)
++endif ()
+ 
+ project (soxr C)
+ set (DESCRIPTION_SUMMARY
+@@ -161,9 +173,9 @@ if (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
+   if (WITH_DEV_GPROF)
+     set (PROJECT_CXX_FLAGS "${PROJECT_CXX_FLAGS} -pg")
+   endif ()
+-  # Can use std=c89, but gnu89 should give faster sinf, cosf, etc.:
++  # bool/_Bool is C99. gnu89 plus -pedantic warns on every use of it.
+   set (PROJECT_C_FLAGS "${PROJECT_CXX_FLAGS} \
+-       -std=gnu89 -Wnested-externs -Wmissing-prototypes -Wstrict-prototypes")
++       -std=gnu99 -Wnested-externs -Wmissing-prototypes -Wstrict-prototypes")
+   if (CMAKE_BUILD_TYPE STREQUAL "Release")
+     set (CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -s") # strip
+   endif ()
+diff --git a/cmake/Modules/FindLibAVCodec.cmake b/cmake/Modules/FindLibAVCodec.cmake
+index f1bbf89..118da8b 100644
+--- a/cmake/Modules/FindLibAVCodec.cmake
++++ b/cmake/Modules/FindLibAVCodec.cmake
+@@ -17,7 +17,18 @@ find_path (AVCODEC_INCLUDE_DIRS libavcodec/avcodec.h)
+ find_library (AVCODEC_LIBRARIES NAMES avcodec)
+ 
+ include (FindPackageHandleStandardArgs)
+-find_package_handle_standard_args (
+-  AVCODEC DEFAULT_MSG AVCODEC_LIBRARIES AVCODEC_INCLUDE_DIRS)
++# This file is FindLibAVCodec.cmake, so find_package() calls the package
++# LibAVCodec. The top-level CMakeLists.txt tests AVCODEC_FOUND, which is
++# what the AVCODEC package name below sets. NAME_MISMATCHED records that
++# the two names differ on purpose. See FindLibAVUtil.cmake.
++if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.17")
++  find_package_handle_standard_args (
++    AVCODEC
++    NAME_MISMATCHED
++    REQUIRED_VARS AVCODEC_LIBRARIES AVCODEC_INCLUDE_DIRS)
++else ()
++  find_package_handle_standard_args (
++    AVCODEC DEFAULT_MSG AVCODEC_LIBRARIES AVCODEC_INCLUDE_DIRS)
++endif ()
+ 
+ mark_as_advanced (AVCODEC_LIBRARIES AVCODEC_INCLUDE_DIRS)
+diff --git a/cmake/Modules/FindLibAVUtil.cmake b/cmake/Modules/FindLibAVUtil.cmake
+index 464e6cf..94e47dc 100644
+--- a/cmake/Modules/FindLibAVUtil.cmake
++++ b/cmake/Modules/FindLibAVUtil.cmake
+@@ -17,7 +17,19 @@ find_path (AVUTIL_INCLUDE_DIRS libavutil/cpu.h)
+ find_library (AVUTIL_LIBRARIES NAMES avutil)
+ 
+ include (FindPackageHandleStandardArgs)
+-find_package_handle_standard_args (
+-  AVUTIL DEFAULT_MSG AVUTIL_LIBRARIES AVUTIL_INCLUDE_DIRS)
++# This file is FindLibAVUtil.cmake, so find_package() calls the package
++# LibAVUtil. soxr-config.h.in and the top-level CMakeLists.txt test
++# AVUTIL_FOUND, which is what the AVUTIL package name below sets.
++# NAME_MISMATCHED (CMake 3.17) records that the two names differ on purpose.
++# FOUND_VAR cannot rename the result: CMake only accepts <PackageName>_FOUND.
++if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.17")
++  find_package_handle_standard_args (
++    AVUTIL
++    NAME_MISMATCHED
++    REQUIRED_VARS AVUTIL_LIBRARIES AVUTIL_INCLUDE_DIRS)
++else ()
++  find_package_handle_standard_args (
++    AVUTIL DEFAULT_MSG AVUTIL_LIBRARIES AVUTIL_INCLUDE_DIRS)
++endif ()
+ 
+ mark_as_advanced (AVUTIL_LIBRARIES AVUTIL_INCLUDE_DIRS)
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index bb01a0d..13b4f78 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -1,6 +1,11 @@
+ # SoX Resampler Library       Copyright (c) 2007-16 robs@users.sourceforge.net
+ # Licence for this file: LGPL v2.1                  See LICENCE for details.
+ 
++# Sources below name their .c files. NEW refuses the old implicit extension.
++if (POLICY CMP0115)
++  cmake_policy (SET CMP0115 NEW)
++endif ()
++
+ 
+ 
+ # Can generate vr-coefs.h but it complicates cross-compiling & non-cmake builds
+@@ -24,40 +29,40 @@ add_definitions (${PROJECT_C_FLAGS} -DSOXR_LIB)
+ 
+ # Libsoxr configuration:
+ 
+-set (RDFT32 fft4g32)
++set (RDFT32 fft4g32.c)
+ if (AVCODEC_FOUND)
+-  set (RDFT32 avfft32)
+-  set (RDFT32S avfft32s)
++  set (RDFT32 avfft32.c)
++  set (RDFT32S avfft32s.c)
+ elseif (WITH_PFFFT)
+-  #set (RDFT32 pffft32)
+-  set (RDFT32S pffft32s)
++  #set (RDFT32 pffft32.c)
++  set (RDFT32S pffft32s.c)
+ elseif (WITH_CR32S)
+-  set (RDFT32S fft4g32s)
++  set (RDFT32S fft4g32s.c)
+   if (NOT WITH_CR32)
+-    list (APPEND RDFT32S fft4g32)
++    list (APPEND RDFT32S fft4g32.c)
+   endif ()
+ endif ()
+ 
+-set (SOURCES ${PROJECT_NAME}.c data-io)
++set (SOURCES ${PROJECT_NAME}.c data-io.c)
+ 
+ if (WITH_CR32 OR WITH_CR32S OR WITH_CR64 OR WITH_CR64S)
+-  list (APPEND SOURCES dbesi0 filter fft4g64 cr)
++  list (APPEND SOURCES dbesi0.c filter.c fft4g64.c cr.c)
+ endif ()
+ 
+ if (WITH_CR32)
+-  list (APPEND SOURCES cr32 ${RDFT32})
++  list (APPEND SOURCES cr32.c ${RDFT32})
+ endif ()
+ 
+ if (WITH_CR64)
+-  list (APPEND SOURCES cr64)
++  list (APPEND SOURCES cr64.c)
+ endif ()
+ 
+ if (WITH_VR32)
+-  list (APPEND SOURCES vr32)
++  list (APPEND SOURCES vr32.c)
+ endif ()
+ 
+ if (WITH_CR32S)
+-  foreach (source cr32s ${RDFT32S} util32s)
++  foreach (source cr32s.c ${RDFT32S} util32s.c)
+     list (APPEND SOURCES ${source})
+     set_property (SOURCE ${source}
+         APPEND_STRING PROPERTY COMPILE_FLAGS ${SIMD32_C_FLAGS})
+@@ -65,7 +70,7 @@ if (WITH_CR32S)
+ endif ()
+ 
+ if (WITH_CR64S)
+-  foreach (source cr64s pffft64s util64s)
++  foreach (source cr64s.c pffft64s.c util64s.c)
+     list (APPEND SOURCES ${source})
+     set_property (SOURCE ${source}
+         APPEND_STRING PROPERTY COMPILE_FLAGS ${SIMD64_C_FLAGS})
+@@ -100,7 +105,7 @@ if (WITH_LSR_BINDINGS)
+   set (LSR ${PROJECT_NAME}-lsr)
+   set (LSR_SO_VERSION 0.1.9)
+   set (LSR_SO_VERSION_MAJOR 0)
+-  add_library (${LSR} ${LIB_TYPE} ${LSR})
++  add_library (${LSR} ${LIB_TYPE} ${LSR}.c)
+   target_link_libraries (${LSR} ${PROJECT_NAME})
+   set_target_properties (${LSR} PROPERTIES
+     VERSION "${LSR_SO_VERSION}"
+diff --git a/src/data-io.c b/src/data-io.c
+index fb61675..fac6217 100644
+--- a/src/data-io.c
++++ b/src/data-io.c
+@@ -63,7 +63,10 @@ void _soxr_deinterleave_f(float * * dest, /* Round/clipping not needed here */
+ 
+ 
+ #if defined FE_INVALID && defined FPU_RINT32 && defined __STDC_VERSION__
+-  #if __STDC_VERSION__ >= 199901L
++  /* Clang ignores FENV_ACCESS and warns. GCC honours it, so rint sees
++     the rounding mode. Omitting it on Clang keeps the code Clang already
++     generates. */
++  #if __STDC_VERSION__ >= 199901L && !defined __clang__
+     #pragma STDC FENV_ACCESS ON
+   #endif
+ #endif
+@@ -151,7 +154,7 @@ void _soxr_deinterleave_f(float * * dest, /* Round/clipping not needed here */
+ #endif
+ 
+ #if defined FE_INVALID && defined FPU_RINT32 && defined __STDC_VERSION__
+-  #if __STDC_VERSION__ >= 199901L
++  #if __STDC_VERSION__ >= 199901L && !defined __clang__
+     #pragma STDC FENV_ACCESS OFF
+   #endif
+ #endif
+diff --git a/src/half-fir.h b/src/half-fir.h
+index 782be1b..6056040 100644
+--- a/src/half-fir.h
++++ b/src/half-fir.h
+@@ -7,7 +7,9 @@
+ #define COEFS ((sample_t const *)p->coefs)
+ 
+ #if SIMD_SSE
+-  #define BEGINNING v4_t sum, q1, q2, t
++  /* j == 0 takes the other side of the ternary below, so this value is
++     never read. Clang still warns if sum is left uninitialised. */
++  #define BEGINNING v4_t sum = vZero(), q1, q2, t
+   #define ____ \
+     q1 = _mm_shuffle_ps(t=vLdu(input+2*j),vLdu(input+2*j+4),_MM_SHUFFLE(3,1,3,1)); \
+     q2 = _mm_shuffle_ps(vLdu(input-2*j-4),vLdu(input-2*j-8),_MM_SHUFFLE(1,3,1,3)); \

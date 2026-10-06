@@ -25,16 +25,21 @@ bool drawTerminusText(Canvas& c, const std::string& text, float x, float y,
     int scale = 1;
     if (!terminus::resolveText(text, targetPx, glyphs, scale)) return false;
     if (glyphs.empty()) return true;   // nothing to draw; not a failure
-    const float cellH = (float)(glyphs[0]->cellH * scale);
-    const float oy = std::floor(y + (targetPx - cellH) * 0.5f);
-    float pen = std::floor(x);
+    // origin() is the grid the settings radio and switch also hang from.
+    // Flooring a second time here would let the two drift apart. The scale
+    // has one source (pickStrike); a mismatch means the glyphs and the grid
+    // were chosen independently, and drawing would smear one of them.
+    const terminus::Origin o = terminus::origin(x, y, targetPx);
+    if (scale != o.scale) return false;
+    const float oy = o.top;
+    float pen = o.penX;
     std::vector<terminus::Run> rs;
     for (const terminus::Glyph* g : glyphs) {
-        terminus::runs(*g, scale, rs);
-        const float ox = pen - (float)(terminus::leftBearing(*g) * scale);
+        terminus::runs(*g, o.scale, rs);
+        const float ox = pen - (float)(terminus::leftBearing(*g) * o.scale);
         for (const terminus::Run& r : rs)
             c.rect(ox + (float)r.x, oy + (float)r.y, (float)r.w, (float)r.h, col);
-        pen += (float)terminus::advance(*g, scale);
+        pen += (float)terminus::advance(*g, o.scale);
     }
     return true;
 }

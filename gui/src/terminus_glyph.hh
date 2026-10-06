@@ -39,6 +39,16 @@ struct Pick {
 // rows = twice the curves, and OverlayRasterizer drops past 8192).
 Pick pickStrike(char32_t cp, float targetPx);
 
+// The pen and the cell top `drawTerminusText` draws from. Bitmap controls that
+// must share the face's pixel grid (the settings radio and switch) call this
+// rather than re-flooring, so a change to the centering math moves both.
+struct Origin {
+    float penX = 0;    // floor(x)
+    float top  = 0;    // cell top
+    int   scale = 1;
+};
+Origin origin(float x, float y, float targetPx);
+
 // Device-pixel rectangles relative to the glyph's top-left, one per run of set
 // pixels in a row, each `scale` tall.
 struct Run { int x, y, w, h; };
@@ -84,6 +94,26 @@ std::vector<std::string> terminusWrap(const std::string& text, float targetPx, f
 // pixel is precisely what a bitmap face must not have. False if not baked.
 bool drawTerminusGlyph(Canvas& c, const LayoutRect& rc, char32_t cp, float targetPx,
                        const Color& col);
+
+// The height, in device pixels, that `targetPx` actually draws. Terminus only
+// lands on whole strikes (16, 32, 48, ...), so this is not `targetPx` itself.
+float terminusDrawnHeight(float targetPx);
+
+// Ink of `text` relative to the cell top drawTerminusText places. `top` is the
+// first row with a set pixel; `bottom` is one past the last. The cell is
+// taller than the capitals (they start two rows down and stop short of the
+// bottom), so a box around the cell is not a box around the type. Empty or
+// blank -> both 0. Pure.
+struct TerminusInk {
+    float top = 0;
+    float bottom = 0;
+};
+TerminusInk terminusInk(const std::string& text, float targetPx);
+
+// A target that draws one strike taller than `targetPx`. Group headings use
+// it: asking for "a bit larger" is how a fractional size collapses back onto
+// the same strike as the line under it.
+float terminusTallerTarget(float targetPx);
 
 // The advance width `text` would occupy at drawTerminusText's chosen strike
 // and scale -- for centering/right-alignment, mirroring Canvas::textWidth().
