@@ -162,6 +162,7 @@ const char* kStates[] = {
     "30-settings",
     "31-manage-folders",
     "32-audio-settings",
+    "32-audio-apply",
     "33-eq-settings",
     "34-eq-all-profiles",
     "3b-interface",

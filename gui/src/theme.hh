@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 // The chrome tokens are the ACTIVE theme. They start as Matrix — the look this
 // app shipped with — and applyTheme() replaces them. Every draw reads them
@@ -220,3 +221,153 @@ bool parseThemeText(const std::string& text, const std::string& fallbackId,
 // Returns how many files joined the list. Applied tokens stay as they are;
 // activeThemeIndex() is -1 when the applied id is no longer listed.
 int reloadImportedThemes(const std::string& dir);
+
+// Same scan, without clearing the catalogue or the skip count. A missing
+// directory adds nothing. `createDir` is for the listener's own folder,
+// which has to exist before an import has somewhere to land. A second copy
+// of an id already listed is left out.
+int addImportedThemes(const std::string& dir, bool createDir);
+
+// How many theme files the last reloadImportedThemes left out: unreadable,
+// unparsable, a built-in id, or a duplicate id. Other files in the directory
+// are not counted. A directory that cannot be created leaves this at 0.
+int themeSkipCount();
+
+// Static is the saved pick. Dynamic, while music is playing, builds a palette
+// from the cover and otherwise rests on Matrix. The nearest listed palette is
+// what plays when a cover cannot carry a readable ladder. Absent or any other
+// stored value is static. Dynamic never writes ui_theme.
+enum class ThemeMode { Static, Dynamic };
+
+// Colors of one cover, keyed by file path. ready is false when fewer than
+// 16 opaque samples survived. hasSignal is false when no second bin is a
+// color (OKLab chroma at least 0.03) or an ink (chroma under 0.01), each
+// at least 8% of the samples. A tint between those two is left out. With
+// no signal the match charges a chromatic accent, and the quiet accent
+// wins a tie between the same pages.
+struct CoverColors {
+    bool ready = false;
+    bool hasSignal = false;
+    ColorRef ground = 0;
+    ColorRef signal = 0;
+};
+
+struct ThemeCopyResult {
+    int copied = 0;
+    int already = 0;
+};
+
+// Four times of day, in the order the Themes page draws them. The bounds are
+// the page's relative luminance. They were measured on the Alacritty
+// collection: near-white, tinted daylight, a lifted dark, and near-black.
+// A value sitting on a bound belongs to the darker part.
+constexpr float kThemeMorningLuma   = 0.93f;
+constexpr float kThemeAfternoonLuma = 0.45f;
+constexpr float kThemeEveningLuma   = 0.03f;
+
+enum class ThemeDaypart { Morning = 0, Afternoon = 1, Evening = 2, Night = 3 };
+
+ThemeDaypart themeDaypartFromLuma(float luma);
+// True when `group` is one of the four names, ignoring case and surrounding
+// space. Any other word — including the built-in group strings — is false.
+bool themeDaypartFromName(const std::string& group, ThemeDaypart& out);
+// An imported file's group wins when it names a part. A built-in is placed
+// by its page, so the group word stored beside the literal stays untouched.
+ThemeDaypart themeDaypartOf(const Palette& p);
+const char* themeDaypartId(ThemeDaypart d); // "morning", "afternoon", ...
+
+// Distinct palette colors, page first, then type, accent, and the marks.
+// Exact repeats are dropped. `out` holds at most `cap` colors. Returns how
+// many were written.
+int themeSwatches(const Palette& p, ColorRef* out, int cap);
+
+// Catalogue indices, Morning through Night, and A to Z inside each part.
+// thRowRc_ stays indexed by themeAt, not by this vector.
+void themeDisplayOrder(std::vector<int>& out);
+
+bool themeIsDay(const Palette& p);       // themeLuma(bgMain) > 0.45
+bool themeAccentQuiet(const Palette& p); // OKLab chroma of the accent < 0.04
+double themeAccentHue(const Palette& p); // atan2(b, a), negative angles + 2π
+bool themeIsBuiltinId(const char* id);
+
+// Straight RGBA. A null buffer, a non-positive size, or too few opaque
+// samples returns ready == false and leaves the colors untouched.
+CoverColors coverColorsFromRgba(const uint8_t* rgba, int w, int h);
+
+// Bumped when the generator changes, so a row written by an older one is
+// built again instead of being trusted. 3 ranks a mark by how loudly it
+// separates from the field: a red dot on black is a mark, a night blue on
+// that black is the field. Older rows are rebuilt.
+// The 20 slots are the palette field order used by the cover-theme table:
+// page, track, sidebar, transport, primary, secondary, dim, album title,
+// accent, hover, separator, input, placeholder, tile, error, warning,
+// then the four quality marks.
+constexpr int kCoverThemeGenerator = 3;
+
+inline void paletteWriteSlots(const Palette& p, uint32_t out[20]) {
+    const ColorRef s[20] = {
+        p.bgMain, p.bgTrack, p.bgSidebar, p.bgTransport,
+        p.textPrimary, p.textSecondary, p.textDim, p.textAlbum,
+        p.accent, p.hover, p.separator, p.inputBg, p.placeholder, p.tileMore,
+        p.error, p.warning, p.qDsd, p.qDxd, p.qHires, p.qStandard
+    };
+    for (int i = 0; i < 20; ++i) out[i] = s[i];
+}
+
+inline void paletteReadSlots(const uint32_t in[20], Palette& p) {
+    p.bgMain = in[0];
+    p.bgTrack = in[1];
+    p.bgSidebar = in[2];
+    p.bgTransport = in[3];
+    p.textPrimary = in[4];
+    p.textSecondary = in[5];
+    p.textDim = in[6];
+    p.textAlbum = in[7];
+    p.accent = in[8];
+    p.hover = in[9];
+    p.separator = in[10];
+    p.inputBg = in[11];
+    p.placeholder = in[12];
+    p.tileMore = in[13];
+    p.error = in[14];
+    p.warning = in[15];
+    p.qDsd = in[16];
+    p.qDxd = in[17];
+    p.qHires = in[18];
+    p.qStandard = in[19];
+}
+
+// Every role, from this picture. The page is the color that covers the most
+// of the sleeve, moved along its own hue only as far as a text ladder needs.
+// The ink is the sleeve's own light or dark pigment, hue kept, so cream type
+// stays cream. The accent is the mark the eye separates from the field — a
+// red dot on black qualifies, a night blue on that black does not — and a
+// mark in the middle is preferred. Further marks, when the sleeve has them,
+// stay recognizable as the album title, the mosaic fill, the hairline, and
+// the washes. A red in the picture
+// becomes the error, an amber the warning, and a quality mark takes the hue
+// of a sleeve color in its family. Roles the picture does not have are mixed
+// from the ones it does. Nothing is invented in a hue the sleeve never used,
+// except the semantic fallbacks for error, warning, and the quality marks.
+//
+// False when fewer than 16 opaque samples survive, or when no page in that
+// hue can carry the ladder. `out` is left untouched on failure, and a true
+// result has passed paletteAcceptable.
+bool paletteFromCover(const uint8_t* rgba, int w, int h, Palette& out);
+
+// Index into pals of the nearest palette on the ground's side, or -1 when
+// the cover is not ready, pals is empty, or that side has no row.
+// A signal pulls the accent toward that color. No signal charges the
+// accent's own chroma. Equal scores take the lesser id.
+int matchTheme(const CoverColors& cover, const Palette* pals, int n);
+
+// The id to apply. A returned pointer is either one of the arguments or
+// the literal "matrix". The caller does not free it. An id that is not in
+// the catalogue is treated as missing.
+const char* chooseTheme(ThemeMode mode, bool playing, bool coverReady,
+                        const char* matchId, const char* savedId,
+                        const char* heldId);
+
+// One directory, not its children. .theme and .toml, any case. An existing
+// destination is left in place and counted in already.
+ThemeCopyResult copyThemeFiles(const std::string& fromDir, const std::string& toDir);

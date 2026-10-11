@@ -486,8 +486,8 @@ exactly how it went unnoticed until an MP3 misnamed `.flac` surfaced it on a
 phone. The generated `config.h` for both linux and android IS committed; only
 the sources are fetched.
 
-**Tests**: there is no ctest/gtest framework, but there are fourteen assert-based
-pure-logic test executables, built **Debug-only** (see the bottom of
+**Tests**: there is no ctest/gtest framework. The assert-based
+pure-logic test executables are built **Debug-only** (see the bottom of
 `gui/CMakeLists.txt` and of `core/CMakeLists.txt`) and run directly. Convention
 matches `framework/vk_canvas/core/tests/*.cc`: plain `assert()`, `#undef NDEBUG`
 in the test source so asserts survive an optimized build, no framework or
@@ -504,6 +504,7 @@ scripts/linux/build.sh --debug
 ./build/linux_debug/core/variants_test     # album-variant grouping, edition terms, trackKey()
 ./build/linux_debug/core/stats_test        # listening log, aggregate queries, schema migration
 ./build/linux_debug/core/facets_test       # guided search: suggestions, counts, empty reasons
+./build/linux_debug/core/credits_test      # who a release names: composer, label, the rest
 ./build/linux_debug/core/streamer_db_test  # where the foreign .streamer/library.db is looked for
 ./build/linux_debug/core/scan_source_test  # the media index and the walk must agree
 ./build/linux_debug/gui/scroll_test        # scroll direction + discrete steps, one rule for every surface
@@ -1422,21 +1423,59 @@ strike, the same one the other Settings buttons use — a fraction of the
 header role stayed on the 16 px strike after the body had stepped to 32.
 Select Music Folder has no Cancel, and Music Folders has no Done: Return is
 the way out, and leaving Music Folders rescans when a folder was removed.
-Themes lists the built-in palettes in `gui/src/theme_catalog.cc` (Matrix is
-the default; the original eight ids are unchanged) plus any `.theme` or
-Alacritty colors file in the themes directory beside the database. A pick
-is saved as `ui_theme`. Secondary button fills step the page toward the
+Themes lists each palette as its own colors, one square per color, in
+four parts: Morning, Afternoon, Evening, Night, by background luminance
+(above 0.93, above 0.45, above 0.03, and the rest; a value on a bound
+belongs to the darker part). The overview shows one sample row per part
+and a `+` that opens the whole part, A to Z, with the name beside the
+squares. Built-ins are placed by luminance. An import keeps a `group`
+line of one of those four words. Matrix is the default and the original
+eight ids are unchanged. Static, the default, saves `ui_theme`. Dynamic
+(`ui_theme_mode`) rests on Matrix. While audio is underway it builds a
+palette from the playing cover (`paletteFromCover`): the page is the
+color that covers the most of the sleeve, shifted along its own hue only
+as far as the text ladder needs; the ink is the sleeve's own light or
+dark pigment, hue kept; the accent is the mark the eye separates from
+the field — a red dot on black qualifies, a night blue on that black
+does not. Further marks stay recognizable as the album title, the mosaic,
+the hairline, and the washes. The accent is the transport's center
+control in both poses; previous and next stay the ink. A red in the picture becomes
+the error and an amber the warning. A result that fails
+`paletteAcceptable`, or whose album-title color misses the page, is
+discarded and that listen uses the nearest loaded palette.
+A kept palette is one `cover_themes` row, keyed by folder name and artist,
+missed when the cover file's size or mtime changes or
+`kCoverThemeGenerator` changes, and read back on the next play. Dynamic
+does not write `ui_theme`, and playback ending returns to Matrix. The
+ground still picks the day or night side at `themeLuma` 0.45 for the
+nearest-palette fallback. A second mass of at least 8% pulls that
+fallback's accent when it is a color or an ink; a gray cover charges a
+chromatic accent, so a white sleeve keeps a black accent. Import themes copies a folder of `.theme` / `.toml`
+files into the themes directory beside the database. `tools/theme_pack`
+does that placement offline and can export the folder again. Bundled
+files ship in `themes-bundled` next to the executable and load after the
+listener's folder. A file that fails contrast, or reuses a built-in id,
+is refused.
+Secondary button fills step the page toward the
 primary text; a primary button's hover steps the accent back toward the
 page. Structural hairlines go through `themeRule()`.
+
+**Two atmospheres, and they do not mix.** The music surface — bars, grid,
+filters, playlists, album view, signal chain, and the AutoEQ switcher
+opened from the home bar — is New Computer Modern. Settings, and only
+Settings, is Terminus. The same profile names wear the serif in the
+switcher and the bitmap inside the EQ panel; that exception is the
+boundary, written up in `docs/UI_DESIGN_SYSTEM.md` principle 2.
 
 **Settings is a Terminus surface.** Everything inside the Settings
 panels — titles, buttons, radio labels, descriptions, file-manager rows,
 EQ profile names, search, toggles — draws in Terminus (1-bit bitmap,
-integer scale, ALL CAPS), never Computer Modern. Sizes are the same
-type roles as the rest of the app (`metrics_.text.header` / `.body` /
-`.secondary`). Advance is optical (ink box + 1 px), not the monospace
-cell. Unrepresentable codepoints fold (em dash / en dash → `-`, middle
-dot / bullet → `/`) or become `?`. List inset is the panel pad, not
+integer scale, ALL CAPS), never Computer Modern. `pickStrike` draws one
+step above the strike the type role would have picked, so at the 1080
+reference body text is 32 px rather than 16. Still the 16 px strike;
+a fractional scale is grey. Advance is optical (ink box + 1 px), not the
+monospace cell. Unrepresentable codepoints fold (em dash / en dash → `-`,
+middle dot / bullet → `/`) or become `?`. List inset is the panel pad, not
 `canvas.pad()`. Terminus is one SDF-shape quad per pixel-run, and the
 shape VBO in `vk_canvas` **grows** (`ensureShapeVboCapacity`) — a fixed
 2048-quad ceiling used to drop later letters, list rows, and the
@@ -1447,6 +1486,52 @@ action buttons below a scrollable body; the EQ catalogue scrolls inside
 its list, not by stretching the list to every row. `terminusChrome =
 false` by default so EqSwitcher and the signal chain stay serif. Bar A
 is Computer Modern Regular, not Terminus.
+
+The album view pages discs instead of stacking them. A serif down-arrow
+(U+2193, the Computer Modern text arrow) centered on the track list means
+another disc; the same arrow, lower and centered on the content area
+between the bars, means the artist page. Both arrows are boundary cues:
+the down-arrow appears once the track list has rested at its end, and the
+up-arrow on the artist page appears once a scroll has rested at the top.
+Neither is drawn while there is still room to move, and entering the
+artist page does not show the up-arrow. The portrait is centred in the
+padded content canvas, on both axes. Its centre is that canvas centre or
+higher, and it is never lower — admiration for the artist, the regard
+kept for the person who made the music. The name, the biography, the
+album text and the credits sit below the portrait and are reached by
+scrolling. A wheel turns the page on the second of two detents close
+together, after the roll that arrived there has gone quiet
+(`kAlbumPageGestureMs`); the second detent does not start another wait.
+The same stop applies scrolling up off the artist page: a continuous roll
+settles on the portrait, and the next gesture is what leaves. A touch
+turns only on the drag after the one that arrived.
+No hairline between the
+cover and the list. The sleeve is the anchor — the only thing on the page
+that came with the record. In the wide layout the track-list frame is
+centred on the sleeve square (the picture, not the lines under it), a
+short disc centres its rows inside that frame, and the sleeve, the lines,
+the list and the optional ruler are one group centred between the bars
+(`album_stage.hh`). The ruler is one column of vertical strokes to the
+right of the durations, centred on the sleeve. Each stroke is one
+track-row tall. Strokes of one disc sit closer together than the gap
+before the next disc. A disc that fits is one stroke; a disc that
+scrolls has one stroke per screen of that disc, and the screen on
+screen is the primary-coloured stroke. Every stroke is the thin width;
+lighting one does not widen it. A single disc that fits has no
+column. The column is one width on every disc, so the sleeve does not
+jump. It is not the arrow. In the tall
+layout the sleeve, the lines, the list and the optional ruler are one
+group centred between the side margins. The lines sit beside the sleeve
+at a fixed `space(SP_MD)` gap, vertically centred on it, and each line is
+centred in that column. The sleeve and the list share the reading
+measure, so the block stays narrower than a wide panel and centres in
+it. The list starts under the sleeve. The ruler is the right edge of
+that group, centred on the list's full height. A tall single
+is a different picture: the sleeve centred at the top, the lines under
+it, and the one track centred in the area that remains, with no ruler.
+A single draws its one track
+without a number. Number, title, quality mark and duration share the
+cap-height centre of the row. Detail is `docs/UI_DESIGN_SYSTEM.md` §8.4.
 
 ### Visual language
 

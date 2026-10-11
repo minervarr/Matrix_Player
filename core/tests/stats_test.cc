@@ -1104,6 +1104,54 @@ int main() {
         for (const auto& h : hp) assert(h.name != "Casual 0");
     }
 
+    // ── A cover palette is one row per release, replaced in place ──────────
+    // Dynamic reads this back instead of rebuilding the picture. A missing
+    // key leaves the caller's struct alone, and a second save of the same
+    // release overwrites rather than accumulating.
+    {
+        Db db;
+        openWith(db, {});
+        CoverTheme untouched;
+        untouched.artSize = 4;
+        assert(!db.loadCoverTheme("nope", untouched));
+        assert(untouched.artSize == 4);
+        assert(!db.loadCoverTheme("", untouched));
+
+        CoverTheme in;
+        in.albumKey = std::string("Genesys") + "\x1f" + "Anyma";
+        in.artPath = "/m/Anyma/Genesys/cover.jpg";
+        in.artSize = 1200;
+        in.artMtime = 99;
+        in.generator = 1;
+        in.color[0] = 0x00123456;
+        in.color[8] = 0x00ABCDEF;
+        in.color[19] = 0x00000011;
+        db.saveCoverTheme(in);
+        CoverTheme empty;
+        db.saveCoverTheme(empty);
+
+        CoverTheme out;
+        assert(db.loadCoverTheme(in.albumKey, out));
+        assert(out.albumKey == in.albumKey);
+        assert(out.artPath == in.artPath);
+        assert(out.artSize == 1200);
+        assert(out.artMtime == 99);
+        assert(out.generator == 1);
+        assert(out.color[0] == in.color[0]);
+        assert(out.color[8] == in.color[8]);
+        assert(out.color[19] == in.color[19]);
+
+        in.artSize = 1300;
+        in.generator = 2;
+        in.color[0] = 7;
+        db.saveCoverTheme(in);
+        assert(db.loadCoverTheme(in.albumKey, out));
+        assert(out.artSize == 1300);
+        assert(out.generator == 2);
+        assert(out.color[0] == 7);
+        assert(out.color[8] == 0x00ABCDEF);
+    }
+
     printf("stats_test: all assertions passed\n");
     return 0;
 }

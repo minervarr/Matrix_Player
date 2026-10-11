@@ -35,34 +35,34 @@ int main() {
     assert(small.glyph && small.glyph->cellW == 8 && small.glyph->cellH == 16);
     assert(big.glyph   && big.glyph->cellW   == 8 && big.glyph->cellH   == 16);
 
-    // Integer scale only, chosen from the target height. Always the 16 px
-    // strike -- x2 at 30 px is the same tallness as the old 32 px x1, with
-    // half the curves.
-    assert(small.scale == 1);                                   // < 24 -> 16 px x1
-    assert(big.scale == 2);                                     // 30 -> 16 px x2
-    assert(terminus::pickStrike(U'S', 48.0f).scale == 3);       // round(48/16)
-    assert(terminus::pickStrike(U'S', 100.0f).scale == 6);      // round(100/16)
+    // Integer scale only, chosen from the target height, then one step up.
+    // Always the 16 px strike. The step is what makes Settings body text
+    // 32 px at the 1080 reference instead of 16.
+    assert(small.scale == 2);                                   // < 24 -> x1, plus one
+    assert(big.scale == 3);                                     // round(30/16)=2, plus one
+    assert(terminus::pickStrike(U'S', 48.0f).scale == 4);       // round(48/16)=3, plus one
+    assert(terminus::pickStrike(U'S', 100.0f).scale == 7);      // round(100/16)=6, plus one
     assert(terminus::pickStrike(U'S', 1.0f).scale >= 1);        // never 0
 
-    // The drawn height is the strike, not the request. A heading that wants
-    // to sit one step above body text has to ask for the next band: 20 and
-    // 22 both draw 16, so "a little bigger" is the same size.
-    assert(terminusDrawnHeight(20.0f) == 16.0f);
-    assert(terminusDrawnHeight(30.0f) == 32.0f);
+    // The drawn height is the strike, not the request.
+    assert(terminusDrawnHeight(20.0f) == 32.0f);
+    assert(terminusDrawnHeight(30.0f) == 48.0f);
     // Capitals occupy rows 2..11 of the 16px cell. Q and the comma reach row
     // 12. A highlight wrapped around the cell therefore hangs below the type.
     {
         const TerminusInk m = terminusInk("M", 20.0f);
-        assert(m.top == 2.0f && m.bottom == 12.0f);
+        assert(m.top == 4.0f && m.bottom == 24.0f);       // rows 2..12 at x2
         const TerminusInk comma = terminusInk(",", 20.0f);
-        assert(comma.bottom == 13.0f);
+        assert(comma.bottom == 26.0f);                    // row 12, x2
         const TerminusInk big = terminusInk("M", 30.0f);
-        assert(big.top == 4.0f && big.bottom == 24.0f);   // same rows, x2
+        assert(big.top == 6.0f && big.bottom == 36.0f);   // same rows, x3
         assert(terminusInk("", 20.0f).bottom == 0.0f);
     }
-    assert(terminusDrawnHeight(terminusTallerTarget(20.0f)) == 32.0f);
-    assert(terminusDrawnHeight(terminusTallerTarget(30.0f)) == 48.0f);
-    assert(terminusDrawnHeight(terminusTallerTarget(48.0f)) == 64.0f);
+    // One strike above the size `targetPx` itself draws. 20 draws 32, so
+    // the heading draws 48; 30 draws 48, so the heading draws 64.
+    assert(terminusDrawnHeight(terminusTallerTarget(20.0f)) == 48.0f);
+    assert(terminusDrawnHeight(terminusTallerTarget(30.0f)) == 64.0f);
+    assert(terminusDrawnHeight(terminusTallerTarget(48.0f)) == 80.0f);
 
     // A glyph that was not baked is reported, not drawn as garbage. `Q` was
     // the example while only `S`/`F` were baked; the whole printable ASCII

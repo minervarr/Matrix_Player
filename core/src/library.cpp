@@ -1,4 +1,5 @@
 #include "core/library.h"
+#include "core/credits.h"
 #include "core/variants.h"
 #ifdef _WIN32
 #include <windows.h>
@@ -432,6 +433,41 @@ static Track quickParseFLAC(const std::string& path, int64_t size, int64_t mtime
         FLAC__metadata_simple_iterator_delete(it);
     }
     return t;
+}
+
+void readAlbumCreditTags(const std::vector<Track>& tracks,
+                         std::vector<std::string>& out) {
+    for (const Track& t : tracks) {
+        std::string ext = fs::u8path(t.filePath).extension().u8string();
+        lowerAscii(ext);
+        if (ext != ".flac") continue;
+
+        FLAC__Metadata_SimpleIterator* it = FLAC__metadata_simple_iterator_new();
+        if (!it) continue;
+        if (FLAC__metadata_simple_iterator_init(it, t.filePath.c_str(),
+                                                /*read_only=*/true,
+                                                /*preserve_file_stats=*/true)) {
+            do {
+                if (FLAC__metadata_simple_iterator_get_block_type(it) !=
+                    FLAC__METADATA_TYPE_VORBIS_COMMENT)
+                    continue;
+                FLAC__StreamMetadata* block = FLAC__metadata_simple_iterator_get_block(it);
+                if (!block) continue;
+                const auto& vc = block->data.vorbis_comment;
+                for (unsigned i = 0; i < vc.num_comments; i++) {
+                    const char* entry = (const char*)vc.comments[i].entry;
+                    const unsigned length = vc.comments[i].length;
+                    const std::string_view s(entry, length);
+                    const size_t eq = s.find('=');
+                    if (eq == std::string_view::npos) continue;
+                    if (!credits::isCreditTag(s.substr(0, eq))) continue;
+                    out.emplace_back(s);
+                }
+                FLAC__metadata_object_delete(block);
+            } while (FLAC__metadata_simple_iterator_next(it));
+        }
+        FLAC__metadata_simple_iterator_delete(it);
+    }
 }
 
 // ── Directory walk ───────────────────────────────────────────────────────────

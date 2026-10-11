@@ -209,6 +209,15 @@ add_custom_command(TARGET matrix_player POST_BUILD
         ${CMAKE_SOURCE_DIR}/eq_profiles.json
         $<TARGET_FILE_DIR:matrix_player>/eq_profiles.json)
 
+# Bundled themes sit beside the executable, in their own directory. The
+# listener's imports live in stateDir/themes, which is the same folder as
+# the executable unless a state home was set. Copying into that folder
+# would overwrite a file the listener had edited.
+add_custom_command(TARGET matrix_player POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/assets/themes
+        $<TARGET_FILE_DIR:matrix_player>/themes-bundled)
+
 # libc++.dll next to the executable (Clang/MinGW builds only). The rest of
 # the MinGW/UCRT runtime (libgcc, libstdc++, winpthread) links into
 # matrix_player.exe's OWN object code fully static — see the
@@ -271,6 +280,16 @@ add_dependencies(copy_shader_assets matrix_player)
 matrix_copy_shipped_fonts(matrix_player ${CMAKE_SOURCE_DIR}
                           $<TARGET_FILE_DIR:matrix_player>/fonts)
 
+# theme_pack — import and export a folder of theme files. Built in Debug and
+# Release: the listener runs it later, offline, without a debug tree.
+add_executable(theme_pack ${CMAKE_SOURCE_DIR}/tools/theme_pack/main.cc
+                          src/theme_catalog.cc)
+target_include_directories(theme_pack PRIVATE
+    src ${CMAKE_SOURCE_DIR}/framework/app_shell)
+if(NOT MSVC)
+    target_compile_options(theme_pack PRIVATE -Wall)
+endif()
+
 # ---------------------------------------------------------------------------
 # ui_metrics_test — the app's only automated test. Pure arithmetic (no Vulkan,
 # no window, no linking against the engine), so it runs anywhere. Debug-only,
@@ -327,6 +346,15 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_include_directories(scroll_test PRIVATE src ${CMAKE_SOURCE_DIR}/framework/app_shell)
     if(NOT MSVC)
         target_compile_options(scroll_test PRIVATE -Wall)
+    endif()
+
+    # album_stage_test — the album page's one group (sleeve, track list,
+    # ruler). Header-only, same as album_disc.hh: a wrong anchor does not
+    # crash, it slides the sleeve.
+    add_executable(album_stage_test src/album_stage_test.cc)
+    target_include_directories(album_stage_test PRIVATE src)
+    if(NOT MSVC)
+        target_compile_options(album_stage_test PRIVATE -Wall -Wextra)
     endif()
 
     # grid_layout_test -- the album grid's shape (whole rows, nearest column

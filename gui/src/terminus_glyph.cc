@@ -20,13 +20,18 @@ Pick pickStrike(char32_t cp, float targetPx) {
     // size; OverlayRasterizer silently drops curves past 8192, which is how
     // Settings lists ate Close/Apply. 16 px at x2 is 32 px tall and half the
     // curves. Integer scale is the bitmap rule -- never a fractional one.
+    //
+    // One step above the strike the type role would have picked. At the
+    // 1080 reference the body role is ~22 px, which lands on the 16 px
+    // strike, and that read as small next to the serif on the music page.
+    // The next legal size is 32. The +1 is that step, applied once, here,
+    // so a call site that also asks for "a bit taller" does not take two.
     Pick p;
     p.glyph = find(kBold16, cp);
-    if (targetPx < 24.0f) {
-        p.scale = 1;
-    } else {
-        p.scale = std::max(1, (int)std::lround(targetPx / 16.0f));
-    }
+    int historical = 1;
+    if (targetPx >= 24.0f)
+        historical = std::max(1, (int)std::lround(targetPx / 16.0f));
+    p.scale = historical + 1;
     return p;
 }
 
@@ -136,12 +141,13 @@ TerminusInk terminusInk(const std::string& text, float targetPx) {
 }
 
 float terminusTallerTarget(float targetPx) {
-    // pickStrike draws the 16 px strike at x1 for any target under 24, and
-    // otherwise 16 * round(target / 16). The next band starts at 24, then
-    // every 16 px, centred on the strike. drawn + 8 is the near edge of the
-    // next band (16 -> 24 -> 32, 32 -> 40 -> 48, 48 -> 56 -> 64).
-    const float drawn = terminusDrawnHeight(targetPx);
-    return drawn < 24.0f ? 24.0f : drawn + 8.0f;
+    // The target that pickStrike draws one strike above `targetPx`.
+    // pickStrike already adds one step, so handing it the height it just
+    // drew asks for exactly one more (32 -> 48, 48 -> 64). Returning
+    // drawn+8 used to do that when the bands started at 16; after the
+    // step it would skip two.
+    const int scale = terminus::pickStrike(U'M', targetPx).scale;
+    return (float)(scale * 16);
 }
 
 namespace {

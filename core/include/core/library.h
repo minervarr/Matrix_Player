@@ -75,6 +75,13 @@ struct Album {
 void computeAlbumQualityStats(const std::vector<Track>& tracks,
                               int& avgSampleRate, bool& hasDsd);
 
+// Vorbis comments that name a person or a company ("COMPOSER=...",
+// "LABEL=..."), one entry per kept tag, from every FLAC in `tracks`.
+// WAV has no Vorbis block, so it contributes nothing. The grouping into
+// roles is credits::fromTags(); this only reads. A missing file is skipped.
+void readAlbumCreditTags(const std::vector<Track>& tracks,
+                         std::vector<std::string>& out);
+
 std::vector<Album> scanLibrary(const std::string& rootPath);
 
 struct IncrementalScanResult {

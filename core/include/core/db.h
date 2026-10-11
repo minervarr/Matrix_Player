@@ -65,6 +65,18 @@ struct PlaybackState {
     float       volume     = 1.0f;
 };
 
+// A palette generated from one release's cover. The GUI owns what the 20
+// slots mean; this is only the row. artSize/artMtime are an opaque file
+// token, compared and never converted.
+struct CoverTheme {
+    std::string albumKey;
+    std::string artPath;
+    int64_t     artSize  = 0;
+    int64_t     artMtime = 0;
+    int         generator = 0;
+    uint32_t    color[20]{};
+};
+
 class Db {
 public:
     bool open(const std::string& dbPath);
@@ -177,6 +189,18 @@ public:
     // ever saved (fresh install), leaving `out` untouched.
     void savePlaybackState(const PlaybackState& st);
     bool loadPlaybackState(PlaybackState& out);
+
+    // ── Cover themes ────────────────────────────────────────────────────────
+    // One generated palette for one release, so Dynamic does not rebuild it
+    // from the picture on every play. `albumKey` is the folder name, a unit
+    // separator, and the artist — the same pair the albums table dedups on.
+    // `artSize` and `artMtime` are the cover file's own token: a replaced
+    // picture misses and is built again. `generator` is kCoverThemeGenerator;
+    // a newer generator misses the same way. `color` is the 20 slots
+    // paletteWriteSlots writes. loadCoverTheme leaves `out` untouched when
+    // the key is absent or the blob is the wrong size.
+    void saveCoverTheme(const CoverTheme& row);
+    bool loadCoverTheme(const std::string& albumKey, CoverTheme& out);
 
     void saveEqAssignment(const std::string& deviceKey,
                           const std::string& name,

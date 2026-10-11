@@ -359,6 +359,11 @@ vce_compile_slang(compile_vk_canvas_shaders
     shape_vert
     shape_frag
 )
+# The probe reads those SPIR-V files at runtime. The targets above are
+# declared after vk_canvas/core, so the dependency has to be stated here.
+if(TARGET text_edge_probe)
+    add_dependencies(text_edge_probe compile_shared_shaders compile_vk_canvas_shaders)
+endif()
 
 # ---------- matrix_core (portable library: scan/db/eq/decode) ----------
 add_subdirectory(core)

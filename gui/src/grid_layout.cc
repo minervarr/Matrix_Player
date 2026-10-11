@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 namespace grid {
 
@@ -71,6 +72,52 @@ bool scrollRows(RowScroll& s, float dpx, int pitch, int maxRow) {
     const bool changed = target != s.row;
     s.row = target;
     return changed;
+}
+
+namespace {
+
+std::string foldArtist(const std::string& s) {
+    size_t b = 0, e = s.size();
+    while (b < e && (s[b] == ' ' || s[b] == '\t')) ++b;
+    while (e > b && (s[e - 1] == ' ' || s[e - 1] == '\t')) --e;
+    std::string o;
+    o.reserve(e - b);
+    for (size_t i = b; i < e; ++i) {
+        unsigned char c = (unsigned char)s[i];
+        if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 32);
+        o.push_back((char)c);
+    }
+    return o;
+}
+
+} // namespace
+
+void orderByArtist(std::vector<int>& indices, const std::vector<ReleaseKey>& keys) {
+    std::unordered_map<std::string, int> count;
+    count.reserve(indices.size());
+    for (int i : indices) {
+        if (i < 0 || (size_t)i >= keys.size()) continue;
+        count[foldArtist(keys[(size_t)i].artist)]++;
+    }
+
+    std::stable_sort(indices.begin(), indices.end(), [&](int a, int b) {
+        const bool aOk = a >= 0 && (size_t)a < keys.size();
+        const bool bOk = b >= 0 && (size_t)b < keys.size();
+        const std::string aa = aOk ? foldArtist(keys[(size_t)a].artist) : std::string();
+        const std::string bb = bOk ? foldArtist(keys[(size_t)b].artist) : std::string();
+        const auto ia = count.find(aa);
+        const auto ib = count.find(bb);
+        const int ca = ia == count.end() ? 0 : ia->second;
+        const int cb = ib == count.end() ? 0 : ib->second;
+        if (ca != cb) return ca > cb;
+        if (aa != bb) return aa < bb;
+        const int ya = aOk ? keys[(size_t)a].year : 0;
+        const int yb = bOk ? keys[(size_t)b].year : 0;
+        const bool ua = ya <= 0, ub = yb <= 0;
+        if (ua != ub) return !ua;
+        if (ya != yb) return ya < yb;
+        return false;
+    });
 }
 
 } // namespace grid

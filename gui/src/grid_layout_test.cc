@@ -14,6 +14,9 @@
 
 #include "grid_layout.hh"
 
+#include <string>
+#include <vector>
+
 using grid::computeShape;
 using grid::RowScroll;
 using grid::scrollRows;
@@ -169,6 +172,28 @@ int main() {
         RowScroll s;
         assert(!scrollRows(s, 500.0f, P, 0) && s.row == 0);
         assert(!scrollRows(s, 0.0f, P, maxRow));
+    }
+
+    // Artists with more releases in this set come first. Within an artist
+    // the older year comes first, and a missing year follows the dated ones.
+    // Case and surrounding spaces do not split one artist.
+    {
+        std::vector<grid::ReleaseKey> keys(6);
+        keys[0] = { "Rush", 2012 };
+        keys[1] = { "Måneskin", 2023 };
+        keys[2] = { "rush", 1976 };
+        keys[3] = { "Måneskin", 2017 };
+        keys[4] = { "  Rush ", 0 };
+        keys[5] = { "Solo", 1999 };
+        std::vector<int> idx = { 0, 1, 2, 3, 4, 5 };
+        grid::orderByArtist(idx, keys);
+        // Rush has three, Måneskin two, Solo one.
+        assert(idx[0] == 2);   // Rush 1976
+        assert(idx[1] == 0);   // Rush 2012
+        assert(idx[2] == 4);   // Rush, no year
+        assert(idx[3] == 3);   // Måneskin 2017
+        assert(idx[4] == 1);   // Måneskin 2023
+        assert(idx[5] == 5);   // Solo
     }
 
     printf("grid_layout_test: all assertions passed\n");

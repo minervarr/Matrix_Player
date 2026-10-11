@@ -141,23 +141,23 @@ int main() {
     // The mark hangs on the same grid as the letters, centered on the capitals.
     {
         const terminus::Origin o = terminus::origin(10.7f, 100.2f, 20.0f);
-        assert(o.scale == 1);
+        assert(o.scale == 2);
         assert(o.penX == 10.0f);
-        assert(o.top == std::floor(100.2f + (20.0f - 16.0f) * 0.5f));
+        assert(o.top == std::floor(100.2f + (20.0f - 32.0f) * 0.5f));
         const panels::PxPlace p = panels::placePxMark(10.7f, 100.2f, 20.0f, 40.0f, 13);
-        assert(p.scale == 1);
+        assert(p.scale == 2);
         assert(p.y == o.top);                 // 13 rows -> font row 0
         assert(p.x == 40.0f);
         const panels::PxPlace odd = panels::placePxMark(10.7f, 100.2f, 20.0f, 40.0f, 11);
-        assert(odd.y == o.top + 1.0f);        // leftover pixel above the caps
+        assert(odd.y == o.top + (float)o.scale);   // leftover pixel above the caps
     }
     {
         const terminus::Origin o = terminus::origin(10.4f, 100.5f, 30.0f);
-        assert(o.scale == 2);
+        assert(o.scale == 3);
         const panels::PxPlace p = panels::placePxMark(10.4f, 100.5f, 30.0f, 51.0f, 13);
-        assert(p.scale == 2);
+        assert(p.scale == 3);
         assert(p.y == o.top);
-        // 51 is halfway between grid lines; lround ties away from zero.
+        // prefX 51 on a scale-3 grid whose pen is 10: (51-10)/3 rounds to 14.
         assert(p.x == 52.0f);
         assert(std::fmod(p.x - o.penX, (float)p.scale) == 0.0f);
     }

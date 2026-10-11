@@ -27,6 +27,9 @@
 #include "core/dsp/dither.h"   // ae::TpdfQuantizer — Reference EQ output stage
 #include "core/facets.h"       // facets::albumYear — Album carries no year field
 #include "grid_layout.hh"  // the grid's shape and its row-snapped scroll
+#include "theme_layout.hh"
+#include "album_disc.hh"   // one disc page's height and its end scroll
+#include "album_stage.hh"  // sleeve, track list and ruler as one group
 
 static int pickOutputRate(int inRate, const std::vector<int>& supported) {
     for (int r : supported)
@@ -134,9 +137,6 @@ static const char* backendDisplayName(AudioBackend b) {
 // palette) without re-deriving layout math or a parallel color table.
 static Rect toRect(const LayoutRect& r) {
     return { (float)r.left, (float)r.top, (float)(r.right - r.left), (float)(r.bottom - r.top) };
-}
-static LayoutRect toLayoutRect(const Rect& r) {
-    return { (int)r.x, (int)r.y, (int)(r.x + r.w), (int)(r.y + r.h) };
 }
 static Color toColor(ColorRef c, float a = 1.0f) {
     return { GetRValue(c) / 255.0f, GetGValue(c) / 255.0f, GetBValue(c) / 255.0f, a };
@@ -621,12 +621,13 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
 #endif
     // Before the saved id is applied, so a file dropped beside the database
     // is already in the list when that id is looked up.
-    reloadImportedThemes(app_paths::stateDir() + "themes");
-    {
-        const std::string savedTheme = db_.loadSetting("ui_theme");
-        if (!applyTheme(savedTheme.c_str()))
-            applyTheme("matrix");
-    }
+    reloadAllThemes();
+    themeSavedId_ = db_.loadSetting("ui_theme");
+    themeDynamic_ = db_.loadSetting("ui_theme_mode") == "dynamic";
+    themePlaying_ = false;
+    themeHeldId_.clear();
+    themeArtPath_.clear();
+    applyPlaybackTheme();
 
     // Scroll direction, one per input kind. Defaults are each platform's own
     // norm, so an empty database behaves exactly as the app always has: a
@@ -1529,7 +1530,6 @@ void PlayerWindow::drawFrame() {
                     int tile = row * gridCols_ + col;
                     if (tile >= (int)gridIndices_.size()) break;
                     int idx = gridIndices_[tile];   // real albums_ index
-                    const Album& alb = albums_[idx];
 
                     float x = (float)(rcGrid_.left + gridPadXpx_ + col * tileStepX + (tileStepX - gridArtSize_) / 2);
                     float y = (float)(rcGrid_.top + gridPadYpx_ + row * tileStepY - gridScrollY_);
@@ -1592,68 +1592,10 @@ void PlayerWindow::drawFrame() {
                     if (!drawVariantMosaic(canvas, idx, x, y, a))
                         drawArtOrPlaceholder(canvas, getGridArtTexture(idx), x, y, a, a);
 
-                    // Last-played / now-playing marker: a thin accent bar
-                    // hugging the art's bottom edge, exactly the art's width
-                    // (the art itself can't carry a badge: imageFg composites
-                    // above the vector layer). Replaces the old offset dot,
-                    // which broke the grid's column alignment.
-                    // Only last-played needs this bar; now-playing is already
-                    // unmistakable from its glow (no double-marking).
-                    bool lastPlayed = !nowPlaying &&
-                        alb.name == lastPlayedAlbumName_ &&
-                        alb.artist == lastPlayedArtistName_;
-                    if (lastPlayed)
-                        // The +2 is the GAP below the art; the trailing 2 is the
-                        // bar's THICKNESS — different classes, same call.
-                        canvas.rect(x, y + a + metrics_.space(2.0f), a,
-                                    metrics_.stroke(2.0f), toColor(CLR_ACCENT, 0.4f));
-
-                    // Tile text is centered under the art and confined to
-                    // exactly the art's width — the grid's vertical edges are
-                    // hard walls; nothing (including a truncation ellipsis)
-                    // may cross them. A trailing "(Deluxe)"-class modifier
-                    // (see splitNameModifier) gets its own dim second line —
-                    // "Rush" over "Are You Coming" — so the base name never
-                    // loses space to it; without one, the title wraps to two
-                    // lines before ellipsis.
-                    float textMaxW = a;
-                    auto centered = [&](const std::string& s, float yy, float sz,
-                                        ColorRef clr, FontStyle st) {
-                        float w = canvas.textWidthStyled(s, sz, st);
-                        canvas.textStyled(s, x + std::max(0.0f, (a - w) * 0.5f), yy,
-                                          sz, toColor(clr), st);
-                    };
-                    float adv = titleArtistAdvance(metrics_.text.body);
-                    float ty = y + a + metrics_.space(16.0f);
-                    std::string base, mod;
-                    if (splitNameModifier(alb.displayName, base, mod)) {
-                        centered(truncateToWidth(canvas, base, textMaxW, metrics_.text.body, FontStyle::Bold),
-                                 ty, metrics_.text.body, CLR_TEXT_ALBUM_TITLE, FontStyle::Bold);
-                        centered(truncateToWidth(canvas, mod, textMaxW, metrics_.text.secondary, FontStyle::Italic),
-                                 ty + adv, metrics_.text.secondary, CLR_TEXT_DIM, FontStyle::Italic);
-                    } else {
-                        std::string l1, l2;
-                        splitTwoLines(canvas, alb.displayName, textMaxW, metrics_.text.body, FontStyle::Bold, l1, l2);
-                        centered(l1, ty, metrics_.text.body, CLR_TEXT_ALBUM_TITLE, FontStyle::Bold);
-                        if (!l2.empty())
-                            centered(l2, ty + adv, metrics_.text.body, CLR_TEXT_ALBUM_TITLE, FontStyle::Bold);
-                    }
-                    // Artist sits in a fixed slot (below 2 title lines) so it
-                    // aligns across tiles whether titles wrapped or not. The
-                    // release year rides on that same line rather than taking
-                    // a fourth: the tile's height is fixed by the layout, and
-                    // a year is short enough that truncation still lands in
-                    // the artist name, where an ellipsis is legible.
-                    // Untagged (year 0) simply omits it — no "Unknown", which
-                    // would be noise on every MP3 in a library nothing reads
-                    // ID3 for.
-                    std::string byline = alb.artist;
-                    if (int yr = facets::albumYear(alb)) {
-                        if (!byline.empty()) byline += " · ";
-                        byline += std::to_string(yr);
-                    }
-                    centered(truncateToWidth(canvas, byline, textMaxW, metrics_.text.secondary, FontStyle::Italic),
-                             ty + adv * 2, metrics_.text.secondary, CLR_TEXT_SECONDARY, FontStyle::Italic);
+                    // No title, no artist, no year under the cover. Those
+                    // strings are the program's, and a grid of them competes
+                    // with the picture. Search still reads the tags. The
+                    // now-playing ring above is the one mark that is a state.
                 }
             }
             canvas.clearClip();
@@ -1678,9 +1620,16 @@ void PlayerWindow::drawFrame() {
         };
 
         bool bp = bitperfectMode_.load();
-        std::string modeLabel = bp
-            ? "Mode: Bitperfect - click to switch to Reference EQ"
-            : "Mode: Reference EQ - click to switch to Bitperfect";
+        // The current mode only. Naming the destination as well ("switch
+        // to Reference EQ") is 782px at the 32px body strike, and this row
+        // is space(718) wide, so the sentence was cut. "REFERENCE EQ MODE
+        // - CLICK TO SWITCH" is the longer of the two and measures 552px,
+        // which leaves about 80px of air on each side at that width.
+        // CLICK on a pointer, TAP where the finger is the switch.
+        const char* how = (host_ && host_->inputIsTouch()) ? "TAP" : "CLICK";
+        std::string modeLabel = std::string(bp ? "BITPERFECT MODE - "
+                                               : "REFERENCE EQ MODE - ")
+                              + how + " TO SWITCH";
 
         struct SettItem { LayoutRect rc; std::string label; int idx; };
         SettItem items[] = {
@@ -1784,7 +1733,6 @@ void PlayerWindow::drawFrame() {
         Rect artR = toRect(rcTransportArt_);
         drawArtOrPlaceholder(canvas, transportArtTex_, artR.x, artR.y, artR.w, artR.h);
 
-        const Rect tv    = authored(rcTransport_);      // the bar, as a wide one
         const Rect infoR = authored(rcTransportInfo_);
 
         // ── What is playing: the track's ORDINAL, drawn upright ───────────
@@ -1948,14 +1896,16 @@ void PlayerWindow::drawFrame() {
 
         // Three buttons only — prev / play-stop / next, same combined
         // play-stop toggle. No pause: this user only ever
-        // stops or starts from zero. Drawn UNROTATED at their real rects:
-        // recalcLayout() already placed them along the bar's long axis, and a
-        // rotated Prev triangle would point up rather than back.
+        // stops or starts from zero. The center control is the state, so
+        // it wears the accent in both poses — green on Matrix, the cover's
+        // own mark in Dynamic. Prev and next are travel, and they stay the
+        // ink. Drawn UNROTATED at their real rects: recalcLayout() already
+        // placed them along the bar's long axis, and a rotated Prev
+        // triangle would point up rather than back.
         struct BtnDef { LayoutRect rc; int idx; UiIcon icon; ColorRef clr; };
         BtnDef buttons[] = {
             { rcBtnPrev_, 0, UiIcon::Prev, CLR_TEXT_PRIMARY },
-            { rcBtnPlay_, 1, isPlaying_ ? UiIcon::Stop : UiIcon::Play,
-                             isPlaying_ ? CLR_TEXT_PRIMARY : CLR_ACCENT },
+            { rcBtnPlay_, 1, isPlaying_ ? UiIcon::Stop : UiIcon::Play, CLR_ACCENT },
             { rcBtnNext_, 2, UiIcon::Next, CLR_TEXT_PRIMARY },
         };
         for (auto& b : buttons) {
@@ -2261,29 +2211,35 @@ void PlayerWindow::recalcLayout() {
         }
     }
 
-    // Grid columns — derived from a target tile pitch (~220px art + margins)
-    // rather than a fixed column count, so density stays consistent across
-    // window widths and panel open/close: more of the library visible at a
-    // glance, tiles still large enough to enjoy the art.
-    static constexpr int kTargetTilePitch = 250;  // desired cell stride incl. margins
+    // Grid columns — a target tile pitch rather than a fixed column count.
+    // The album grid's pitch is the larger one: the cover is the whole tile,
+    // and a denser grid spent the difference on titles the program wrote.
+    // Playlists keep the older pitch because their tiles still carry a name.
+    static constexpr int kPlaylistTilePitch = 250;
+    static constexpr int kAlbumTilePitch    = 400;
     static constexpr int kMinGridArtSize  = 80;   // legible floor; drop a column instead of going below it
     static constexpr int kGridArtMargin   = 30;   // gap reserved around the art within its cell
 
-    // These three were bare literals (never scaled), so they keep their numbers
-    // and merely gain space() — a no-op at the reference height, and it finally
+    // These were bare literals (never scaled), so they keep their numbers
+    // and merely gain space() — a no-op at the reference height, and it
     // makes tile density track the window on a taller display.
-    const int tilePitch  = (int)metrics_.space((float)kTargetTilePitch);
+    const bool playlists = navSection_ == NavSection::Playlists;
+    const int tilePitch  = (int)metrics_.space(playlists ? (float)kPlaylistTilePitch
+                                                         : (float)kAlbumTilePitch);
     const int minArtSize = (int)metrics_.space((float)kMinGridArtSize);
     const int artMargin  = (int)metrics_.space((float)kGridArtMargin);
 
     gridPadXpx_ = (int)metrics_.space((float)gridPadX_);
 
-    // Tile text block height from the ACTUAL text sizes (two title lines +
-    // artist + breathing room) -- see gridRowGap_'s comment in the header.
-    // Computed FIRST now, because the grid's shape needs it: a row has to be
-    // tall enough for its art AND this band, or its byline is the thing cut.
-    gridRowGap_ = (int)(titleArtistAdvance(metrics_.text.body) * 2.0f
-                        + metrics_.text.secondary * 1.35f + metrics_.space(29.41f));
+    // Playlists still reserve a name block. The album grid reserves only the
+    // same air the columns already leave beside a cover, so the art can take
+    // the row. See gridRowGap_'s comment in the header.
+    if (playlists) {
+        gridRowGap_ = (int)(titleArtistAdvance(metrics_.text.body) * 2.0f
+                            + metrics_.text.secondary * 1.35f + metrics_.space(29.41f));
+    } else {
+        gridRowGap_ = artMargin;
+    }
 
     // -- The grid's shape: the nearest column count, and whole rows ---------
     //
@@ -2730,6 +2686,11 @@ void PlayerWindow::onArtDecoded() {
     for (auto& r : done) {
         artDecodePending_.erase(r.key);
         if (r.gen != artCacheGen_.load()) continue;  // rescan invalidated it
+        // Artist portraits are not covers. Every other decode feeds the
+        // path cache before the key-specific upload, which continues past
+        // this point and would otherwise drop the pixels.
+        if (r.key != kArtistArtKey && !r.path.empty() && !r.rgba.empty())
+            noteCoverColors(r.path, r.rgba.data(), r.w, r.h);
         if (r.key == kArtistArtKey) {
             // The album-view artist photo. Single slot: apply the result only
             // if it is still the photo we WANT — the request may have moved on
@@ -2745,6 +2706,7 @@ void PlayerWindow::onArtDecoded() {
                 artistImgTex_ = renderer_->create_texture(r.rgba.data(), (uint32_t)r.w,
                                                           (uint32_t)r.h, /*mips=*/false);
             artistImgCachePath_ = r.path;
+            artistImgCachePx_ = r.rgba.empty() ? 0 : r.w;
             anyNew = true;
             continue;
         }
@@ -2906,52 +2868,115 @@ static AlbumIdentLayout layoutAlbumIdentity(Canvas& canvas, const UiMetrics& met
     return id;
 }
 
+static void drawAlbumIdentityLine(Canvas& canvas, const std::string& s,
+                                  float x, float y, float textW, float size,
+                                  ColorRef color, FontStyle style, bool center) {
+    if (s.empty()) return;
+    float drawX = x;
+    if (center) {
+        const float w = canvas.textWidthStyled(s, size, style);
+        drawX = x + std::max(0.0f, (textW - w) * 0.5f);
+    }
+    canvas.textStyled(s, drawX, y, size, toColor(color), style);
+}
+
 static void drawAlbumIdentityText(Canvas& canvas, const UiMetrics& metrics,
                                   const Album& album, const AlbumIdentLayout& id,
-                                  float x, float y, float textW, bool drawRule) {
+                                  float x, float y, float textW, bool center) {
+    // Wide layout centers each line on the cover. Portrait flushes them
+    // left: the block is a sentence about the sleeve beside it, and a
+    // centered line in that column would drift away from the picture.
     for (const auto& ln : id.titleLines) {
-        canvas.textStyled(ln, x, y, metrics.text.title,
-                          toColor(CLR_TEXT_PRIMARY), FontStyle::Bold);
+        drawAlbumIdentityLine(canvas, ln, x, y, textW, metrics.text.title,
+                              CLR_TEXT_PRIMARY, FontStyle::Bold, center);
         y += titleArtistAdvance(metrics.text.title);
     }
     for (const auto& ln : id.modLines) {
-        canvas.textStyled(ln, x, y, metrics.text.secondary,
-                          toColor(CLR_TEXT_DIM), FontStyle::Italic);
+        drawAlbumIdentityLine(canvas, ln, x, y, textW, metrics.text.secondary,
+                              CLR_TEXT_DIM, FontStyle::Italic, center);
         y += metrics.text.secondary * 1.35f;
     }
     if (!album.artist.empty()) {
-        canvas.textStyled(truncateToWidth(canvas, album.artist, textW,
-                                          metrics.text.secondary, FontStyle::Italic),
-                          x, y, metrics.text.secondary,
-                          toColor(CLR_TEXT_SECONDARY), FontStyle::Italic);
+        drawAlbumIdentityLine(canvas,
+                              truncateToWidth(canvas, album.artist, textW,
+                                              metrics.text.secondary, FontStyle::Italic),
+                              x, y, textW, metrics.text.secondary,
+                              CLR_TEXT_SECONDARY, FontStyle::Italic, center);
         y += metrics.text.secondary * 1.35f;
     }
     if (!id.badge.empty()) {
-        canvas.textStyled(id.badge, x, y, metrics.text.caption,
-                          toColor(CLR_TEXT_DIM), FontStyle::Math);
-        y += metrics.text.caption * 1.8f;
+        drawAlbumIdentityLine(canvas, id.badge, x, y, textW, metrics.text.caption,
+                              CLR_TEXT_DIM, FontStyle::Math, center);
     }
-    y += metrics.space(SP_XS);
-    if (drawRule)
-        canvas.rect(x, y, textW, metrics.stroke(1.0f), toColor(themeRule()));
 }
 
-// A small filled down-triangle, DIM, no icon font. Wide at the top, point
-// at the bottom — "more this way". Axis-aligned rects, the same primitive
-// the DISC hairlines use, so it cannot pick up a second typeface.
-static void drawDownChevron(Canvas& canvas, float cx, float top, float size,
-                            Color c) {
-    const float t = std::max(1.0f, std::floor(size / 7.0f));
-    const int   rows = 4;
-    for (int r = 0; r < rows; r++) {
-        float w = size - (float)r * 2.0f * t;
-        if (w < t) break;
-        canvas.rect(cx - w * 0.5f, top + (float)r * t, w, t, c);
-    }
+// Down-pointing cue in the music face. U+2193 DOWNWARDS ARROW is the
+// Computer Modern arrow already in NewCM10-Regular: a stem, then two
+// curves that meet at one point. It points down, so nothing is turned.
+// The outlined triangle (U+2206) read as a math operator; a run of
+// rectangles would read as Terminus. The modifier arrowhead in this
+// face (U+02C5) is straight segments, and the curved chevron lives only
+// in NewCMMath, which this page does not draw from.
+// Ink box measured from the face: (28,-194)–(472,694) in a 1000-unit em.
+// `top`/`bot`/`left`/`right` are the glyph's ink box in a 1000-unit em.
+// textStyled is given the top of the em, so the pen is shifted until the
+// ink's own middle sits on (cx, cy).
+static void drawSerifArrow(Canvas& canvas, const char* utf8,
+                          float cx, float cy, float inkH,
+                          float top, float bot, float left, float right) {
+    constexpr float kUpem = 1000.0f;
+    const float inkFrac = (top - bot) / kUpem;
+    const float size = std::max(1.0f, inkH / inkFrac);
+    const float x = cx - ((left + right) * 0.5f) / kUpem * size;
+    const float y = cy - (size - ((top + bot) * 0.5f) / kUpem * size);
+    canvas.textStyled(utf8, x, y, size, toColor(CLR_TEXT_DIM), FontStyle::Roman);
+}
+
+static void drawSerifDownArrow(Canvas& canvas, float cx, float cy, float inkH) {
+    // U+2193. Ink box measured from NewCM10-Regular.
+    drawSerifArrow(canvas, "\xE2\x86\x93", cx, cy, inkH, 694.0f, -194.0f, 28.0f, 472.0f);
+}
+
+static void drawSerifUpArrow(Canvas& canvas, float cx, float cy, float inkH) {
+    // U+2191. Ink box measured from the same face: (28,-201)–(472,694).
+    drawSerifArrow(canvas, "\xE2\x86\x91", cx, cy, inkH, 694.0f, -201.0f, 28.0f, 472.0f);
 }
 
 bool PlayerWindow::hasArtistWorldContent() const {
-    return !albumDescText_.empty() || !artistBioText_.empty() || !artistImgPath_.empty();
+    return !albumDescText_.empty() || !artistBioText_.empty()
+        || !artistImgPath_.empty() || !albumCredits_.empty();
+}
+
+// One disc is one page of the track list. Tracks stay in file order; a new
+// disc number opens the next page rather than another block under this one.
+struct AlbumDiscSpan {
+    int number = 0;
+    int begin  = 0;   // inclusive track index
+    int end    = 0;   // exclusive
+};
+
+static void collectDiscSpans(const std::vector<Track>& tracks,
+                             std::vector<AlbumDiscSpan>& out) {
+    out.clear();
+    for (int i = 0; i < (int)tracks.size(); ++i) {
+        const int d = tracks[i].discNumber;
+        if (out.empty() || out.back().number != d)
+            out.push_back(AlbumDiscSpan{ d, i, i + 1 });
+        else
+            out.back().end = i + 1;
+    }
+    if (out.empty()) out.push_back(AlbumDiscSpan{ 0, 0, 0 });
+}
+
+// What the arrow at the bottom of this page means. NextDisc is centered
+// on the track list; Artist is centered on the whole content area, lower,
+// because that turn leaves the album page entirely.
+enum class AlbumCue { None, NextDisc, Artist };
+
+static int64_t steadyMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
 }
 
 int PlayerWindow::albumViewArtTargetSize() const {
@@ -2964,9 +2989,15 @@ int PlayerWindow::albumViewArtTargetSize() const {
     const float pad = metrics_.space(SP_XL);
     const float minArt = metrics_.space(120.0f);
     if (curOrientation_ == UiOrientation::Vertical) {
-        const float byW = (float)panelW - pad * 2.0f;
-        const float byH = (float)panelH * 0.38f;
-        return (int)std::max(minArt, std::min(byW, byH));
+        // Sleeve and label split the inner width. The label column is at
+        // least as wide as the sleeve; height still has to leave four
+        // track rows under the header. Draw may shrink further.
+        const float gap = metrics_.space(SP_MD);
+        const float inner = (float)panelW - pad * 2.0f;
+        const float byW = std::max(0.0f, (inner - gap) * 0.5f);
+        const float row = metrics_.space(SP_XL);
+        const float byH = (float)panelH - pad * 2.0f - 4.0f * row - gap;
+        return (int)std::max(minArt, std::min(byW, std::max(minArt, byH)));
     }
     const float byW = (float)panelW * 0.28f;
     const float byH = (float)panelH * 0.42f;
@@ -2989,81 +3020,401 @@ void PlayerWindow::drawAlbumView(Canvas& canvas) {
     const float minArt = metrics_.space(120.0f);
     const float artGap = metrics_.space(SP_MD);
     const bool  wide   = (curOrientation_ == UiOrientation::Horizontal);
-    // Reserved under the list when an artist page exists, so the last track
-    // can rest above the chevron instead of sharing a pixel with it.
-    const float footerH = hasArtistWorldContent() ? metrics_.space(SP_LG) : 0.0f;
+
+    std::vector<AlbumDiscSpan> discs;
+    collectDiscSpans(album.tracks, discs);
+    if (albumDiscIndex_ < 0 || albumDiscIndex_ >= (int)discs.size())
+        albumDiscIndex_ = 0;
+    albumDiscCount_ = (int)discs.size();
+    const AlbumDiscSpan& disc = discs[(size_t)albumDiscIndex_];
+    const bool multiDisc = discs.size() > 1;
+    const bool lastDisc  = albumDiscIndex_ + 1 >= (int)discs.size();
+    // Next disc: a short footer under the list, centered on the list group.
+    // Artist page: a taller band under the whole content area, centered
+    // on that area. The two never share a page — the list cue is gone
+    // once there is no further disc.
+    //
+    // Both bands are reserved for the whole album, not only on the disc
+    // that draws the arrow. The list frame is centred on the sleeve, and
+    // that frame does not follow the current disc's track count. Sizing
+    // it from the current disc, or from whichever arrow is live, is what
+    // slid the sleeve when the disc changed.
+    const AlbumCue cue = !lastDisc ? AlbumCue::NextDisc
+                       : hasArtistWorldContent() ? AlbumCue::Artist
+                                                  : AlbumCue::None;
+    const float sceneBand = hasArtistWorldContent() ? metrics_.space(SP_XL) : 0.0f;
+    const float discBand  = multiDisc ? metrics_.space(SP_LG) : 0.0f;
 
     canvas.setClip(tp.x, tp.y, tp.w, tp.h);
 
-    // ── Artist world: ABOUT / photo / bio. No cover, no tracks. ──────────
+    // ── Sleeve size. The artist page uses it too: the photo is 1.5× this
+    // square, so the size has to exist before that page returns. ────────
+    // Wide: the track-list frame is centred on the picture, and the
+    // sleeve, the list and the ruler are one group centred between the
+    // bars. Tall albums centre that same group; the lines sit in the
+    // column beside the sleeve. A tall single puts the sleeve at the top.
+    float artSize = (float)albumViewArtTargetSize();
+    AlbumIdentLayout ident;
+    const float columnH = std::max(0.0f, tp.h - pad * 2.0f - sceneBand);
+    // One label when this album has another disc. The rows scroll under
+    // it on a long disc; a short disc carries the label with its rows.
+    const float discHeaderH = multiDisc ? metrics_.space(SP_LG + SP_SM) : 0.0f;
+
+    if (wide) {
+        for (int i = 0; i < 4; i++) {
+            ident = layoutAlbumIdentity(canvas, metrics_, album, artSize);
+            float identBlock = artSize + artGap + ident.totalH;
+            if (identBlock <= columnH || artSize <= minArt) break;
+            float next = artSize - (identBlock - columnH);
+            if (next >= artSize) break;
+            artSize = std::max(minArt, next);
+        }
+        ident = layoutAlbumIdentity(canvas, metrics_, album, artSize);
+    } else if (album.releaseType == Album::ReleaseType::Single) {
+        // Tall single. The sleeve is the album's own square, centred at
+        // the top. Height leaves the lines and a row, plus a row of air,
+        // so the track has a remainder to sit in.
+        const float availW = std::max(1.0f, tp.w - pad * 2.0f);
+        const float gap = artGap;
+        const float row = (float)std::max(1, trackRowHeight_);
+        const float reading = metrics_.space(820.0f);
+        const float textCol = std::max(1.0f, std::min(reading, availW));
+        const float room = std::max(0.0f, columnH - discBand);
+        artSize = std::min(artSize, std::max(minArt, (availW - gap) * 0.5f));
+        artSize = std::min(artSize, availW);
+        artSize = std::max(minArt, artSize);
+        for (int i = 0; i < 6; ++i) {
+            ident = layoutAlbumIdentity(canvas, metrics_, album, textCol);
+            const float need = artSize + gap + ident.totalH + gap + row * 2.0f;
+            if (need <= room + 0.5f || artSize <= minArt) break;
+            const float next = artSize - std::max(need - room, metrics_.space(8.0f));
+            if (next >= artSize) break;
+            artSize = std::max(minArt, next);
+        }
+        ident = layoutAlbumIdentity(canvas, metrics_, album, textCol);
+    } else {
+        // Tall album. The sleeve and the lines split the inner width, and
+        // the lines wrap to the column they will be centred in. Reserving
+        // the stroke column here means a line still fits when the ruler
+        // is added and the group recentres. The header must leave about
+        // four track rows; the sleeve shrinks to make that true.
+        const float availW = std::max(1.0f, tp.w - pad * 2.0f);
+        const float gap = artGap;
+        const float row = (float)std::max(1, trackRowHeight_);
+        const float reading = metrics_.space(820.0f);
+        const float reserve = metrics_.stroke(2.0f) + metrics_.space(SP_LG);
+        const float minTracksH = 4.0f * row;
+        const float gapUnder = metrics_.space(SP_MD);
+        const float maxHeader = std::max(minArt,
+            tp.h - minTracksH - gapUnder - pad * 2.0f - sceneBand - discBand);
+        // The header shares the reading measure with the list. A sleeve
+        // grown to half the panel would fill the width, leave the strokes
+        // on the panel edge, and give the group nothing to centre in.
+        const float block = std::min(reading, std::max(1.0f, availW - reserve));
+        artSize = std::min(artSize, std::max(minArt, (block - gap) * 0.5f));
+        artSize = std::min(artSize, maxHeader);
+        artSize = std::max(minArt, artSize);
+        const float minText = metrics_.space(120.0f);
+        if (artSize + gap + minText > block)
+            artSize = std::max(1.0f, block - gap - minText);
+        auto columnFor = [&](float art) {
+            return std::max(1.0f, block - art - gap);
+        };
+        for (int i = 0; i < 6; ++i) {
+            ident = layoutAlbumIdentity(canvas, metrics_, album, columnFor(artSize));
+            const float headerH = std::max(artSize, ident.totalH);
+            if (headerH <= maxHeader + 0.5f || artSize <= minArt) break;
+            const float next = artSize - std::max(headerH - maxHeader, metrics_.space(8.0f));
+            if (next >= artSize) break;
+            artSize = std::max(minArt, next);
+        }
+        ident = layoutAlbumIdentity(canvas, metrics_, album, columnFor(artSize));
+    }
+
+    // ── Artist world. Photo and name are one group. Each description
+    // has its own heading, one step under the name. No cover, no tracks.
     if (albumWorld_ == AlbumWorld::Artist) {
         rcVariantTiles_.clear();
         const float scroll = (float)artistScrollY_;
-        const float textW  = std::max(1.0f, tp.w - pad * 2.0f);
-        if (albumTextWrapW_ != textW) {
+        const float innerW = std::max(1.0f, tp.w - pad * 2.0f);
+        const float colW = std::min(metrics_.space(820.0f), innerW);
+        if (albumTextWrapW_ != colW) {
             albumDescLines_.clear();
             artistBioLines_.clear();
+            creditSpans_.clear();
             if (!albumDescText_.empty())
-                wrapText(canvas, albumDescText_, textW, metrics_.text.secondary,
+                wrapText(canvas, albumDescText_, colW, metrics_.text.secondary,
                          FontStyle::Roman, albumDescLines_);
             if (!artistBioText_.empty())
-                wrapText(canvas, artistBioText_, textW, metrics_.text.secondary,
+                wrapText(canvas, artistBioText_, colW, metrics_.text.secondary,
                          FontStyle::Roman, artistBioLines_);
-            albumTextWrapW_ = textW;
+            // Peers share a size. The role is a caption reserved at the
+            // right, measured at the size that line will draw, so a composer
+            // and a lyricist are two lines of one act.
+            auto roleCaption = [](const std::string& role) {
+                std::string o = role;
+                for (char& ch : o)
+                    if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+                return o;
+            };
+            const bool settingLeads = credits::settingIsTheWork(albumCredits_);
+            float roleCol = 0.0f;
+            for (const auto& c : albumCredits_) {
+                const bool musicSized = c.act == credits::Act::Music
+                    || c.act == credits::Act::Setting;
+                const float sz = musicSized ? metrics_.text.body : metrics_.text.secondary;
+                roleCol = std::max(roleCol, canvas.textWidthStyled(
+                    roleCaption(c.role), sz, FontStyle::Italic));
+            }
+            const float roleGap = metrics_.space(SP_SM);
+            float nameMax = colW - roleCol - roleGap;
+            const bool beside = nameMax >= metrics_.space(120.0f);
+            if (!beside) nameMax = std::max(1.0f, colW);
+
+            credits::Act prevAct = credits::Act::Music;
+            bool anyAct = false;
+            for (const auto& c : albumCredits_) {
+                if (!anyAct || c.act != prevAct) {
+                    CreditSpan h;
+                    h.heading = true;
+                    h.act = c.act;
+                    h.line = credits::actHeading(c.act);
+                    creditSpans_.push_back(std::move(h));
+                    prevAct = c.act;
+                    anyAct = true;
+                }
+                std::string names;
+                for (const auto& person : c.people) {
+                    if (person.empty()) continue;
+                    if (!names.empty()) names += ", ";
+                    names += person;
+                }
+                if (names.empty()) continue;
+                const bool musicSized = c.act == credits::Act::Music
+                    || c.act == credits::Act::Setting;
+                const float sz = musicSized ? metrics_.text.body : metrics_.text.secondary;
+                const FontStyle style = c.act == credits::Act::Issue
+                    ? FontStyle::Italic : FontStyle::Roman;
+                std::vector<std::string> wrapped;
+                wrapText(canvas, names, nameMax, sz, style, wrapped);
+                if (wrapped.empty()) wrapped.push_back(names);
+                const std::string caption = roleCaption(c.role);
+                const bool lead = c.act == credits::Act::Setting && settingLeads;
+                bool rolePlaced = false;
+                for (auto& ln : wrapped) {
+                    if (ln.empty()) continue;
+                    CreditSpan row;
+                    row.act = c.act;
+                    row.lead = lead;
+                    row.line = std::move(ln);
+                    if (beside && !rolePlaced) {
+                        row.role = caption;
+                        rolePlaced = true;
+                    }
+                    creditSpans_.push_back(std::move(row));
+                }
+                if (!beside) {
+                    CreditSpan cap;
+                    cap.roleLine = true;
+                    cap.act = c.act;
+                    cap.line = caption;
+                    creditSpans_.push_back(std::move(cap));
+                }
+            }
+            albumTextWrapW_ = colW;
         }
-        float sectY = tp.y + pad - scroll;
-        float lineAdv = metrics_.text.secondary * 1.5f;
-        auto drawSection = [&](const std::string& caption,
-                               const std::vector<std::string>& lines, float& yy) {
-            if (lines.empty()) return;
-            canvas.textStyled(caption, tp.x + pad, yy, metrics_.text.caption,
-                              toColor(CLR_TEXT_DIM), FontStyle::Bold);
-            yy += metrics_.text.caption * 2.2f;
-            for (auto& ln : lines) {
+
+        std::vector<std::string> nameLines;
+        if (!album.artist.empty())
+            wrapText(canvas, album.artist, colW, metrics_.text.header,
+                     FontStyle::Bold, nameLines);
+        const float nameAdv = titleArtistAdvance(metrics_.text.header);
+        const float nameH = (float)nameLines.size() * nameAdv;
+
+        // The whole portrait fits in the inner canvas, then the layout
+        // centres it there. Text lives below it and is reached by scrolling,
+        // so the picture is not shrunk to leave a paragraph on screen.
+        const float innerH = std::max(1.0f, tp.h - pad * 2.0f);
+        float hero = artSize * 1.5f;
+        hero = std::min(hero, innerW);
+        hero = std::min(hero, innerH);
+        if (hero < 1.0f) hero = 1.0f;
+
+        const bool showImage = !artistImgPath_.empty();
+        if (showImage && artistImgTex_ != kInvalidTexture
+            && (int)hero > artistImgCachePx_ + 2)
+            requestArtistImage(artistImgPath_, (int)hero);
+        ArtistPageInput ap;
+        ap.panelX = tp.x;
+        ap.panelY = tp.y;
+        ap.panelW = tp.w;
+        ap.panelH = tp.h;
+        ap.pad = pad;
+        ap.heroGap = metrics_.space(SP_MD);
+        ap.afterHero = metrics_.space(SP_XL);
+        ap.imageSize = showImage ? hero : 0.0f;
+        ap.nameH = nameH;
+        ap.columnW = colW;
+        const ArtistPage page = layoutArtistPage(ap);
+
+        auto onScreen = [&](float y, float h) {
+            return y + h >= tp.y && y <= tp.y + tp.h;
+        };
+        auto drawCentered = [&](const std::string& s, float x, float y, float w,
+                                float size, ColorRef color, FontStyle style) {
+            if (s.empty() || !onScreen(y, size)) return;
+            const float tw = canvas.textWidthStyled(s, size, style);
+            canvas.textStyled(s, x + std::max(0.0f, (w - tw) * 0.5f), y, size,
+                              toColor(color), style);
+        };
+
+        // Same rule as the track list's down-arrow: the cue is there once
+        // the page has rested at the boundary the next gesture crosses,
+        // and it is not drawn on the portrait the rest of the time.
+        if (artistLeaveCue_ && artistScrollY_ <= 0 &&
+            page.arrowCy + 1.0f < page.imageY) {
+            const float arrowY = page.arrowCy - scroll;
+            if (onScreen(arrowY, metrics_.text.caption))
+                drawSerifUpArrow(canvas, page.arrowCx, arrowY, metrics_.text.caption);
+        }
+
+        rcArtistImg_ = {};
+        if (showImage) {
+            const float imgTop = page.imageY - scroll;
+            const float top = std::max(imgTop, tp.y);
+            const float bottom = std::min(imgTop + page.imageSize, tp.y + tp.h);
+            if (bottom > top) {
+                rcArtistImg_ = LayoutRect{ (int)page.imageX, (int)top,
+                                           (int)(page.imageX + page.imageSize), (int)bottom };
+                if (artistImgTex_ != kInvalidTexture) {
+                    const float v0 = (top - imgTop) / page.imageSize;
+                    const float v1 = (bottom - imgTop) / page.imageSize;
+                    canvas.imageFg(artistImgTex_, page.imageX, top, page.imageSize,
+                                   bottom - top, 0.0f, v0, 1.0f, v1);
+                } else {
+                    canvas.rect(page.imageX, top, page.imageSize, bottom - top,
+                                toColor(CLR_TILE_PLACEHOLDER));
+                }
+            }
+        }
+
+        float ny = page.nameY - scroll;
+        for (const auto& ln : nameLines) {
+            drawCentered(ln, page.nameX, ny, page.nameW, metrics_.text.header,
+                         CLR_TEXT_PRIMARY, FontStyle::Bold);
+            ny += nameAdv;
+        }
+
+        const float lineAdv = metrics_.text.secondary * 1.5f;
+        const float titleAdv = titleArtistAdvance(metrics_.text.title);
+        float yy = page.proseY - scroll;
+        auto drawBody = [&](const std::vector<std::string>& lines) {
+            for (const auto& ln : lines) {
                 if (ln.empty()) { yy += lineAdv * 0.6f; continue; }
-                if (yy + lineAdv >= tp.y && yy <= tp.y + tp.h)
-                    canvas.textStyled(ln, tp.x + pad, yy, metrics_.text.secondary,
+                if (onScreen(yy, lineAdv))
+                    canvas.textStyled(ln, page.columnX, yy, metrics_.text.secondary,
                                       toColor(CLR_TEXT_SECONDARY), FontStyle::Roman);
                 yy += lineAdv;
             }
-            yy += metrics_.space(28.0f);
         };
-        const float textTop = sectY;
-        drawSection("ABOUT THIS ALBUM", albumDescLines_, sectY);
-        if (artistImgTex_ != kInvalidTexture || !artistBioLines_.empty()) {
-            if (artistImgTex_ != kInvalidTexture) {
-                float imgSize = metrics_.space(196.0f);
-                float top     = std::max(sectY, tp.y);
-                float bottom  = std::min(sectY + imgSize, tp.y + tp.h);
-                if (bottom > top) {
-                    float v0 = (top - sectY) / imgSize;
-                    float v1 = (bottom - sectY) / imgSize;
-                    rcArtistImg_ = LayoutRect{ (int)(tp.x + pad), (int)top,
-                                               (int)(tp.x + pad + imgSize), (int)bottom };
-                    canvas.imageFg(artistImgTex_, tp.x + pad, top, imgSize, bottom - top,
-                                   0.0f, v0, 1.0f, v1);
-                } else {
-                    rcArtistImg_ = LayoutRect{ 0, 0, 0, 0 };
-                }
-                sectY += imgSize + metrics_.space(16.0f);
-            } else {
-                rcArtistImg_ = LayoutRect{ 0, 0, 0, 0 };
+        auto drawHeading = [&](const std::string& heading) {
+            std::vector<std::string> heads;
+            wrapText(canvas, heading, page.columnW, metrics_.text.title,
+                     FontStyle::Bold, heads);
+            for (const auto& h : heads) {
+                drawCentered(h, page.columnX, yy, page.columnW, metrics_.text.title,
+                             CLR_TEXT_PRIMARY, FontStyle::Bold);
+                yy += titleAdv;
             }
-            if (!artistBioLines_.empty())
-                drawSection(album.artist.empty() ? std::string("ABOUT THE ARTIST")
-                                                 : album.artist, artistBioLines_, sectY);
-        } else {
-            rcArtistImg_ = LayoutRect{ 0, 0, 0, 0 };
+        };
+        if (!artistBioLines_.empty()) {
+            drawHeading("About the artist");
+            yy += metrics_.space(SP_SM);
+            drawBody(artistBioLines_);
+            yy += metrics_.space(SP_XL);
         }
+        if (!albumDescLines_.empty()) {
+            std::string base, mod;
+            splitNameModifier(album.displayName, base, mod);
+            if (base.empty())
+                base = album.displayName.empty() ? std::string("About this album")
+                                                 : album.displayName;
+            drawHeading(base);
+            if (!mod.empty()) {
+                drawCentered(mod, page.columnX, yy, page.columnW, metrics_.text.secondary,
+                             CLR_TEXT_DIM, FontStyle::Italic);
+                yy += metrics_.text.secondary * 1.35f;
+            }
+            yy += metrics_.space(SP_SM);
+            drawBody(albumDescLines_);
+        }
+        if (!creditSpans_.empty()) {
+            yy += metrics_.space(SP_XL);
+            drawHeading("Credits");
+            yy += metrics_.space(SP_SM);
+            bool sawAct = false;
+            for (const CreditSpan& span : creditSpans_) {
+                if (span.heading) {
+                    if (sawAct) yy += metrics_.space(SP_MD);
+                    sawAct = true;
+                    const float adv = titleArtistAdvance(metrics_.text.body);
+                    if (onScreen(yy, adv))
+                        canvas.textStyled(span.line, page.columnX, yy,
+                                          metrics_.text.body,
+                                          toColor(CLR_TEXT_PRIMARY), FontStyle::Bold);
+                    yy += adv + metrics_.space(SP_SM);
+                    continue;
+                }
+                if (span.roleLine) {
+                    const float adv = metrics_.text.secondary * 1.2f;
+                    if (onScreen(yy, adv))
+                        canvas.textStyled(span.line, page.columnX, yy,
+                                          metrics_.text.secondary,
+                                          toColor(CLR_TEXT_DIM), FontStyle::Italic);
+                    yy += adv + metrics_.space(SP_SM);
+                    continue;
+                }
+                const bool musicSized = span.act == credits::Act::Music
+                    || span.act == credits::Act::Setting;
+                const float nameSize = musicSized ? metrics_.text.body
+                                                  : metrics_.text.secondary;
+                const float adv = nameSize * 1.5f;
+                ColorRef nameColor = CLR_TEXT_DIM;
+                FontStyle nameStyle = FontStyle::Roman;
+                if (span.act == credits::Act::Music ||
+                    (span.act == credits::Act::Setting && span.lead))
+                    nameColor = CLR_TEXT_PRIMARY;
+                else if (span.act == credits::Act::Setting ||
+                         span.act == credits::Act::Performance)
+                    nameColor = CLR_TEXT_SECONDARY;
+                else if (span.act == credits::Act::Issue)
+                    nameStyle = FontStyle::Italic;
+                if (onScreen(yy, adv) && !span.line.empty()) {
+                    canvas.textStyled(span.line, page.columnX, yy, nameSize,
+                                      toColor(nameColor), nameStyle);
+                    if (!span.role.empty()) {
+                        const float rw = canvas.textWidthStyled(
+                            span.role, nameSize, FontStyle::Italic);
+                        float rx = page.columnX + page.columnW - rw;
+                        if (rx < page.columnX) rx = page.columnX;
+                        canvas.textStyled(span.role, rx, yy, nameSize,
+                                          toColor(CLR_TEXT_DIM), FontStyle::Italic);
+                    }
+                }
+                yy += adv;
+            }
+        }
+
         {
-            float top = std::max(textTop, tp.y);
-            float bot = std::min(sectY, tp.y + tp.h);
-            rcAlbumText_ = (bot > top)
-                ? LayoutRect{ (int)(tp.x + pad), (int)top,
-                              (int)(tp.x + pad + textW), (int)bot }
+            const float textDocTop = nameH > 0.0f ? page.nameY : page.proseY;
+            const float visTop = std::max(textDocTop - scroll, tp.y);
+            const float visBot = std::min(yy, tp.y + tp.h);
+            rcAlbumText_ = (visBot > visTop)
+                ? LayoutRect{ (int)page.columnX, (int)visTop,
+                              (int)(page.columnX + page.columnW), (int)visBot }
                 : LayoutRect{ 0, 0, 0, 0 };
         }
-        artistWorldContentH_ = (int)(sectY + scroll - tp.y + pad);
+        artistWorldContentH_ = (int)(yy + scroll - tp.y + pad);
         const int panelH = rcTrackPanel_.bottom - rcTrackPanel_.top;
         const int clamped = snapScroll(artistScrollY_, artistWorldContentH_,
                                        panelH, trackRowHeight_);
@@ -3075,103 +3426,125 @@ void PlayerWindow::drawAlbumView(Canvas& canvas) {
     rcArtistImg_ = {};
     rcAlbumText_ = {};
 
-    // ── Album world layout: identity pinned, list scrolls. ───────────────
-    float artSize = (float)albumViewArtTargetSize();
-    float artX, artY, textX, textW, textY;
-    float listX, listY, listW, listH;
-    AlbumIdentLayout ident;
-
-    if (wide) {
-        // Two columns, full content height. Left: square art, name under it.
-        // Right: tracks. Shrink art if the identity would overrun the panel.
-        for (int i = 0; i < 4; i++) {
-            ident = layoutAlbumIdentity(canvas, metrics_, album, artSize);
-            float identH = pad + artSize + artGap + ident.totalH + pad;
-            if (identH <= tp.h || artSize <= minArt) break;
-            float next = artSize - (identH - tp.h);
-            if (next >= artSize) break;
-            artSize = std::max(minArt, next);
+    // Variant tiles depend on the column width, and the column width
+    // depends on whether the ruler is reserved, which depends on the
+    // strip. Two passes settle it: a narrower column can only make the
+    // strip taller, so the reservation does not come back off.
+    std::vector<int> discVariants;
+    float varArt = 0.f, varGapX = 0.f, varStepX = 0.f, varAdv = 0.f;
+    float varTileH = 0.f, varStepY = 0.f, varRowGap = 0.f, varCaptionBlock = 0.f;
+    int varPerRow = 1;
+    const char* varCaption = nullptr;
+    if (lastDisc) {
+        discVariants = otherVariantsOf(selectedAlbumIdx_);
+        if (!discVariants.empty()) {
+            varCaption = album.releaseType == Album::ReleaseType::Remix
+                ? "MORE REMIXES" : "OTHER VERSIONS";
+            varArt  = (float)gridArtSize_;
+            varGapX = metrics_.space(SP_LG);
+            varStepX = varArt + varGapX;
+            varAdv  = titleArtistAdvance(metrics_.text.body);
+            varTileH = varArt + metrics_.space(16.0f) + varAdv * 3.0f +
+                       metrics_.text.caption * 1.6f;
+            varRowGap = metrics_.space(SP_LG);
+            varStepY  = varTileH + varRowGap;
+            varCaptionBlock = metrics_.text.caption * 2.2f;
         }
-        ident = layoutAlbumIdentity(canvas, metrics_, album, artSize);
-        artX  = tp.x + pad;
-        artY  = tp.y + pad;
-        textX = artX;
-        textW = artSize;
-        textY = artY + artSize + artGap;
-        listX = artX + artSize + metrics_.space(SP_XL);
-        listY = tp.y + pad;
-        listW = tp.x + tp.w - pad - listX;
-        listH = tp.h - pad * 2.0f - footerH;
-    } else {
-        // One column. Top band pinned (art, then name under it); tracks below.
-        // Guarantee ~4 track rows by shrinking art; a very long title may
-        // still eat into that budget, but the name is never ellipsized.
-        textW = std::max(1.0f, tp.w - pad * 2.0f);
-        ident = layoutAlbumIdentity(canvas, metrics_, album, textW);
-        const float minTracksH = 4.0f * (float)std::max(1, trackRowHeight_);
-        const float chromeNoArt = pad + artGap + ident.totalH
-                                + metrics_.stroke(1.0f) + metrics_.space(12.0f) + pad;
-        float maxArt = tp.h - minTracksH - chromeNoArt;
-        artSize = std::min(artSize, textW);
-        if (maxArt >= minArt) artSize = std::min(artSize, maxArt);
-        else                  artSize = minArt;
-        artSize = std::max(1.0f, artSize);
-        artX  = tp.x + (tp.w - artSize) * 0.5f;
-        artY  = tp.y + pad;
-        textX = tp.x + pad;
-        textY = artY + artSize + artGap;
-        listX = tp.x + pad;
-        listY = textY + ident.totalH + metrics_.stroke(1.0f) + metrics_.space(12.0f);
-        listW = textW;
-        listH = tp.y + tp.h - pad - listY - footerH;
     }
-    if (listW < 1.0f) listW = 1.0f;
-    if (listH < 0.0f) listH = 0.0f;
+    auto stripFor = [&](float colW) {
+        if (discVariants.empty()) return 0.0f;
+        return albumVariantStripH((int)discVariants.size(), colW, varArt, varGapX,
+                                 varTileH, varRowGap, varCaptionBlock);
+    };
 
-    rcAlbumList_ = LayoutRect{ (int)listX, (int)listY,
-                               (int)(listX + listW), (int)(listY + listH) };
+    float stripH = 0.0f;
+    AlbumStage stage{};
+    int discTrackCounts[kAlbumStageMaxDiscs];
+    const int discN = (int)std::min(discs.size(), (size_t)kAlbumStageMaxDiscs);
+    for (int i = 0; i < discN; ++i)
+        discTrackCounts[i] = discs[(size_t)i].end - discs[(size_t)i].begin;
+    for (int pass = 0; pass < 3; ++pass) {
+        AlbumStageInput in;
+        in.wide = wide;
+        in.single = album.releaseType == Album::ReleaseType::Single;
+        in.panelX = tp.x; in.panelY = tp.y; in.panelW = tp.w; in.panelH = tp.h;
+        in.pad = pad;
+        in.artGap = artGap;
+        in.belowGap = artGap;
+        in.columnGap = metrics_.space(SP_XL);
+        in.rulerGap = metrics_.space(SP_LG);
+        in.artSize = artSize;
+        in.identH = ident.totalH;
+        in.sceneBand = sceneBand;
+        in.discBand = discBand;
+        in.discHeaderH = discHeaderH;
+        in.readingMeasure = metrics_.space(820.0f);
+        in.rowOverhang = metrics_.space(7.0f);
+        in.rowPitch = (float)std::max(1, trackRowHeight_);
+        in.minList = metrics_.space(280.0f);
+        in.trackCount = disc.end - disc.begin;
+        in.stripH = lastDisc ? stripH : 0.0f;
+        in.lastStripH = stripH;
+        in.contentPad = pad;
+        in.discCount = discN > 0 ? discN : 1;
+        in.discIndex = albumDiscIndex_;
+        for (int i = 0; i < discN; ++i) in.discTracks[i] = discTrackCounts[i];
+        // One column. A stroke is a row tall; strokes of one disc sit a
+        // small gap apart, and the next disc starts further down.
+        in.markThin = metrics_.stroke(2.0f);
+        in.markH = (float)std::max(1, trackRowHeight_);
+        in.markHMin = metrics_.space(12.0f);
+        in.markGap = metrics_.space(SP_SM);
+        in.markGapMin = metrics_.space(4.0f);
+        in.discGap = metrics_.space(SP_LG);
+        in.discGapMin = metrics_.space(SP_MD);
+        stage = layoutAlbumStage(in);
+        const float measured = lastDisc ? stripFor(stage.colW) : 0.0f;
+        if (measured == stripH) break;
+        stripH = measured;
+        if (pass == 2) {
+            in.stripH = lastDisc ? stripH : 0.0f;
+            in.lastStripH = stripH;
+            stage = layoutAlbumStage(in);
+        }
+    }
+    if (!discVariants.empty()) {
+        varPerRow = std::max(1, varStepX > 0.f
+                             ? (int)((stage.colW + varGapX) / varStepX) : 1);
+    }
+
+    const float artX = stage.artX, artY = stage.artY;
+    const float textX = stage.textX, textY = stage.textY, textW = stage.textW;
+    const bool centerLines = stage.centerLines;
+    const float listX = stage.listX, listY = stage.listY;
+    const float listW = stage.listW, listH = stage.listH;
+    rcAlbumList_ = LayoutRect{ stage.listLeft, stage.listTop,
+                               stage.listRight, stage.listBot };
 
     // Cover is FIXED — never subtracted by trackScrollY_. imageFg ignores
-    // setClip, so it must sit inside the panel by construction (pinned at
-    // the top), not by UV tricks.
+    // setClip, so it must sit inside the panel by construction, not by UV.
     drawArtOrPlaceholder(canvas, trackPanelArtTex_, artX, artY, artSize, artSize);
-    // Stacked layout: the hairline is the cut between identity and the list.
-    // Two-column: that same hairline sits under the year and separates
-    // nothing — the columns already do the job, so a vertical rule between
-    // them is the matching cut (same stroke, rotated).
-    drawAlbumIdentityText(canvas, metrics_, album, ident, textX, textY, textW, !wide);
-    if (wide) {
-        const float vx = artX + artSize + metrics_.space(SP_XL) * 0.5f;
-        canvas.rect(vx, tp.y + pad, metrics_.stroke(1.0f), tp.h - pad * 2.0f,
-                    toColor(themeRule()));
-    }
+    drawAlbumIdentityText(canvas, metrics_, album, ident, textX, textY, textW, centerLines);
 
-    bool multiDisc = false;
-    {
-        int firstDisc = 0;
-        for (auto& t : album.tracks) {
-            if (t.discNumber <= 0) continue;
-            if (firstDisc == 0) firstDisc = t.discNumber;
-            else if (t.discNumber != firstDisc) { multiDisc = true; break; }
-        }
-    }
-    const float discHeaderH = multiDisc ? metrics_.space(SP_LG + SP_SM) : 0.0f;
     albumDiscStickyH_ = multiDisc ? (int)discHeaderH : 0;
-    // Glyphs composite after every rect, so a sticky fill cannot hide track
-    // titles sliding under it. The list is clipped *below* the bar instead;
-    // names never enter that band, sliced or whole.
+    // Glyphs composite after every rect, so a fill cannot hide titles
+    // sliding under the disc label. The list is clipped below the header
+    // slot at the top of the frame; names never enter that band. A short
+    // disc carries the label down with its rows, and that label is drawn
+    // after the clip is lifted.
     const float listClipY = listY + discHeaderH;
     const float listClipH = std::max(0.0f, listH - discHeaderH);
 
-    // ── Scrolling column: disc separators + track rows + OTHER VERSIONS ──
+    // ── This disc: rows, then OTHER VERSIONS. The stage owns the box. ──
     canvas.setClip(listX, listClipY, listW, listClipH);
-    const float scroll = (float)trackScrollY_;
-    float colW = std::min(listW, metrics_.space(820.0f));
-    float colX = listX;
-
-    const float rowOverhang = metrics_.space(7.0f);
-    const float rowX = colX - rowOverhang;
-    const float rowW = colW + rowOverhang * 2.0f;
+    const float colX = stage.colX;
+    const float rowX = stage.rowX;
+    const float rowW = stage.rowW;
+    // Number, title, quality mark, duration, and the margins around them.
+    // The disc label and the disc arrow share this centre. The ruler, when
+    // the album needs one, sits outside this box; album_stage.hh centres
+    // the larger group.
+    const float groupCx = rowX + rowW * 0.5f;
     const float durRight = rowX + rowW - metrics_.space(10.0f);
     const float numColW = metrics_.space(49.0f), titleX = metrics_.space(75.0f);
     const float markSize = metrics_.text.caption;
@@ -3183,14 +3556,17 @@ void PlayerWindow::drawAlbumView(Canvas& canvas) {
     const float markX = durRight - durColW - metrics_.space(SP_SM) - markSize;
     const float discRuleL   = rowX + metrics_.space(SP_MD);
     const float discRuleR   = rowX + rowW - metrics_.space(SP_MD);
+    const float titleInset = stage.showTrackNumber ? titleX : metrics_.space(SP_MD);
 
-    auto drawDiscSep = [&](int disc, float y) {
+    auto drawDiscSep = [&](int discNumber, float y) {
         char lbl[24];
-        snprintf(lbl, sizeof(lbl), "DISC %d", disc);
+        snprintf(lbl, sizeof(lbl), "DISC %d", discNumber);
         float lblW  = canvas.textWidthStyled(lbl, metrics_.text.caption, FontStyle::Bold);
         float midY  = y + discHeaderH * 0.5f;
-        float labelX = (discRuleL + discRuleR - lblW) * 0.5f;
-        canvas.textStyled(lbl, labelX, midY - metrics_.text.caption * 0.5f,
+        float labelX = groupCx - lblW * 0.5f;
+        // Capitals share the header's middle with the rules.
+        canvas.textStyled(lbl, labelX,
+                          albumRowTextTop(midY, metrics_.text.caption, kAlbumRowCapEm),
                           metrics_.text.caption, toColor(CLR_TEXT_DIM), FontStyle::Bold);
         float gap   = metrics_.space(SP_MD);
         float rule  = metrics_.stroke(1.0f);
@@ -3204,62 +3580,77 @@ void PlayerWindow::drawAlbumView(Canvas& canvas) {
                         toColor(themeRule()));
     };
 
-    trackRowTop_.assign(album.tracks.size(), 0);
+    // -1: this track is on another disc's page and must not hit-test.
+    trackRowTop_.assign(album.tracks.size(), -1);
 
-    float rowY = listY - scroll;
-    int   headedDisc = -1;
-    for (int i = 0; i < (int)album.tracks.size(); i++) {
+    // The stage measured this page. A list that fits has no range, so the
+    // trailing pad cannot invent a scroll. A list that overflows keeps
+    // albumDiscContentH. Place the scroll, then paint: a stand-in offset
+    // draws every row above the clip, and the repaint asked for from
+    // inside that frame is discarded.
+    albumWorldContentH_ = stage.scrollContentH;
+    const int viewH = stage.scrollViewH;
+    if (viewH > 0) {
+        const int pitch = std::max(1, trackRowHeight_);
+        const int settled = albumScrollToEnd_
+            ? albumDiscEndScroll(albumWorldContentH_, viewH, pitch)
+            : snapScroll(trackScrollY_, albumWorldContentH_, viewH, pitch);
+        if (settled != trackScrollY_)
+            syncTrackScroll(settled);
+        albumScrollToEnd_ = false;
+    }
+    const float scroll = (float)trackScrollY_;
+
+    // One disc per page. Rows begin at the stage's origin: the middle of
+    // a short block is the sleeve's middle, and a long disc fills the
+    // frame from the top. The next disc is an arrow, not another block.
+    const float rowH = (float)trackRowHeight_;
+    float rowY = stage.rowOrigin - scroll;
+    for (int i = disc.begin; i < disc.end; i++) {
         const Track& tr = album.tracks[i];
-
-        if (multiDisc && tr.discNumber != headedDisc) {
-            headedDisc = tr.discNumber;
-            // The sticky bar owns [listY, listY+discHeaderH). An in-flow
-            // header that has reached that band (or gone past it) is the
-            // sticky, so it is not drawn twice.
-            const bool inStickyBand = (rowY < listClipY);
-            if (!inStickyBand && rowY + discHeaderH >= listClipY &&
-                rowY <= listClipY + listClipH)
-                drawDiscSep(headedDisc, rowY);
-            rowY += discHeaderH;
-        }
 
         trackRowTop_[i] = (int)(rowY + scroll);
         // Whole row or nothing: a title whose glyph band would be sliced by
         // the sticky clip is the names-under-the-label the listener sees.
         const bool visible = (rowY >= listClipY - 0.01f) &&
-                             (rowY + (float)trackRowHeight_ <= listClipY + listClipH + 0.01f);
-        if (!visible) { rowY += trackRowHeight_; continue; }
+                             (rowY + rowH <= listClipY + listClipH + 0.01f);
+        if (!visible) { rowY += rowH; continue; }
 
         bool isPlayingRow = (displayAlbum_ == selectedAlbumIdx_ && displayTrack_ == i && isPlaying_);
         if (isPlayingRow) {
-            canvas.rect(rowX, rowY, rowW, (float)trackRowHeight_,
+            canvas.rect(rowX, rowY, rowW, rowH,
                         toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
-            canvas.rect(rowX, rowY, metrics_.stroke(3.0f), (float)trackRowHeight_,
+            canvas.rect(rowX, rowY, metrics_.stroke(3.0f), rowH,
                         toColor(CLR_ACCENT), UI_CORNER_RADIUS);
         } else if (hoverTrackIdx_ == i) {
-            canvas.rect(rowX, rowY, rowW, (float)trackRowHeight_, toColor(CLR_HOVER), UI_CORNER_RADIUS);
+            canvas.rect(rowX, rowY, rowW, rowH, toColor(CLR_HOVER), UI_CORNER_RADIUS);
         }
 
+        // One centre line: the cap height of the words, and the box of
+        // the quality mark. The em sits lower, which is the floor.
+        const float rowCenter = rowY + rowH * 0.5f;
         QualityColor tc = qualityColorFor(tr.sampleRate, false);
         if (tc.hasColor) {
             LayoutRect markRc{ (int)markX,
-                               (int)(rowY + (trackRowHeight_ - markSize) * 0.5f),
+                               (int)(rowCenter - markSize * 0.5f),
                                (int)(markX + markSize),
-                               (int)(rowY + (trackRowHeight_ + markSize) * 0.5f) };
+                               (int)(rowCenter + markSize * 0.5f) };
             drawUiIconGlyph(canvas, markRc, UiIcon::Quality, toColor(tc.color));
         }
 
-        int trackNum = tr.trackNumber > 0 ? tr.trackNumber : i + 1;
-        std::string trackNumStr = std::to_string(trackNum);
-        float trackNumW = canvas.textWidthStyled(trackNumStr, metrics_.text.body, FontStyle::Math);
-        canvas.textStyled(trackNumStr, colX + numColW - trackNumW,
-                        rowY + trackRowHeight_ * 0.5f - metrics_.text.body * 0.5f,
-                        metrics_.text.body, toColor(isPlayingRow ? CLR_ACCENT : CLR_TEXT_SECONDARY), FontStyle::Math);
-        float titleMaxW = markX - metrics_.space(SP_MD) - (colX + titleX);
+        if (stage.showTrackNumber) {
+            int trackNum = tr.trackNumber > 0 ? tr.trackNumber : i + 1;
+            std::string trackNumStr = std::to_string(trackNum);
+            float trackNumW = canvas.textWidthStyled(trackNumStr, metrics_.text.body, FontStyle::Math);
+            canvas.textStyled(trackNumStr, colX + numColW - trackNumW,
+                            albumRowTextTop(rowCenter, metrics_.text.body, kAlbumRowMonoCapEm),
+                            metrics_.text.body, toColor(isPlayingRow ? CLR_ACCENT : CLR_TEXT_SECONDARY), FontStyle::Math);
+        }
+        float titleMaxW = markX - metrics_.space(SP_MD) - (colX + titleInset);
         FontStyle rowStyle = isPlayingRow ? FontStyle::Bold : FontStyle::Roman;
         drawNameWithModifier(canvas, tr.title,
-                             colX + titleX,
-                             rowY + trackRowHeight_ * 0.5f - metrics_.text.body * 0.5f,
+                             colX + titleInset,
+                             albumRowTextTop(rowCenter, metrics_.text.body, kAlbumRowCapEm),
                              titleMaxW, metrics_.text.body,
                              isPlayingRow ? CLR_ACCENT : CLR_TEXT_PRIMARY, rowStyle);
 
@@ -3269,130 +3660,125 @@ void PlayerWindow::drawAlbumView(Canvas& canvas) {
             snprintf(durBuf, sizeof(durBuf), "%d:%02d", durMs / 60000, (durMs % 60000) / 1000);
             float durW = canvas.textWidthStyled(durBuf, metrics_.text.secondary, FontStyle::Math);
             canvas.textStyled(durBuf, durRight - durW,
-                            rowY + trackRowHeight_ * 0.5f - metrics_.text.secondary * 0.5f,
+                            albumRowTextTop(rowCenter, metrics_.text.secondary, kAlbumRowMonoCapEm),
                             metrics_.text.secondary, toColor(CLR_TEXT_SECONDARY), FontStyle::Math);
         }
 
-        rowY += trackRowHeight_;
+        rowY += rowH;
     }
 
     rcVariantTiles_.clear();
-    {
-        std::vector<int> others = otherVariantsOf(selectedAlbumIdx_);
-        if (!others.empty()) {
-            const char* stripCaption =
-                album.releaseType == Album::ReleaseType::Remix
-                    ? "MORE REMIXES" : "OTHER VERSIONS";
-            canvas.textStyled(stripCaption, listX, rowY,
-                              metrics_.text.caption, toColor(CLR_TEXT_DIM),
-                              FontStyle::Bold);
-            rowY += metrics_.text.caption * 2.2f;
+    // Other copies of this record belong to the album, so they sit on the
+    // last disc's page — the one that ends in the artist-page arrow.
+    // Geometry was measured with the page, from the text column, so this
+    // loop cannot add a different amount than the scroll was placed against.
+    if (!discVariants.empty()) {
+        canvas.textStyled(varCaption, colX, rowY,
+                          metrics_.text.caption, toColor(CLR_TEXT_DIM),
+                          FontStyle::Bold);
+        rowY += varCaptionBlock;
 
-            const float artW  = (float)gridArtSize_;
-            const float gapX  = metrics_.space(SP_LG);
-            const float stepX = artW + gapX;
-            const float adv   = titleArtistAdvance(metrics_.text.body);
-            const float tileH = artW + metrics_.space(16.0f) + adv * 3.0f +
-                                metrics_.text.caption * 1.6f;
-            const float stepY = tileH + metrics_.space(SP_LG);
-            int perRow = std::max(1, (int)((listW + gapX) / stepX));
-            int rows   = ((int)others.size() + perRow - 1) / perRow;
+        for (size_t i = 0; i < discVariants.size(); i++) {
+            int vIdx = discVariants[i];
+            const Album& v = albums_[vIdx];
+            float tx = colX + (float)((int)i % varPerRow) * varStepX;
+            float ty = rowY + (float)((int)i / varPerRow) * varStepY;
 
-            for (size_t i = 0; i < others.size(); i++) {
-                int vIdx = others[i];
-                const Album& v = albums_[vIdx];
-                float tx = listX + (float)((int)i % perRow) * stepX;
-                float ty = rowY + (float)((int)i / perRow) * stepY;
+            if (hoverVariantIdx_ == vIdx)
+                canvas.rect(tx - metrics_.space(SP_XS), ty - metrics_.space(SP_XS),
+                            varArt + metrics_.space(12.0f), varArt + metrics_.space(12.0f),
+                            toColor(CLR_HOVER), UI_CORNER_RADIUS);
 
-                if (hoverVariantIdx_ == vIdx)
-                    canvas.rect(tx - metrics_.space(SP_XS), ty - metrics_.space(SP_XS),
-                                artW + metrics_.space(12.0f), artW + metrics_.space(12.0f),
-                                toColor(CLR_HOVER), UI_CORNER_RADIUS);
-
-                TextureHandle tex = getGridArtTexture(vIdx);
-                if (tex != kInvalidTexture) {
-                    // Crop to the LIST, not the panel: a tile scrolling under
-                    // the pinned cover would otherwise paint over it (imageFg
-                    // composites above the vector layer and ignores setClip).
-                    float top = std::max(ty, listClipY);
-                    float bot = std::min(ty + artW, listClipY + listClipH);
-                    if (bot > top)
-                        canvas.imageFg(tex, tx, top, artW, bot - top,
-                                       0.0f, (top - ty) / artW,
-                                       1.0f, (bot - ty) / artW);
-                } else {
-                    canvas.rect(tx, ty, artW, artW, toColor(CLR_TILE_PLACEHOLDER));
-                }
-
-                auto vCentered = [&](const std::string& s, float yy, float sz,
-                                     ColorRef clr, FontStyle st) {
-                    if (s.empty()) return;
-                    float w = canvas.textWidthStyled(s, sz, st);
-                    canvas.textStyled(s, tx + std::max(0.0f, (artW - w) * 0.5f),
-                                      yy, sz, toColor(clr), st);
-                };
-
-                float ly = ty + artW + metrics_.space(16.0f);
-                std::string vBase, vMod;
-                splitNameModifier(v.displayName, vBase, vMod);
-                vCentered(truncateToWidth(canvas, vBase, artW, metrics_.text.body, FontStyle::Bold),
-                          ly, metrics_.text.body, CLR_TEXT_ALBUM_TITLE, FontStyle::Bold);
-                vCentered(truncateToWidth(canvas, vMod, artW, metrics_.text.secondary, FontStyle::Italic),
-                          ly + adv, metrics_.text.secondary, CLR_TEXT_DIM, FontStyle::Italic);
-                vCentered(truncateToWidth(canvas, v.artist, artW, metrics_.text.secondary, FontStyle::Italic),
-                          ly + adv * 2.0f, metrics_.text.secondary,
-                          CLR_TEXT_SECONDARY, FontStyle::Italic);
-                vCentered(variantFormatLabel(v), ly + adv * 3.0f,
-                          metrics_.text.caption, CLR_TEXT_DIM, FontStyle::Math);
-
-                float hTop = std::max(ty, listClipY);
-                float hBot = std::min(ty + tileH, listClipY + listClipH);
-                if (hBot > hTop)
-                    rcVariantTiles_.emplace_back(
-                        LayoutRect{ (int)tx, (int)hTop,
-                                    (int)(tx + artW), (int)hBot }, vIdx);
+            TextureHandle tex = getGridArtTexture(vIdx);
+            if (tex != kInvalidTexture) {
+                // Crop to the LIST, not the panel: a tile scrolling under
+                // the pinned cover would otherwise paint over it (imageFg
+                // composites above the vector layer and ignores setClip).
+                float top = std::max(ty, listClipY);
+                float bot = std::min(ty + varArt, listClipY + listClipH);
+                if (bot > top)
+                    canvas.imageFg(tex, tx, top, varArt, bot - top,
+                                   0.0f, (top - ty) / varArt,
+                                   1.0f, (bot - ty) / varArt);
+            } else {
+                canvas.rect(tx, ty, varArt, varArt, toColor(CLR_TILE_PLACEHOLDER));
             }
-            rowY += (float)rows * stepY;
-        }
-    }
-    albumWorldContentH_ = (int)(rowY + scroll - listY + pad);
 
-    const int viewH = (int)listH;
-    if (viewH > 0) {
-        const int clamped = snapScroll(trackScrollY_, albumWorldContentH_,
-                                       viewH, trackRowHeight_);
-        if (clamped != trackScrollY_) { trackScrollY_ = clamped; markDirty(); }
+            auto vCentered = [&](const std::string& s, float yy, float sz,
+                                 ColorRef clr, FontStyle st) {
+                if (s.empty()) return;
+                float w = canvas.textWidthStyled(s, sz, st);
+                canvas.textStyled(s, tx + std::max(0.0f, (varArt - w) * 0.5f),
+                                  yy, sz, toColor(clr), st);
+            };
+
+            float ly = ty + varArt + metrics_.space(16.0f);
+            std::string vBase, vMod;
+            splitNameModifier(v.displayName, vBase, vMod);
+            vCentered(truncateToWidth(canvas, vBase, varArt, metrics_.text.body, FontStyle::Bold),
+                      ly, metrics_.text.body, CLR_TEXT_ALBUM_TITLE, FontStyle::Bold);
+            vCentered(truncateToWidth(canvas, vMod, varArt, metrics_.text.secondary, FontStyle::Italic),
+                      ly + varAdv, metrics_.text.secondary, CLR_TEXT_DIM, FontStyle::Italic);
+            vCentered(truncateToWidth(canvas, v.artist, varArt, metrics_.text.secondary, FontStyle::Italic),
+                      ly + varAdv * 2.0f, metrics_.text.secondary,
+                      CLR_TEXT_SECONDARY, FontStyle::Italic);
+            vCentered(variantFormatLabel(v), ly + varAdv * 3.0f,
+                      metrics_.text.caption, CLR_TEXT_DIM, FontStyle::Math);
+
+            float hTop = std::max(ty, listClipY);
+            float hBot = std::min(ty + varTileH, listClipY + listClipH);
+            if (hBot > hTop)
+                rcVariantTiles_.emplace_back(
+                    LayoutRect{ (int)tx, (int)hTop,
+                                (int)(tx + varArt), (int)hBot }, vIdx);
+        }
     }
 
     canvas.clearClip();
 
-    // Sticky DISC n sits in the band the list clip left empty. occlude()
-    // drops any glyph whose centre still landed there (MSDF is one pass
-    // after every rect, so a fill alone cannot hide a title).
-    if (multiDisc && discHeaderH > 0.0f && !album.tracks.empty()) {
-        int stickyDisc = album.tracks.front().discNumber;
-        for (int i = 0; i < (int)album.tracks.size(); i++) {
-            const float top = (float)trackRowTop_[i] - scroll;
-            if (top + (float)trackRowHeight_ > listClipY) {
-                stickyDisc = album.tracks[i].discNumber;
-                break;
-            }
-        }
-        canvas.occlude(listX, listY, listW, discHeaderH);
-        canvas.rect(listX, listY, listW, discHeaderH, toColor(CLR_BG_TRACKPANEL));
-        drawDiscSep(stickyDisc, listY);
+    // One disc is on screen. A long disc pins the label at the top of the
+    // frame; a short disc carries it with the rows, so the block's middle
+    // stays on the sleeve. occlude() drops a glyph whose centre lands here.
+    if (multiDisc && discHeaderH > 0.0f && disc.end > disc.begin) {
+        canvas.occlude(rowX, stage.headerY, rowW, discHeaderH);
+        canvas.rect(rowX, stage.headerY, rowW, discHeaderH, toColor(CLR_BG_TRACKPANEL));
+        drawDiscSep(disc.number, stage.headerY);
     }
 
-    // End-of-list chevron: only when the list has rested on its last row
-    // AND there is an artist page to go to. Not a hit target.
-    if (footerH > 0.0f && viewH > 0) {
-        const int pitch = std::max(1, trackRowHeight_);
-        const int realMax = std::max(0, (albumWorldContentH_ - viewH) / pitch);
-        if (trackScrollY_ >= realMax * pitch) {
-            const float size = metrics_.text.caption;
-            const float cx   = listX + listW * 0.5f;
-            const float top  = listY + listH + (footerH - size * 0.55f) * 0.5f;
-            drawDownChevron(canvas, cx, top, size, toColor(CLR_TEXT_DIM));
+    // One column. Strokes stack downward: a row tall, a short gap inside
+    // a disc, a wider gap before the next disc. Every stroke is the same
+    // width. The one on screen is primary; the others are dim. The column
+    // is the album's, so changing disc does not move the sleeve.
+    if (stage.rulerW > 0.0f && stage.markCount > 0) {
+        std::vector<AlbumMark> marks((size_t)stage.markCount);
+        const int pages = (stage.discActive >= 0 && stage.discActive < stage.discGroups)
+            ? stage.discPages[stage.discActive] : 1;
+        const int active = albumScrollMarkActive(
+            trackScrollY_, albumWorldContentH_, stage.scrollViewH, pages);
+        const int n = albumStageMarks(stage, active, marks.data(), (int)marks.size());
+        for (int mi = 0; mi < n; ++mi)
+            canvas.rect(marks[(size_t)mi].x, marks[(size_t)mi].y,
+                        marks[(size_t)mi].w, marks[(size_t)mi].h,
+                        toColor(marks[(size_t)mi].lit ? CLR_TEXT_PRIMARY
+                                                     : CLR_TEXT_DIM));
+    }
+
+    // The arrow is not a control. Where it sits is the sentence. The disc
+    // cue is the footer of the track-list group: its horizontal centre is
+    // the group's, and its vertical centre is the footer's, on every disc
+    // — a short list does not pull it up onto the rows. The artist cue is
+    // lower, in the band under both columns, centered on the panel between
+    // the bars. Shown only once this page has rested at its end.
+    if (cue != AlbumCue::None && viewH > 0 && albumListAtEnd()) {
+        const float ink = metrics_.text.caption;
+        if (cue == AlbumCue::NextDisc && stage.footerH > 0.0f) {
+            const float cx = stage.footerX + stage.footerW * 0.5f;
+            const float cy = stage.footerY + stage.footerH * 0.5f;
+            drawSerifDownArrow(canvas, cx, cy, ink);
+        } else if (cue == AlbumCue::Artist && sceneBand > 0.0f) {
+            const float cx = tp.x + tp.w * 0.5f;
+            const float cy = tp.y + tp.h - pad - sceneBand * 0.5f;
+            drawSerifDownArrow(canvas, cx, cy, ink);
         }
     }
 }
@@ -3423,15 +3809,38 @@ void PlayerWindow::scrollAlbumView(int delta) {
         shifted.row  += 1;
         shifted.free += (float)pitch;
         const bool touch = host_ && host_->inputIsTouch();
+        const bool atTop = artistScrollY_ <= 0;
         const float perUnit = touch ? 1.0f : (float)pitch / 120.0f;
         const int shiftedMax = maxRow + 1;
         if (!grid::scrollRows(shifted, -(float)delta * perUnit, pitch, shiftedMax))
             return;
         if (shifted.row <= 0) {
+            // The notch that arrives at the top belongs to the roll that
+            // got there. Leaving is a later gesture: on a wheel, two
+            // detents close together once that roll has gone quiet; on a
+            // touchscreen, the drag after the one that rested here. A
+            // continuous roll up the biography stops on the portrait.
+            bool turn = false;
+            if (touch)
+                turn = albumPagerArmed_;
+            else
+                turn = albumPagerWheel(albumPager_, delta, steadyMs(), !atTop) ==
+                       AlbumPagerResult::Turn;
+            if (!turn) {
+                artistScrollY_ = 0;
+                artistRowScroll_ = {};
+                artistLeaveCue_ = true;
+                invalidate();
+                return;
+            }
             albumWorld_ = AlbumWorld::Album;
             artistScrollY_ = 0;
             artistRowScroll_ = {};
+            artistLeaveCue_ = false;
             albumPagerArmed_ = false;
+            albumPager_ = {};
+            albumPager_.arriving = true;
+            albumPager_.tailUntilMs = steadyMs() + kAlbumPageGestureMs;
             hoverTrackIdx_ = -1;
             hoverVariantIdx_ = -1;
             invalidate();
@@ -3441,41 +3850,120 @@ void PlayerWindow::scrollAlbumView(int delta) {
         artistRowScroll_.free = shifted.free - (float)pitch;
         artistRowScroll_.dir  = shifted.dir;
         artistScrollY_ = artistRowScroll_.row * pitch;
+        if (artistScrollY_ <= 0) {
+            // Landed on the portrait from the text. This notch arms the
+            // tail; it does not itself leave. The arrow may show now.
+            artistLeaveCue_ = true;
+            if (!touch)
+                albumPagerWheel(albumPager_, delta, steadyMs(), true);
+        } else {
+            artistLeaveCue_ = false;
+            albumPagerArmed_ = false;
+            if (!touch) albumPager_ = {};
+        }
         invalidate();
         return;
     }
 
     const int viewH = rcAlbumList_.bottom - rcAlbumList_.top;
     if (viewH <= 0) return;
+    if (selectedAlbumIdx_ < 0 || selectedAlbumIdx_ >= (int)albums_.size()) return;
+
+    std::vector<AlbumDiscSpan> discs;
+    collectDiscSpans(albums_[selectedAlbumIdx_].tracks, discs);
+    if (albumDiscIndex_ < 0 || albumDiscIndex_ >= (int)discs.size())
+        albumDiscIndex_ = 0;
+    albumDiscCount_ = (int)discs.size();
+    const bool moreDisc = albumDiscIndex_ + 1 < albumDiscCount_;
+    const bool prevDisc = albumDiscIndex_ > 0;
+
     const int realMax = std::max(0, (albumWorldContentH_ - viewH) / pitch);
     const bool atMax = albumListAtEnd();
+    const bool atStart = trackScrollY_ <= 0;
     // After scrollDelta(), a negative value moves toward the end (see
     // scrollDiscrete: it feeds -delta into scrollRows).
     const bool towardEnd = delta < 0;
+    const bool touch = host_ && host_->inputIsTouch();
 
-    if (atMax && towardEnd && hasArtistWorldContent()) {
-        const bool touch = host_ && host_->inputIsTouch();
-        // Wheel: each notch is a new gesture, so sitting on the last track
-        // and rolling once more is the extra snap. Touch: the drag that
-        // ARRIVED here is not; onDragEnd arms, and the next drag pages.
-        if (!touch || albumPagerArmed_) {
-            albumWorld_ = AlbumWorld::Artist;
-            trackScrollY_ = realMax * pitch;
-            trackRowScroll_.row  = realMax;
-            trackRowScroll_.free = (float)(realMax * pitch);
-            trackRowScroll_.dir  = 0;
-            artistScrollY_ = 0;
-            artistRowScroll_ = {};
-            albumPagerArmed_ = false;
-            hoverTrackIdx_ = -1;
-            hoverVariantIdx_ = -1;
-            invalidate();
+    // One gesture turns one page. On a wheel the gesture is two detents
+    // close together, after the roll that arrived here has gone quiet.
+    // Notches of that roll are absorbed and do not themselves turn the
+    // page; the second detent of the next gesture does, with no further
+    // wait. Touch arms from onDragEnd, so the stroke that arrived does
+    // not also turn the page.
+    auto wheelTurns = [&](bool arrivedNow) {
+        return albumPagerWheel(albumPager_, delta, steadyMs(), arrivedNow) ==
+               AlbumPagerResult::Turn;
+    };
+
+    if (atMax && towardEnd && (moreDisc || hasArtistWorldContent())) {
+        if (touch) {
+            if (!albumPagerArmed_) return;
+        } else if (!wheelTurns(false)) {
+            return;
         }
+        albumPagerArmed_ = false;
+        albumScrollToEnd_ = false;
+        hoverTrackIdx_ = -1;
+        hoverVariantIdx_ = -1;
+        if (moreDisc) {
+            ++albumDiscIndex_;
+            trackScrollY_ = 0;
+            trackRowScroll_ = {};
+            invalidate();
+            return;
+        }
+        albumWorld_ = AlbumWorld::Artist;
+        trackScrollY_ = realMax * pitch;
+        trackRowScroll_.row  = realMax;
+        trackRowScroll_.free = (float)(realMax * pitch);
+        trackRowScroll_.dir  = 0;
+        artistScrollY_ = 0;
+        artistRowScroll_ = {};
+        artistLeaveCue_ = false;
+        invalidate();
+        return;
+    }
+    if (!towardEnd && atStart && prevDisc) {
+        if (touch) {
+            if (!albumPagerArmed_) return;
+        } else if (!wheelTurns(false)) {
+            return;
+        }
+        albumPagerArmed_ = false;
+        albumScrollToEnd_ = false;
+        --albumDiscIndex_;
+        // The previous disc, on its last row, before the next paint.
+        // A 1<<30 stand-in used to mean "let the draw clamp this". That
+        // paint put every row above the clip, the float measurement of
+        // the stand-in clamped still past the last row, and the repaint
+        // was never asked for.
+        const AlbumDiscSpan& prev = discs[(size_t)albumDiscIndex_];
+        const float headerH = albumDiscCount_ > 1
+            ? metrics_.space(SP_LG + SP_SM) : 0.f;
+        albumWorldContentH_ = albumDiscContentH(
+            headerH, std::max(0, prev.end - prev.begin), pitch,
+            0.f, metrics_.space(SP_XL));
+        syncTrackScroll(albumDiscEndScroll(albumWorldContentH_, viewH, pitch));
+        hoverTrackIdx_ = -1;
+        hoverVariantIdx_ = -1;
+        invalidate();
         return;
     }
     if (!towardEnd) albumPagerArmed_ = false;
+    const bool wasAtEnd = atMax;
+    const bool wasAtStart = atStart;
     scrollDiscrete(trackRowScroll_, trackScrollY_, delta, pitch,
                    albumWorldContentH_, viewH);
+    if (touch) return;
+    // The notch that lands on a boundary belongs to the roll. It arms the
+    // tail; it is not the first half of the pair.
+    if (towardEnd && !wasAtEnd && albumListAtEnd())
+        albumPagerWheel(albumPager_, delta, steadyMs(), true);
+    else if (!towardEnd && !wasAtStart && trackScrollY_ <= 0 && prevDisc)
+        albumPagerWheel(albumPager_, delta, steadyMs(), true);
+    else if (!albumListAtEnd() && trackScrollY_ > 0)
+        albumPager_ = {};
 }
 
 void PlayerWindow::openAlbumView(int albumIdx) {
@@ -3486,7 +3974,12 @@ void PlayerWindow::openAlbumView(int albumIdx) {
     trackRowScroll_ = {};
     artistScrollY_ = 0;
     artistRowScroll_ = {};
+    artistLeaveCue_ = false;
     albumPagerArmed_ = false;
+    albumDiscIndex_ = 0;
+    albumDiscCount_ = 1;
+    albumScrollToEnd_ = false;
+    albumPager_ = {};
     hoverTrackIdx_ = -1;
 
     // The album view belongs to the section that CONTAINS this release, and it
@@ -3538,7 +4031,16 @@ std::string PlayerWindow::artistImagePathFor(int albumIdx) const {
 // spells out the trap (a ratio under 1:1 pulls in a blurrier mip level and a
 // fixed 256 was too small for a 4x display; space() scales with resolution).
 int PlayerWindow::artistImageTargetSize() const {
-    return std::max(64, (int)metrics_.space(196.0f));
+    // One and a half times the sleeve this panel would draw, and never
+    // wider than the padded content. Draw may still shrink it to leave
+    // the name on screen; decoding at this size keeps that blit at 1:1
+    // or smaller.
+    const int panelW = std::max(0, rcTrackPanel_.right - rcTrackPanel_.left);
+    const float pad = metrics_.space(SP_XL);
+    const float inner = std::max(0.0f, (float)panelW - pad * 2.0f);
+    float hero = (float)albumViewArtTargetSize() * 1.5f;
+    if (inner > 0.0f) hero = std::min(hero, inner);
+    return std::max(64, (int)hero);
 }
 
 // Request the album-view artist photo at `path`, asynchronously — the photo is
@@ -3555,8 +4057,11 @@ void PlayerWindow::requestArtistImage(const std::string& path, int targetSize) {
     artistImgPath_ = path;                 // source file, for ArtWindow's viewer
     artistImgRequestPath_ = path;          // what a delivered result must match
 
-    // Cache hit: the photo we want is already the texture we hold.
-    if (artistImgTex_ != kInvalidTexture && artistImgCachePath_ == path) return;
+    // Cache hit: the photo we want is already the texture we hold, at
+    // least as large as this draw. A smaller texture would be scaled up.
+    if (artistImgTex_ != kInvalidTexture && artistImgCachePath_ == path
+        && artistImgCachePx_ + 2 >= targetSize)
+        return;
 
     // Spawn the shared pool on first ask, exactly like grid covers do — and
     // only if we have a renderer. Lazy so a session that never opens an album
@@ -3625,6 +4130,8 @@ void PlayerWindow::loadAlbumViewContent(int albumIdx) {
     artistBioText_.clear();
     albumDescLines_.clear();
     artistBioLines_.clear();
+    albumCredits_.clear();
+    creditSpans_.clear();
     albumTextWrapW_ = -1.0f;
     if (artistImgTex_ != kInvalidTexture) {
         renderer_->destroy_texture(artistImgTex_);
@@ -3635,6 +4142,7 @@ void PlayerWindow::loadAlbumViewContent(int albumIdx) {
     // cannot match the new request (onArtDecoded checks artistImgRequestPath_).
     artistImgRequestPath_.clear();
     artistImgCachePath_.clear();
+    artistImgCachePx_ = 0;
     artistImgPath_.clear();
     rcArtistImg_ = {};
     // The strip belongs to the album being left; clearing the hover too keeps
@@ -3644,11 +4152,19 @@ void PlayerWindow::loadAlbumViewContent(int albumIdx) {
     if (albumIdx < 0 || albumIdx >= (int)albums_.size()) return;
     const Album& a = albums_[albumIdx];
 
+    // Composer, label, performer, and the rest, from the files themselves.
+    // The downloader's label and copyright are added below when it has them.
+    std::vector<std::string> creditTags;
+    readAlbumCreditTags(a.tracks, creditTags);
+
     // Album folder from the tracks (fallback: the cover file's folder).
     fsys::path albumDir;
     if (!a.tracks.empty())      albumDir = fsys::u8path(a.tracks[0].filePath).parent_path();
     else if (!a.artPath.empty()) albumDir = fsys::u8path(a.artPath).parent_path();
-    if (albumDir.empty()) return;
+    if (albumDir.empty()) {
+        albumCredits_ = credits::fromTags(creditTags);
+        return;
+    }
 
     albumDescText_ = loadSidecarText(albumDir, { "desc", "info", "about" });
 
@@ -3674,6 +4190,12 @@ void PlayerWindow::loadAlbumViewContent(int albumIdx) {
             // legacy sidecar folder must not take over a library that owns one.
             gotFromStreamer = !info->bioText.empty() || !info->imagePath.empty();
         }
+        if (auto meta = sdb->albumInfoForAlbum(a.name)) {
+            if (!meta->label.empty())
+                creditTags.push_back("LABEL=" + meta->label);
+            if (!meta->copyright.empty())
+                creditTags.push_back("COPYRIGHT=" + meta->copyright);
+        }
     }
 
     // Fallback: legacy sidecar convention — artist folder is one level up
@@ -3689,6 +4211,7 @@ void PlayerWindow::loadAlbumViewContent(int albumIdx) {
                 requestArtistImage(artistImg, artistImageTargetSize());
         }
     }
+    albumCredits_ = credits::fromTags(creditTags);
 }
 
 // The downloader library that owns this album folder, or nullptr.
@@ -3745,29 +4268,45 @@ void PlayerWindow::loadTransportArtTexture(const std::string& artPath) {
     // which cover the transport is showing — and everything below it is GPU
     // work that may not be possible right now. onSurfaceRecreated() reads it.
     transportArtPath_ = artPath;
-    if (transportArtTexPath_ == artPath && transportArtTex_ != kInvalidTexture) return;
-    if (renderer_ && transportArtTex_ != kInvalidTexture) { renderer_->destroy_texture(transportArtTex_); }
-    transportArtTex_ = kInvalidTexture;
-    transportArtTexPath_ = artPath;
-    // Single choke point for "the now-playing art changed" (onPlay, gapless
-    // boundary flips via applyTrackMetadata) — keep the fullscreen art
-    // window in sync while it's open. Which picture it wants depends on what
-    // it was opened to show: the album cover, or the ARTIST behind the track
-    // now playing (resolved live, since the playing album may not be the one
-    // whose page is open).
-    if (artWin_.isVisible()) {
-        std::string img = artWinShowsArtist_ ? artistImagePathFor(displayAlbum_)
-                                             : artPath;
-        if (!img.empty()) artWin_.updateImage(img);
+    // The texture and the cover colors are separate caches. A hit on the
+    // texture used to return before any pixels were available; Dynamic still
+    // needs those pixels the first time this path is seen.
+    const bool texHit = !artPath.empty()
+        && transportArtTexPath_ == artPath
+        && transportArtTex_ != kInvalidTexture;
+    // A sample that was not ready (a 1×1 box before layout, a transparent
+    // file) must not stick. The next decode of this path tries again.
+    bool colorHit = artPath.empty();
+    if (!colorHit) {
+        auto it = coverColors_.find(artPath);
+        colorHit = it != coverColors_.end() && it->second.ready;
     }
-    // The in-app scene follows the same way, and for the same reason — it is
-    // showing the record that is PLAYING, so a gapless boundary onto another
-    // album has to move it. Only the album-cover case: the artist scene is
-    // pinned to the page it was opened from.
-    if (overlay_ == ContentOverlay::AlbumArt && !artWinShowsArtist_ &&
-        !artPath.empty() && artPath != overlayArtPath_) {
-        overlayArtPath_ = artPath;
-        invalidate();   // ensureOverlayArtTexture() reloads on the next draw
+    if (texHit && colorHit) return;
+    if (!texHit) {
+        if (renderer_ && transportArtTex_ != kInvalidTexture)
+            renderer_->destroy_texture(transportArtTex_);
+        transportArtTex_ = kInvalidTexture;
+        transportArtTexPath_ = artPath;
+        // Single choke point for "the now-playing art changed" (onPlay, gapless
+        // boundary flips via applyTrackMetadata) — keep the fullscreen art
+        // window in sync while it's open. Which picture it wants depends on what
+        // it was opened to show: the album cover, or the ARTIST behind the track
+        // now playing (resolved live, since the playing album may not be the one
+        // whose page is open).
+        if (artWin_.isVisible()) {
+            std::string img = artWinShowsArtist_ ? artistImagePathFor(displayAlbum_)
+                                                 : artPath;
+            if (!img.empty()) artWin_.updateImage(img);
+        }
+        // The in-app scene follows the same way, and for the same reason — it is
+        // showing the record that is PLAYING, so a gapless boundary onto another
+        // album has to move it. Only the album-cover case: the artist scene is
+        // pinned to the page it was opened from.
+        if (overlay_ == ContentOverlay::AlbumArt && !artWinShowsArtist_ &&
+            !artPath.empty() && artPath != overlayArtPath_) {
+            overlayArtPath_ = artPath;
+            invalidate();   // ensureOverlayArtTexture() reloads on the next draw
+        }
     }
     // NO RENDERER, NO TEXTURE — and this is not a corner case on Android, it
     // is every track boundary that happens while the listener is somewhere
@@ -3775,24 +4314,28 @@ void PlayerWindow::loadTransportArtTexture(const std::string& artPath) {
     // onSurfaceLost() destroys the Renderer, but the music does not stop: the
     // foreground service exists precisely so it does not. This function is
     // called from applyTrackMetadata(), which a gapless boundary reaches
-    // through onTimer() with no drawing involved at all — so `*renderer_`
-    // below was a null dereference that took the whole process down mid-album
-    // with the screen off. Everything above this line is CPU-side and still
-    // runs; the picture comes back in onSurfaceRecreated().
-    if (!artPath.empty() && renderer_) {
-        // Sized for the transport bar's thumbnail, the only place it is drawn.
-        // It used to take max(transport, essential) because Alt+L switched to a
-        // much larger now-playing widget WITHOUT reloading this texture, and
-        // sizing for the small one made the big one blurry. Essential mode is
-        // gone, so there is one size again — and orientation, unlike the old
-        // mode toggle, goes through recalcLayout() and cannot change how big
-        // this thumbnail is: both orientations draw it at the same square.
-        int targetW = rcTransportArt_.right - rcTransportArt_.left;
-        int targetH = rcTransportArt_.bottom - rcTransportArt_.top;
-        FileByteReader reader;
-        transportArtTex_ = createTextureFromImageFile(*renderer_, reader, artPath.c_str(),
-                                                       targetW, targetH);
-    }
+    // through onTimer() with no drawing involved at all. The upload below is
+    // skipped without a renderer; the color sample is CPU-side and still runs.
+    // The picture comes back in onSurfaceRecreated().
+    if (artPath.empty()) return;
+    // One decode serves the thumbnail and the cover-color cache. The GPU
+    // texture is not read back. mips stay on: this thumbnail is the size it
+    // is drawn at, and createTextureFromImageFile used the same default.
+    int targetW = rcTransportArt_.right - rcTransportArt_.left;
+    int targetH = rcTransportArt_.bottom - rcTransportArt_.top;
+    if (targetW < 1) targetW = 1;
+    if (targetH < 1) targetH = 1;
+    FileByteReader reader;
+    std::vector<uint8_t> bytes;
+    if (!reader.read(artPath.c_str(), bytes) || bytes.empty()) return;
+    DecodedImage img = decodeImageScaled(bytes.data(), bytes.size(),
+                                         targetW, targetH, ImageFit::kPerAxis);
+    if (img.rgba.empty() || img.w <= 0 || img.h <= 0) return;
+    noteCoverColors(artPath, img.rgba.data(), img.w, img.h);
+    if (!texHit && renderer_)
+        transportArtTex_ = renderer_->create_texture(img.rgba.data(),
+                                                     (uint32_t)img.w, (uint32_t)img.h,
+                                                     /*mips=*/true);
 }
 
 // ── Hit testing ──────────────────────────────────────────────────────────────
@@ -3946,6 +4489,17 @@ void PlayerWindow::rebuildGridIndices() {
         }
         gridIndices_.push_back(i);
     }
+
+    // Within this filter: the artist you have the most of comes first, and
+    // that artist's releases run from the oldest year. The names stay in
+    // the data — search still reads them — and off the tile.
+    std::vector<grid::ReleaseKey> orderKeys(albums_.size());
+    for (int i : gridIndices_) {
+        if (i < 0 || i >= (int)albums_.size()) continue;
+        orderKeys[(size_t)i].artist = albums_[(size_t)i].artist;
+        orderKeys[(size_t)i].year = facets::albumYear(albums_[(size_t)i]);
+    }
+    grid::orderByArtist(gridIndices_, orderKeys);
 }
 
 // ── Guided search ───────────────────────────────────────────────────────────
@@ -4083,6 +4637,7 @@ int PlayerWindow::trackPanelHitTest(int x, int y) const {
     // view draw block); rows scroll with the page. A linear scan — album track
     // counts are in the dozens, and this runs once per mouse event.
     for (int i = 0; i < (int)trackRowTop_.size(); i++) {
+        if (trackRowTop_[i] < 0) continue;
         int top = trackRowTop_[i] - trackScrollY_;
         if (y >= top && y < top + trackRowHeight_) return i;
     }
@@ -4376,7 +4931,10 @@ void PlayerWindow::onMouseLeave() {
     dropB(isHoverClose_);
     dropI(isHoverRow_);
     dropB(thHoverClose_);
+    dropB(thHoverMode_);
+    dropB(thHoverImport_);
     dropI(thHoverRow_);
+    dropI(thHoverPlus_);
 
     if (lit) invalidate();
 }
@@ -4803,6 +5361,15 @@ int PlayerWindow::snapScroll(int offset, int contentH, int viewH, int pitch) {
     return row * pitch;
 }
 
+void PlayerWindow::syncTrackScroll(int y) {
+    const int pitch = std::max(1, trackRowHeight_);
+    if (y < 0) y = 0;
+    trackScrollY_ = y;
+    trackRowScroll_ = {};
+    trackRowScroll_.row  = y / pitch;
+    trackRowScroll_.free = (float)(trackRowScroll_.row * (float)pitch);
+}
+
 // -- Every surface scrolls by whole steps, and never animates ---------------
 //
 // Two positions, on purpose. `s` follows the input continuously -- the
@@ -5100,6 +5667,30 @@ void PlayerWindow::closeActivePanel() {
     // Return, Escape and the back gesture all come through here. Music
     // Folders used to rescan only from its Done button, so leaving by Return
     // kept a removed root on screen until the next launch.
+    // The theme import uses this same picker. Leaving it goes back to Themes;
+    // closeActivePanel's usual landing is the settings home.
+    if (activePanel_ == SettingsPanel::FolderPicker && fpForThemes_) {
+        fpForThemes_ = false;
+        activePanel_ = SettingsPanel::Themes;
+        hoverSettingsItem_ = -1;
+        updateTimerNeed();
+        eqSearchFocused_ = false;
+        syncKeyboard();
+        invalidate();
+        return;
+    }
+    // One part is a step inside Themes. Return, Escape and the back button
+    // all come through here, so the first step is back to the four groups
+    // and the second step leaves the page.
+    if (activePanel_ == SettingsPanel::Themes && thGroup_ >= 0) {
+        thGroup_ = -1;
+        thScrollY_ = 0;
+        thRowScroll_ = {};
+        thHoverRow_ = -1;
+        thHoverPlus_ = -1;
+        invalidate();
+        return;
+    }
     if (activePanel_ == SettingsPanel::ManageFolders && mfChanged_) {
         mfChanged_ = false;
         watcher_.unwatchAll();
@@ -5239,8 +5830,18 @@ void PlayerWindow::onPanelMouseMove(int x, int y) {
     case SettingsPanel::Themes: {
         bool hc = ptInRect(thCloseRc_, x, y);
         if (hc != thHoverClose_) { thHoverClose_ = hc; changed = true; }
+        bool hm = ptInRect(thModeRc_, x, y);
+        if (hm != thHoverMode_) { thHoverMode_ = hm; changed = true; }
+        bool hi = ptInRect(thBody_, x, y) && ptInRect(thImportRc_, x, y);
+        if (hi != thHoverImport_) { thHoverImport_ = hi; changed = true; }
+        int plus = -1;
+        if (!hm && !hi && ptInRect(thBody_, x, y)) {
+            for (int g = 0; g < 4; ++g)
+                if (ptInRect(thPlusRc_[g], x, y)) { plus = g; break; }
+        }
+        if (plus != thHoverPlus_) { thHoverPlus_ = plus; changed = true; }
         int row = -1;
-        if (ptInRect(thBody_, x, y))
+        if (!hm && !hi && plus < 0 && ptInRect(thBody_, x, y))
             for (int i = 0; i < (int)thRowRc_.size(); i++)
                 if (ptInRect(thRowRc_[(size_t)i], x, y)) { row = i; break; }
         if (row != thHoverRow_) { thHoverRow_ = row; changed = true; }
@@ -5275,6 +5876,9 @@ void PlayerWindow::onPanelClick(int x, int y) {
     }
     case SettingsPanel::AudioSettings: {
         if (ptInRect(asCloseRc_, x, y)) { closeActivePanel(); return; }  // cancel, no apply
+        // With the other docked actions: before the scrolling body, so a row
+        // that reaches this strip cannot take the click.
+        if (ptInRect(asBtnApply_, x, y)) { applyAudioSettingsPanel(); return; }
         // Before the backend rows: the section's controls are drawn INSIDE the
         // AAudio branch, below them, and its rects are empty on every other
         // backend, so this can never swallow a click meant for something else.
@@ -5315,7 +5919,6 @@ void PlayerWindow::onPanelClick(int x, int y) {
         }
 #endif
 #endif
-        if (ptInRect(asBtnApply_, x, y)) { applyAudioSettingsPanel(); return; }
         return;
     }
     case SettingsPanel::EqSettings: {
@@ -5405,11 +6008,40 @@ void PlayerWindow::onPanelClick(int x, int y) {
     }
     case SettingsPanel::Themes: {
         if (ptInRect(thCloseRc_, x, y)) { closeActivePanel(); return; }
+        if (ptInRect(thModeRc_, x, y)) {
+            themeDynamic_ = !themeDynamic_;
+            db_.saveSetting("ui_theme_mode", themeDynamic_ ? "dynamic" : "static");
+            if (!themeDynamic_) {
+                themeHeldId_.clear();
+                themeHeldCover_ = false;
+                themeCoverName_.clear();
+            }
+            applyPlaybackTheme();
+            invalidate();
+            return;
+        }
         if (!ptInRect(thBody_, x, y)) return;
+        for (int g = 0; g < 4; ++g) {
+            if (!ptInRect(thPlusRc_[g], x, y)) continue;
+            thGroup_ = g;
+            thScrollY_ = 0;
+            thRowScroll_ = {};
+            thHoverRow_ = -1;
+            thHoverPlus_ = -1;
+            invalidate();
+            return;
+        }
+        if (ptInRect(thImportRc_, x, y)) { openThemeImport(); return; }
         for (int i = 0; i < (int)thRowRc_.size() && i < themeCount(); i++) {
             if (!ptInRect(thRowRc_[(size_t)i], x, y)) continue;
-            if (applyTheme(themeAt(i).id.c_str()))
-                db_.saveSetting("ui_theme", themeAt(i).id);
+            themeDynamic_ = false;
+            themeSavedId_ = themeAt(i).id;
+            themeHeldId_.clear();
+            themeHeldCover_ = false;
+            themeCoverName_.clear();
+            db_.saveSetting("ui_theme_mode", "static");
+            if (applyTheme(themeSavedId_.c_str()))
+                db_.saveSetting("ui_theme", themeSavedId_);
             invalidate();
             return;
         }
@@ -5418,6 +6050,20 @@ void PlayerWindow::onPanelClick(int x, int y) {
     case SettingsPanel::FolderPicker: {
         if (ptInRect(fpCloseRc_, x, y)) { closeActivePanel(); return; }
         if (ptInRect(fpBtnSelect_, x, y)) {
+            if (fpForThemes_) {
+                const ThemeCopyResult copied =
+                    copyThemeFiles(fpCurrentDir_, app_paths::stateDir() + "themes");
+                themeAlready_ = copied.already;
+                reloadAllThemes();
+                fpForThemes_ = false;
+                activePanel_ = SettingsPanel::Themes;
+                thGroup_ = -1;
+                thSampleCount_ = -1;
+                thScrollY_ = 0;
+                thRowScroll_ = {};
+                invalidate();
+                return;
+            }
             commitAddFolder(fpCurrentDir_);
             closeActivePanel();
             return;
@@ -5500,7 +6146,8 @@ void PlayerWindow::onPanelWheel(int x, int y, int delta) {
     }
     case SettingsPanel::Themes: {
         int viewH = thBody_.bottom - thBody_.top;
-        scrollDiscrete(thRowScroll_, thScrollY_, delta, pitch, thContentH_, viewH);
+        const int chipPitch = std::max(1, thChipPitch_);
+        scrollDiscrete(thRowScroll_, thScrollY_, delta, chipPitch, thContentH_, viewH);
         return;
     }
     case SettingsPanel::Interface:
@@ -5532,13 +6179,15 @@ void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
     float pad = metrics_.space(SP_LG);
     float btnH = metrics_.space(58.0f);
 
-    LayoutRect listArea = { content.left, (int)(content.top + pad),
-                            content.right, (int)(content.bottom - (btnH + pad * 2)) };
+    const int col = (int)pad;
+    LayoutRect listArea = { content.left + col, (int)(content.top + pad),
+                            content.right - col, (int)(content.bottom - (btnH + pad * 2)) };
     mfListArea_ = listArea;
     float mfRowH = panelRowH();
     mfListRows_ = drawSettingsList(canvas, listArea, mfRoots_,
                                    mfSelectedRow_, (float)mfScrollY_, mfRowH,
-                                   mfHoverRow_, metrics_.text.body, pad);
+                                   mfHoverRow_, metrics_.text.body,
+                                   metrics_.space(SP_SM));
     panels::drawScrollbar(canvas, listArea, (int)((float)mfRoots_.size() * mfRowH), mfScrollY_, metrics_.scale);
     if (mfRoots_.empty()) {
         Rect a = toRect(listArea);
@@ -5554,7 +6203,7 @@ void PlayerWindow::drawManageFolders(Canvas& canvas, const LayoutRect& area) {
     int by = (int)(content.bottom - (btnH + pad));
     auto mfRects = panels::layoutButtonRow(
         content, pad, 1, btnW, 0.0f,
-        metrics_.space(panels::kMinActionBtnW), by, (int)btnH, false);
+        metrics_.space(panels::kMinActionBtnW), by, (int)btnH, false, true);
     mfBtnRemove_ = mfRects.empty() ? LayoutRect{} : mfRects[0];
     panels::drawButton(canvas, mfBtnRemove_, "Remove Selected", mfHoverRemove_,
                        metrics_.text.body, false, true);
@@ -5702,8 +6351,10 @@ void PlayerWindow::drawAudioSettings(Canvas& canvas, const LayoutRect& area) {
     asBodyArea_ = { content.left, content.top, content.right,
                     (int)((float)content.bottom - pad - btnH - pad) };
     int byApply = (int)(content.bottom - (btnH + pad));
+    // One action fills the strip, same as Remove Selected and Select This Folder.
     auto asRects = panels::layoutButtonRow(content, pad, 1, metrics_.space(196.0f), 0.0f,
-                                           metrics_.space(panels::kMinActionBtnW), byApply, (int)btnH);
+                                           metrics_.space(panels::kMinActionBtnW), byApply, (int)btnH,
+                                           true, true);
     asBtnApply_ = asRects[0];
     panels::drawButton(canvas, asBtnApply_, "Apply", asHoverApply_, metrics_.text.body, true, true);
 
@@ -6431,7 +7082,12 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     float pad = metrics_.space(SP_LG);
     float y = c.y + pad;
     const float maxW = c.w - 2.0f * pad;
-    const float lineH = metrics_.text.secondary * 1.5f;
+    // The bitmap is taller than the type role (32 px drawn for an ~18 px
+    // secondary at the reference). Stepping by 1.5× the role put the next
+    // line through the one above it — Device and the assignment read as
+    // one crushed pair. The step is the cell plus the page's own pad, so
+    // the two facts have the same air as the rest of this column.
+    const float lineH = terminusDrawnHeight(metrics_.text.secondary) + pad;
     auto caption = [&](const std::string& s, ColorRef col, float sz) {
         y = panels::drawTerminusLabel(canvas, s, c.x + pad, y, sz, maxW, lineH, toColor(col));
     };
@@ -6466,7 +7122,7 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     int eqBtnCount = eqShowMine_ ? 3 : 2;
     auto eqBtnRects = panels::layoutButtonRow(content, pad, eqBtnCount, metrics_.space(277.0f),
                                               metrics_.space(SP_MD), metrics_.space(panels::kMinActionBtnW),
-                                              by, (int)btnH);
+                                              by, (int)btnH, true, true);
     eqBtnAssign_ = eqBtnRects[0];
     if (eqShowMine_) {
         const EqHeadphone* sel = eqSelectedHeadphone();
@@ -6506,7 +7162,7 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
         // that is simply not lit.
         auto tabRects = panels::layoutButtonRow(content, pad, 3, metrics_.space(200.0f),
                                                 metrics_.space(SP_SM), metrics_.space(panels::kMinActionBtnW),
-                                                (int)y, (int)tabH, /*alignRight=*/false);
+                                                (int)y, (int)tabH, /*alignRight=*/false, /*fill=*/true);
         eqTabMine_ = tabRects[0];
         eqTabAll_  = tabRects[1];
         eqTabRecommended_ = tabRects[2];
@@ -6538,7 +7194,7 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     eqSearchRc_ = { (int)(c.x + pad), (int)y, (int)(c.x + c.w - pad), (int)(y + metrics_.space(55.0f)) };
     panels::drawTerminusSearchField(canvas, eqSearchRc_, eqSearch_, eqSearchFocused_,
                                     "Search profiles", metrics_.text.body);
-    y += metrics_.space(55.0f) + metrics_.space(16.0f);
+    y += metrics_.space(55.0f) + pad;
 
     std::vector<std::string> labels;
     labels.reserve(eqFilteredIndices_.size());
@@ -6576,11 +7232,15 @@ void PlayerWindow::drawEqSettings(Canvas& canvas, const LayoutRect& area) {
     // the parent clip hides the rest.
     const float avail = std::max(eqRowH, (float)eqBodyArea_.bottom - y);
     const float listH = avail;
-    LayoutRect listArea = { content.left, (int)y, content.right, (int)(y + listH) };
+    // Same left and right as Device / the assignment / the search field.
+    // The list used to run to the panel edge while those sat in by `pad`.
+    const int col = (int)pad;
+    LayoutRect listArea = { content.left + col, (int)y, content.right - col, (int)(y + listH) };
     eqListArea_ = listArea;
     eqListRows_ = drawSettingsList(canvas, listArea, labels,
                                    eqSelectedRow_, (float)eqScrollY_, eqRowH,
-                                   eqHoverRow_, metrics_.text.body, pad);
+                                   eqHoverRow_, metrics_.text.body,
+                                   metrics_.space(SP_SM));
     panels::drawScrollbar(canvas, listArea, (int)((float)labels.size() * eqRowH),
                           eqScrollY_, metrics_.scale);
     if (labels.empty()) {
@@ -7207,6 +7867,7 @@ bool PlayerWindow::hasMusicRoots() { return !db_.loadMusicRoots().empty(); }
 
 void PlayerWindow::onAddFolder() {
     hoverSettingsItem_ = -1;
+    fpForThemes_ = false;
     fpLoadDir(fpCurrentDir_.empty() ? userHomeDir() : fpCurrentDir_);
     fpHoverClose_ = fpHoverSelect_ = false;
     activePanel_ = SettingsPanel::FolderPicker;
@@ -7214,7 +7875,10 @@ void PlayerWindow::onAddFolder() {
 }
 
 void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
-    LayoutRect content = panels::drawHeader(canvas, area, "Select Music Folder", metrics_.scale,
+    LayoutRect content = panels::drawHeader(canvas, area,
+                                            fpForThemes_ ? "Select Theme Folder"
+                                                         : "Select Music Folder",
+                                            metrics_.scale,
                                             metrics_.text.header, fpCloseRc_, true, fpHoverClose_,
                                             "Return", metrics_.text.body);
     Rect c = toRect(content);
@@ -7232,13 +7896,14 @@ void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
     int by = (int)(content.bottom - (btnH + pad));
     auto fpRects = panels::layoutButtonRow(
         content, pad, 1, btnW, 0.0f,
-        metrics_.space(panels::kMinActionBtnW), by, (int)btnH, true);
+        metrics_.space(panels::kMinActionBtnW), by, (int)btnH, true, true);
     fpBtnSelect_ = fpRects.empty() ? LayoutRect{} : fpRects[0];
     panels::drawButton(canvas, fpBtnSelect_, "Select This Folder", fpHoverSelect_,
                        metrics_.text.body, true, true);
 
-    LayoutRect listArea = { content.left, (int)(content.top + listTop),
-                            content.right, (int)(content.bottom - (btnH + pad * 2.0f)) };
+    const int col = (int)pad;
+    LayoutRect listArea = { content.left + col, (int)(content.top + listTop),
+                            content.right - col, (int)(content.bottom - (btnH + pad * 2.0f)) };
     fpListArea_ = listArea;
 
     std::vector<std::string> labels;
@@ -7249,7 +7914,8 @@ void PlayerWindow::drawFolderPicker(Canvas& canvas, const LayoutRect& area) {
     float fpRowH = panelRowH();
     fpListRows_ = drawSettingsList(canvas, listArea, labels,
                                    -1, (float)fpScrollY_, fpRowH,
-                                   fpHoverRow_, metrics_.text.body, pad);
+                                   fpHoverRow_, metrics_.text.body,
+                                   metrics_.space(SP_SM));
     panels::drawScrollbar(canvas, listArea, (int)((float)labels.size() * fpRowH), fpScrollY_, metrics_.scale);
     if (labels.empty()) {
         Rect a = toRect(listArea);
@@ -7773,6 +8439,7 @@ void PlayerWindow::onPlay(StartCause cause) {
         }
         active_->stop();
         isPlaying_ = false;
+        themePlaybackEnded();
         return;
     }
     outSr = output_->getConfiguredRate();
@@ -7844,6 +8511,7 @@ void PlayerWindow::onPlay(StartCause cause) {
         output_->stop();
         active_->stop();
         isPlaying_ = false;
+        themePlaybackEnded();
         return;
     }
 
@@ -8131,6 +8799,7 @@ void PlayerWindow::onPlay(StartCause cause) {
         invalidate();
         active_->stop();
         isPlaying_ = false;
+        themePlaybackEnded();
         return;
     }
     // Names the backend that actually started. It said "USB" unconditionally,
@@ -8150,6 +8819,13 @@ void PlayerWindow::onPlay(StartCause cause) {
     // would leave a transport notification on screen over silence.
     media_session::begin();
     media_session::update(nowPlayingForOs());
+
+    // Audio is actually running. isPlaying_ was set much earlier, before
+    // configure() could still refuse, so Dynamic does not watch that flag.
+    themePlaying_ = true;
+    setThemeAlbum(currentAlbum_);
+    applyPlaybackTheme();
+    invalidate();
 
     // Nothing seeks here. Every track starts at zero, including the one that
     // was playing when the app last closed — see create(). onSeek() survives
@@ -8308,6 +8984,7 @@ void PlayerWindow::onStop() {
     active_ = &decoder_;
     nextAlbum_ = nextTrack_ = -1;
     isPlaying_ = false;
+    themePlaybackEnded();
     // AFTER isPlaying_ drops, because that flag is half of what it reads.
     updateTimerNeed();   // ...but only if the Audio Settings panel is not using it
     playedFrames_.store(0);
@@ -8948,6 +9625,7 @@ void PlayerWindow::onTimer(int /*timerId*/) {
         // notification, and leaving those up over silence would pin the CPU
         // awake for the rest of the session. end() is idempotent, so this
         // costs nothing on the ticks that follow.
+        if (themePlaying_) themePlaybackEnded();
         media_session::end();
         return;
     }
@@ -9046,12 +9724,24 @@ void PlayerWindow::onDragEnd(int dx, int dy) {
     // and earlier fact than "was this a deliberate throw".
     pressArmed_ = false;
 
-    // The list has just RESTED. If that rest is the last track, the next
-    // toward-end drag is the extra snap into the artist page.
+    // The list has just RESTED on a page boundary. The next drag toward
+    // that boundary turns the page: another disc, or the artist page.
+    // A rest in the middle of a disc leaves the pager disarmed.
     if (trackPanelOpen_ && !settingsOpen_ && overlay_ == ContentOverlay::None &&
-        albumWorld_ == AlbumWorld::Album && hasArtistWorldContent() &&
-        albumListAtEnd())
-        albumPagerArmed_ = true;
+        albumWorld_ == AlbumWorld::Album) {
+        const bool atEnd   = albumListAtEnd();
+        const bool atStart = trackScrollY_ <= 0;
+        const bool more    = albumDiscIndex_ + 1 < albumDiscCount_;
+        const bool prev    = albumDiscIndex_ > 0;
+        albumPagerArmed_ = (atEnd && (more || hasArtistWorldContent()))
+                        || (atStart && prev);
+    } else if (trackPanelOpen_ && !settingsOpen_ && overlay_ == ContentOverlay::None &&
+               albumWorld_ == AlbumWorld::Artist) {
+        // Rested at the portrait: the next drag upward leaves. Rested in
+        // the text: this stroke only scrolled, and the arrow stays off.
+        albumPagerArmed_ = artistScrollY_ <= 0;
+        artistLeaveCue_ = albumPagerArmed_;
+    }
 
     // The gesture belongs to the artwork scene and to nothing else. Everywhere
     // else a drag is already a scroll, and the host has been feeding it as
@@ -9265,121 +9955,561 @@ void PlayerWindow::drawInterfaceSettings(Canvas& canvas, const LayoutRect& area)
     // only the first row of the second "E", which a headless capture caught.
 }
 
+static bool artFileToken(const std::string& path, int64_t& size, int64_t& mtime) {
+    std::error_code ec;
+    const fsys::path p = fsys::u8path(path);
+    const auto sz = fsys::file_size(p, ec);
+    if (ec) return false;
+    const auto mt = fsys::last_write_time(p, ec);
+    if (ec) return false;
+    size = (int64_t)sz;
+    mtime = (int64_t)mt.time_since_epoch().count();
+    return true;
+}
+
+static std::string albumThemeKey(const Album& a) {
+    return a.name + "\x1f" + a.artist;
+}
+
+void PlayerWindow::setThemeAlbum(int album) {
+    themeArtPath_.clear();
+    themeAlbumKey_.clear();
+    themeAlbumLabel_.clear();
+    if (album < 0 || album >= (int)albums_.size()) return;
+    const Album& a = albums_[(size_t)album];
+    themeArtPath_ = a.artPath;
+    if (!a.name.empty()) themeAlbumKey_ = albumThemeKey(a);
+    themeAlbumLabel_ = !a.displayName.empty() ? a.displayName : a.name;
+}
+
+void PlayerWindow::rememberCoverTheme(const std::string& path, const uint8_t* rgba,
+                                      int w, int h) {
+    auto ready = coverColors_.find(path);
+    if (ready == coverColors_.end() || !ready->second.ready) return;
+
+    int64_t sz = 0, mt = 0;
+    const bool statted = artFileToken(path, sz, mt);
+    auto mem = coverThemeByPath_.find(path);
+    if (mem != coverThemeByPath_.end() && mem->second.tried
+        && mem->second.artSize == sz && mem->second.artMtime == mt)
+        return;
+
+    auto publish = [&](const Palette& pal) {
+        CoverThemeMem kept;
+        kept.artSize = sz;
+        kept.artMtime = mt;
+        kept.tried = true;
+        kept.ok = true;
+        kept.palette = pal;
+        coverThemeByPath_[path] = std::move(kept);
+    };
+
+    if (statted) {
+        for (const Album& a : albums_) {
+            if (a.artPath != path || a.name.empty()) continue;
+            CoverTheme row;
+            if (!db_.loadCoverTheme(albumThemeKey(a), row)) continue;
+            if (row.generator != kCoverThemeGenerator) continue;
+            if (row.artSize != sz || row.artMtime != mt) continue;
+            Palette pal;
+            paletteReadSlots(row.color, pal);
+            if (!paletteAcceptable(pal)) continue;
+            pal.id = "cover";
+            pal.group = themeDaypartId(themeDaypartFromLuma(themeLuma(pal.bgMain)));
+            publish(pal);
+            return;
+        }
+    }
+
+    Palette pal;
+    if (!paletteFromCover(rgba, w, h, pal)) {
+        CoverThemeMem kept;
+        kept.artSize = sz;
+        kept.artMtime = mt;
+        kept.tried = true;
+        coverThemeByPath_[path] = std::move(kept);
+        fprintf(stderr, "[Theme] cover kept the nearest theme: %s\n", path.c_str());
+        return;
+    }
+    pal.id = "cover";
+    if (statted) {
+        CoverTheme row;
+        row.artPath = path;
+        row.artSize = sz;
+        row.artMtime = mt;
+        row.generator = kCoverThemeGenerator;
+        paletteWriteSlots(pal, row.color);
+        for (const Album& a : albums_) {
+            if (a.artPath != path || a.name.empty()) continue;
+            row.albumKey = albumThemeKey(a);
+            db_.saveCoverTheme(row);
+        }
+    }
+    publish(pal);
+}
+
+bool PlayerWindow::takeCoverPalette(Palette& out) {
+    if (themeArtPath_.empty()) return false;
+    int64_t sz = 0, mt = 0;
+    const bool statted = artFileToken(themeArtPath_, sz, mt);
+    auto mem = coverThemeByPath_.find(themeArtPath_);
+    if (mem != coverThemeByPath_.end() && statted
+        && mem->second.artSize == sz && mem->second.artMtime == mt) {
+        if (!mem->second.ok) return false;
+        out = mem->second.palette;
+    } else if (mem != coverThemeByPath_.end() && mem->second.ok && !statted) {
+        out = mem->second.palette;
+    } else if (!themeAlbumKey_.empty() && statted) {
+        CoverTheme row;
+        if (!db_.loadCoverTheme(themeAlbumKey_, row)) return false;
+        if (row.generator != kCoverThemeGenerator) return false;
+        if (row.artSize != sz || row.artMtime != mt) return false;
+        Palette pal;
+        paletteReadSlots(row.color, pal);
+        if (!paletteAcceptable(pal)) return false;
+        pal.id = "cover";
+        pal.group = themeDaypartId(themeDaypartFromLuma(themeLuma(pal.bgMain)));
+        CoverThemeMem kept;
+        kept.artSize = sz;
+        kept.artMtime = mt;
+        kept.tried = true;
+        kept.ok = true;
+        kept.palette = pal;
+        coverThemeByPath_[themeArtPath_] = kept;
+        out = pal;
+    } else {
+        return false;
+    }
+    out.name = themeAlbumLabel_.empty() ? std::string("Cover") : themeAlbumLabel_;
+    return true;
+}
+
+void PlayerWindow::applyPlaybackTheme() {
+    const CoverColors* cover = nullptr;
+    if (!themeArtPath_.empty()) {
+        auto it = coverColors_.find(themeArtPath_);
+        if (it != coverColors_.end()) cover = &it->second;
+    }
+    const bool ready = cover && cover->ready;
+
+    if (themeDynamic_ && themePlaying_) {
+        Palette grown;
+        if (takeCoverPalette(grown)) {
+            themeHeldCover_ = true;
+            themeHeldPalette_ = grown;
+            themeHeldId_.clear();
+            themeCoverName_ = grown.name;
+            applyPalette(grown);
+            return;
+        }
+        if (!ready && themeHeldCover_) {
+            themeCoverName_ = themeHeldPalette_.name.empty()
+                ? themeCoverName_ : themeHeldPalette_.name;
+            applyPalette(themeHeldPalette_);
+            return;
+        }
+        if (ready) themeHeldCover_ = false;
+    } else {
+        themeHeldCover_ = false;
+        themeCoverName_.clear();
+    }
+
+    std::string matchId;
+    if (ready) {
+        std::vector<Palette> pals;
+        pals.reserve((size_t)themeCount());
+        for (int i = 0; i < themeCount(); ++i)
+            pals.push_back(themeAt(i));
+        const int idx = matchTheme(*cover, pals.data(), (int)pals.size());
+        if (idx >= 0) matchId = pals[(size_t)idx].id;
+    }
+    themeCoverName_.clear();
+    const char* id = chooseTheme(themeDynamic_ ? ThemeMode::Dynamic : ThemeMode::Static,
+                                 themePlaying_, ready,
+                                 matchId.c_str(), themeSavedId_.c_str(),
+                                 themeHeldId_.c_str());
+    if (themeDynamic_ && themePlaying_ && ready && id && matchId == id)
+        themeHeldId_ = matchId;
+    applyTheme(id);
+}
+
+void PlayerWindow::themePlaybackEnded() {
+    themePlaying_ = false;
+    themeHeldId_.clear();
+    themeHeldCover_ = false;
+    themeCoverName_.clear();
+    setThemeAlbum(-1);
+    applyPlaybackTheme();
+    invalidate();
+}
+
+void PlayerWindow::noteCoverColors(const std::string& path, const uint8_t* rgba,
+                                  int w, int h) {
+    if (path.empty() || !rgba || w <= 0 || h <= 0) return;
+    coverColors_[path] = coverColorsFromRgba(rgba, w, h);
+    rememberCoverTheme(path, rgba, w, h);
+    if (!(themeDynamic_ && themePlaying_ && path == themeArtPath_)) return;
+    applyPlaybackTheme();
+    invalidate();
+}
+
+void PlayerWindow::openThemeImport() {
+    fpForThemes_ = true;
+    fpLoadDir(fpCurrentDir_.empty() ? userHomeDir() : fpCurrentDir_);
+    fpHoverClose_ = fpHoverSelect_ = false;
+    fpHoverRow_ = -1;
+    activePanel_ = SettingsPanel::FolderPicker;
+    invalidate();
+}
+
+void PlayerWindow::reloadAllThemes() {
+    // The listener's folder wins on a shared id. The shipped set fills in
+    // everything they have not got, and a rebuild never writes into the
+    // folder an import uses.
+    const std::string user = app_paths::stateDir() + "themes";
+    const std::string bundled = app_paths::exeDir() + "themes-bundled";
+    reloadImportedThemes(user);
+    if (bundled != user) addImportedThemes(bundled, false);
+}
+
 void PlayerWindow::onThemesSettings() {
     hoverSettingsItem_ = -1;
     panelFromSidebar_ = false;
     thHoverRow_ = -1;
+    thHoverPlus_ = -1;
     thHoverClose_ = false;
+    thHoverMode_ = false;
+    thHoverImport_ = false;
+    thGroup_ = -1;
     thScrollY_ = 0;
     thRowScroll_ = {};
+    thSampleSeed_ = (uint32_t)std::chrono::steady_clock::now().time_since_epoch().count();
+    if (thSampleSeed_ == 0) thSampleSeed_ = 1;
+    thSampleCount_ = -1;
     // A file dropped while the page was closed shows up on the way in.
     // Opening again is the refresh; the page does not watch the directory.
-    reloadImportedThemes(app_paths::stateDir() + "themes");
+    reloadAllThemes();
     activePanel_ = SettingsPanel::Themes;
     invalidate();
 }
 
-// Groups, then rows. The group is one Terminus strike taller than the name
-// under it and drawn in the primary ink, with a rule — the old caption was
-// the same size and the same dim colour as the sentence under each name, so
-// a group and a blurb were the same thing. The name is the row. The active
-// name is the accent, and a hover on any other row is the neutral fill. A
-// pick applies immediately; there is no Apply.
+// Four parts, Morning through Night. Each part on this page is one row of
+// swatches, picked when Themes opens, and a + when that part has more. The
+// + opens the part on its own: every theme, A to Z, the name beside the
+// swatches, and the next theme on the same row only when it fits. Return
+// comes back to the same four rows. The stroke marks the saved static id,
+// so a live cover match does not move it.
 void PlayerWindow::drawThemes(Canvas& canvas, const LayoutRect& area) {
-    LayoutRect content = panels::drawHeader(canvas, area, "Themes",
+    const char* partTitle[] = { "Morning", "Afternoon", "Evening", "Night" };
+    const bool inPart = thGroup_ >= 0 && thGroup_ < 4;
+    const char* header = inPart ? partTitle[thGroup_] : "Themes";
+    LayoutRect content = panels::drawHeader(canvas, area, header,
                                             metrics_.scale, metrics_.text.header,
                                             thCloseRc_, true, thHoverClose_,
                                             "Return", metrics_.text.body);
     Rect c = toRect(content);
-    thBody_ = content;
-    canvas.setClip(c.x, c.y, c.w, c.h);
-
     const float pad = metrics_.space(SP_LG);
-    const float indent = metrics_.space(SP_MD);
-    const float maxW = std::max(0.0f, c.w - 2.0f * pad);
-    const float textW = std::max(0.0f, maxW - indent);
-    const float nameTarget = metrics_.text.body;
-    const float blurbTarget = metrics_.text.secondary;
-    const float groupTarget = terminusTallerTarget(nameTarget);
-    const float groupDrawn = terminusDrawnHeight(groupTarget);
-    const float nameH = std::max(nameTarget * 1.45f, terminusDrawnHeight(nameTarget));
-    const float lineH = std::max(blurbTarget * 1.45f, terminusDrawnHeight(blurbTarget));
-    const float groupLineH = std::max(groupDrawn, groupTarget);
-    const float rowGap = metrics_.space(SP_MD);
-    const float textX = c.x + pad + indent;
-    // The line box is taller than the strike, and the strike's own blank rows
-    // sit mostly under the capitals. Both spares used to fall below the
-    // sentence, so a tint that started at the text origin met the top of the
-    // name. Dropping the block by half that difference puts the same air
-    // above the name as below the sentence. The row box does not move, so
-    // the gap to the next row stays put. "M" is the cap top; "," is the
-    // lowest mark a sentence here actually draws.
-    const float nameDrawn = terminusDrawnHeight(nameTarget);
-    const float blurbDrawn = terminusDrawnHeight(blurbTarget);
-    const float nameInkTop = (nameTarget - nameDrawn) * 0.5f
-                           + terminusInk("M", nameTarget).top;
-    const float blurbInkBot = (blurbTarget - blurbDrawn) * 0.5f
-                            + terminusInk(",", blurbTarget).bottom;
-    const float slackBelow = lineH - blurbInkBot;
-    const float textShift = std::round((slackBelow - nameInkTop) * 0.5f);
-    float y = c.y + pad - (float)thScrollY_;
+    const float gap = metrics_.space(SP_SM);
+    const float nameSz = metrics_.text.secondary;
 
-    thRowRc_.assign((size_t)themeCount(), LayoutRect{});
-    for (int i = 0; i < themeCount(); i++) {
-        const Palette& p = themeAt(i);
-        const bool newGroup = (i == 0) || p.group != themeAt(i - 1).group;
-        if (newGroup) {
-            if (i > 0) y += rowGap;
-            y = panels::drawTerminusLabel(canvas, p.group, c.x + pad, y,
-                                          groupTarget, maxW, groupLineH,
-                                          toColor(CLR_TEXT_PRIMARY));
-            const float rule = metrics_.stroke(2.0f);
-            canvas.rect(c.x + pad, y, maxW, rule, toColor(CLR_TEXT_SECONDARY));
-            y += rule + metrics_.space(SP_SM);
+    const char* how = (host_ && host_->inputIsTouch()) ? "TAP" : "CLICK";
+    const std::string modeLabel =
+        std::string(themeDynamic_ ? "DYNAMIC MODE - " : "STATIC MODE - ")
+        + how + " TO SWITCH";
+    std::string live;
+    if (themeDynamic_) {
+        if (!themeCoverName_.empty()) {
+            live = themeCoverName_;
+        } else {
+            const int ai = activeThemeIndex();
+            live = ai >= 0 ? themeAt(ai).name : std::string(activeThemeId());
         }
-        const std::vector<std::string> lines = terminusWrap(p.blurb, blurbTarget, textW);
-        const int nLines = std::max(1, (int)lines.size());
-        const float blockH = nameH + (float)nLines * lineH;
-        LayoutRect rc = { (int)(c.x + pad), (int)y,
-                          (int)(c.x + c.w - pad), (int)(y + blockH) };
-        thRowRc_[(size_t)i] = rc;
-        const bool active = i == activeThemeIndex();
-        // The accent tint is what says "this one is on". The name is also
-        // drawn in the accent, which is enough on a dark page and not on
-        // Paper, where the accent and the body type are both black.
-        if (active)
-            canvas.rect((float)rc.left, (float)rc.top,
-                        (float)(rc.right - rc.left), (float)(rc.bottom - rc.top),
-                        toColor(CLR_ACCENT, UI_SELECT_TINT_ALPHA), UI_CORNER_RADIUS);
-        else if (thHoverRow_ == i)
-            canvas.rect((float)rc.left, (float)rc.top,
-                        (float)(rc.right - rc.left), (float)(rc.bottom - rc.top),
-                        toColor(CLR_HOVER), UI_CORNER_RADIUS);
-        panels::drawTerminusLabel(canvas, p.name, textX, y + textShift,
-                                  nameTarget, textW, nameH,
-                                  toColor(active ? CLR_ACCENT : CLR_TEXT_PRIMARY));
-        y += nameH;
-        panels::drawTerminusLabel(canvas, p.blurb, textX, y + textShift,
-                                  blurbTarget, textW, lineH,
-                                  toColor(CLR_TEXT_DIM));
-        if (!lines.empty()) y += (float)lines.size() * lineH;
-        y += rowGap;
+    }
+    const float bodySz = metrics_.text.body;
+    // drawTerminusText centers the CELL on `targetPx`. Capitals sit inside
+    // that cell, so a box measured from the cell leaves the ink high. The
+    // two lines are centered on the union of their ink.
+    struct InkBox { float top = 0; float bot = 0; };
+    auto inkBox = [](const std::string& text, float size) -> InkBox {
+        if (text.empty()) return {};
+        const TerminusInk ink = terminusInk(text, size);
+        if (ink.bottom <= ink.top) return {};
+        const float delta = terminus::origin(0.0f, 0.0f, size).top;
+        return { delta + ink.top, delta + ink.bottom };
+    };
+    const float textMax = std::max(0.0f, c.w - 2.0f * pad - 2.0f * metrics_.space(SP_MD));
+    const std::string shownMode = terminusEllipsize(modeLabel, bodySz, textMax);
+    const std::string shownLive = live.empty() ? std::string()
+                                               : terminusEllipsize(live, nameSz, textMax);
+    const InkBox m1 = inkBox(shownMode, bodySz);
+    const InkBox m2 = inkBox(shownLive, nameSz);
+    const float inkGap = metrics_.space(SP_XS);
+    const bool twoLines = m2.bot > m2.top;
+    const float y2shift = twoLines ? (m1.bot + inkGap - m2.top) : 0.0f;
+    const float visualH = twoLines ? (y2shift + m2.bot - m1.top) : (m1.bot - m1.top);
+    const float modeH = std::max(metrics_.space(72.0f),
+                                 visualH + 2.0f * metrics_.space(SP_MD));
+    thModeRc_ = { (int)(c.x + pad), (int)(c.y + pad),
+                  (int)(c.x + c.w - pad), (int)(c.y + pad + modeH) };
+    {
+        Rect r = toRect(thModeRc_);
+        canvas.rect(r.x, r.y, r.w, r.h,
+                    toColor(themeButtonFill(false, thHoverMode_)), UI_CORNER_RADIUS);
+        const float y1 = r.y + (r.h - visualH) * 0.5f - m1.top;
+        const float tw = terminusTextWidth(shownMode, bodySz);
+        drawTerminusText(canvas, shownMode,
+                         r.x + std::max(0.0f, (r.w - tw) * 0.5f),
+                         y1, bodySz, toColor(CLR_TEXT_PRIMARY));
+        if (twoLines) {
+            const float sw = terminusTextWidth(shownLive, nameSz);
+            drawTerminusText(canvas, shownLive,
+                             r.x + std::max(0.0f, (r.w - sw) * 0.5f),
+                             y1 + y2shift, nameSz, toColor(CLR_TEXT_DIM));
+        }
     }
 
-    y += rowGap * 0.5f;
-    const std::string note =
-        "A .theme file, or an Alacritty colors file, in "
-        + app_paths::stateDir() + "themes shows up here the next time this page is opened.";
-    y = panels::drawTerminusLabel(canvas, note, c.x + pad, y,
-                                  blurbTarget, maxW, lineH, toColor(CLR_TEXT_DIM));
+    thBody_ = { content.left, thModeRc_.bottom + (int)pad,
+                content.right, content.bottom };
+    if (thBody_.bottom < thBody_.top) thBody_.bottom = thBody_.top;
+    Rect body = toRect(thBody_);
+    canvas.setClip(body.x, body.y, std::max(0.0f, body.w), std::max(0.0f, body.h));
+
+    const float maxW = std::max(1.0f, body.w - 2.0f * pad);
+    const float x0 = body.x + pad;
+    const float groupTarget = terminusTallerTarget(nameSz);
+    const float groupLineH = std::max(terminusDrawnHeight(groupTarget), groupTarget);
+    const char* savedId = themeSavedId_.empty() ? "matrix" : themeSavedId_.c_str();
+    const float nameCell = std::max(nameSz, terminusDrawnHeight(nameSz));
+    const float sqGap = std::max(1.0f, metrics_.stroke(2.0f));
+    const float sqFloor = std::max(1.0f, metrics_.space(8.0f));
+    int maxSw = 1;
+    for (int i = 0; i < themeCount(); ++i) {
+        ColorRef tmp[20];
+        const int n = themeSwatches(themeAt(i), tmp, 20);
+        if (n > maxSw) maxSw = n;
+    }
+    float sq = metrics_.space(22.0f);
+    if (maxSw > 0) {
+        const float room = maxW - (float)(maxSw - 1) * sqGap;
+        const float fit = room / (float)maxSw;
+        if (fit < sq) sq = fit;
+    }
+    if (sq < sqFloor) sq = sqFloor;
+    const float rowH = std::max(sq, nameCell);
+    thChipPitch_ = std::max(1, (int)std::lround(rowH + gap));
+
+    thRowRc_.assign((size_t)themeCount(), LayoutRect{});
+    for (int g = 0; g < 4; ++g) thPlusRc_[g] = {};
+    thImportRc_ = {};
+
+    const float hair = std::max(1.0f, metrics_.stroke(1.0f));
+    const Color hairCol = toColor(CLR_TEXT_DIM);
+    const float selBt = std::max(1.0f, metrics_.stroke(2.0f));
+    const Color selCol = toColor(CLR_TEXT_PRIMARY);
+
+    auto drawStrip = [&](float x, float y, const Palette& p, bool hover, float hoverW,
+                         float hoverH) {
+        ColorRef sw[20];
+        int n = themeSwatches(p, sw, 20);
+        if (n < 1) { sw[0] = p.bgMain; n = 1; }
+        const float strip = themeStripWidth(n, sq, sqGap);
+        if (hover)
+            canvas.rect(x, y, std::max(strip, hoverW), hoverH, toColor(CLR_HOVER));
+        const float sy = y + std::max(0.0f, (hoverH - sq) * 0.5f);
+        for (int i = 0; i < n; ++i) {
+            const float sx = x + (float)i * (sq + sqGap);
+            canvas.rect(sx, sy, sq, sq, toColor(sw[i]));
+            if (themeChannelDist(sw[i], CLR_BG_MAIN) < 48) {
+                canvas.rect(sx, sy, sq, hair, hairCol);
+                canvas.rect(sx, sy + sq - hair, sq, hair, hairCol);
+                canvas.rect(sx, sy, hair, sq, hairCol);
+                canvas.rect(sx + sq - hair, sy, hair, sq, hairCol);
+            }
+        }
+        if (p.id == savedId) {
+            canvas.rect(x, sy, strip, selBt, selCol);
+            canvas.rect(x, sy + sq - selBt, strip, selBt, selCol);
+            canvas.rect(x, sy, selBt, sq, selCol);
+            canvas.rect(x + strip - selBt, sy, selBt, sq, selCol);
+        }
+        return strip;
+    };
+
+    float y = body.y + pad - (float)thScrollY_;
+
+    auto heading = [&](const char* title) {
+        y = panels::drawTerminusLabel(canvas, title, x0, y,
+                                      groupTarget, maxW, groupLineH,
+                                      toColor(CLR_TEXT_PRIMARY));
+        const float rule = metrics_.stroke(2.0f);
+        canvas.rect(x0, y, maxW, rule, toColor(CLR_TEXT_SECONDARY));
+        y += rule + gap;
+    };
+
+    if (!inPart) {
+        const int quantW = (int)std::lround(maxW) * 1000 + (int)std::lround(sq);
+        if (thSampleCount_ != themeCount() || thSampleBuiltSeed_ != thSampleSeed_
+            || thSampleW_ != quantW) {
+            for (int g = 0; g < 4; ++g) {
+                std::vector<int> ids;
+                for (int i = 0; i < themeCount(); ++i)
+                    if (themeDaypartOf(themeAt(i)) == (ThemeDaypart)g)
+                        ids.push_back(i);
+                themeSampleShuffle(ids, thSampleSeed_ + (uint32_t)g * 97u);
+                std::vector<float> widths(ids.size(), sq);
+                for (size_t k = 0; k < ids.size(); ++k) {
+                    ColorRef sw[20];
+                    int n = themeSwatches(themeAt(ids[k]), sw, 20);
+                    if (n < 1) n = 1;
+                    widths[k] = themeStripWidth(n, sq, sqGap);
+                }
+                std::vector<int> shown;
+                bool plus = false;
+                themeOverviewRow(widths.empty() ? nullptr : widths.data(),
+                                 (int)widths.size(), maxW, gap, sq, shown, plus);
+                thShown_[g].clear();
+                for (int pos : shown)
+                    thShown_[g].push_back(ids[(size_t)pos]);
+                thPlusOn_[g] = plus;
+            }
+            thSampleCount_ = themeCount();
+            thSampleBuiltSeed_ = thSampleSeed_;
+            thSampleW_ = quantW;
+        }
+        for (int g = 0; g < 4; ++g) {
+            heading(partTitle[g]);
+            if (thShown_[g].empty()) continue;
+            const float rowY = y;
+            float x = x0;
+            float rowUsed = 0.0f;
+            for (size_t k = 0; k < thShown_[g].size(); ++k) {
+                const int idx = thShown_[g][k];
+                if (idx < 0 || idx >= themeCount()) continue;
+                const Palette& p = themeAt(idx);
+                const bool hover = thHoverRow_ == idx;
+                const float strip = drawStrip(x, rowY, p, hover, 0.0f, rowH);
+                thRowRc_[(size_t)idx] = { (int)x, (int)rowY,
+                                          (int)(x + strip), (int)(rowY + rowH) };
+                rowUsed = (x - x0) + strip;
+                x += strip + gap;
+            }
+            float plusRow = rowY;
+            float plusX = x0 + rowUsed + (rowUsed > 0.0f ? gap : 0.0f);
+            if (thPlusOn_[g]) {
+                if (plusX + sq > x0 + maxW) {
+                    plusRow = rowY + rowH + gap;
+                    plusX = x0;
+                }
+                const float py = plusRow + std::max(0.0f, (rowH - sq) * 0.5f);
+                const bool ph = thHoverPlus_ == g;
+                canvas.rect(plusX, py, sq, sq,
+                            toColor(themeButtonFill(false, ph)), UI_CORNER_RADIUS);
+                const std::string plus = "+";
+                const InkBox pi = inkBox(plus, nameSz);
+                const float pVis = pi.bot - pi.top;
+                const float pyText = py + (sq - pVis) * 0.5f - pi.top;
+                const float pw = terminusTextWidth(plus, nameSz);
+                drawTerminusText(canvas, plus,
+                                 plusX + std::max(0.0f, (sq - pw) * 0.5f),
+                                 pyText, nameSz, toColor(CLR_TEXT_PRIMARY));
+                thPlusRc_[g] = { (int)plusX, (int)py, (int)(plusX + sq), (int)(py + sq) };
+            }
+            y = (thPlusOn_[g] ? plusRow : rowY) + rowH + gap;
+        }
+    } else {
+        std::vector<int> order;
+        themeDisplayOrder(order);
+        struct Item {
+            int idx = 0;
+            float w = 0;
+            float strip = 0;
+            float nameW = 0;
+            std::string name;
+        };
+        std::vector<Item> items;
+        const float nameGap = metrics_.space(SP_SM);
+        for (int idx : order) {
+            if (idx < 0 || idx >= themeCount()) continue;
+            const Palette& p = themeAt(idx);
+            if (themeDaypartOf(p) != (ThemeDaypart)thGroup_) continue;
+            ColorRef sw[20];
+            int n = themeSwatches(p, sw, 20);
+            if (n < 1) n = 1;
+            Item it;
+            it.idx = idx;
+            it.strip = themeStripWidth(n, sq, sqGap);
+            const float allow = std::max(0.0f, maxW - it.strip - nameGap);
+            if (allow > 0.0f && terminusTextWidth("...", nameSz) <= allow + 0.5f) {
+                it.name = terminusEllipsize(p.name, nameSz, allow);
+                it.nameW = terminusTextWidth(it.name, nameSz);
+                it.w = it.strip + nameGap + it.nameW;
+            } else {
+                it.w = it.strip;
+            }
+            items.push_back(std::move(it));
+        }
+        std::vector<float> widths(items.size(), 0.0f);
+        for (size_t k = 0; k < items.size(); ++k) widths[k] = items[k].w;
+        std::vector<ThemeFlowSlot> slots;
+        const float blockH = themeFlowPack(widths.empty() ? nullptr : widths.data(),
+                                           (int)widths.size(), maxW, rowH, gap, slots);
+        for (const ThemeFlowSlot& slot : slots) {
+            const Item& it = items[(size_t)slot.index];
+            const Palette& p = themeAt(it.idx);
+            const float rx = x0 + slot.x;
+            const float ry = y + slot.y;
+            const bool hover = thHoverRow_ == it.idx;
+            drawStrip(rx, ry, p, hover, it.w, rowH);
+            if (!it.name.empty()) {
+                const InkBox ni = inkBox(it.name, nameSz);
+                const float nVis = ni.bot - ni.top;
+                const float ny = ry + (rowH - nVis) * 0.5f - ni.top;
+                drawTerminusText(canvas, it.name, rx + it.strip + nameGap, ny,
+                                 nameSz, toColor(CLR_TEXT_PRIMARY));
+            }
+            thRowRc_[(size_t)it.idx] = { (int)rx, (int)ry,
+                                         (int)(rx + it.w), (int)(ry + rowH) };
+        }
+        y += blockH;
+        if (!items.empty()) y += gap;
+    }
+
+    y += gap;
+    const float btnH = metrics_.space(58.0f);
+    const float btnW = std::min(metrics_.space(280.0f), maxW);
+    thImportRc_ = { (int)x0, (int)y, (int)(x0 + btnW), (int)(y + btnH) };
+    panels::drawButton(canvas, thImportRc_, "Import themes", thHoverImport_,
+                       metrics_.text.body, false, true);
+    y += btnH + gap;
+
+    std::string note;
+    if (themeSkipCount() > 0)
+        note += std::to_string(themeSkipCount()) + " LEFT OUT";
+    if (themeAlready_ > 0) {
+        if (!note.empty()) note += "   ";
+        note += std::to_string(themeAlready_) + " ALREADY THERE";
+    }
+    if (!note.empty()) {
+        const float lineH = std::max(nameSz * 1.45f, terminusDrawnHeight(nameSz));
+        y = panels::drawTerminusLabel(canvas, note, x0, y, nameSz, maxW, lineH,
+                                      toColor(CLR_TEXT_DIM));
+    }
 
     canvas.clearClip();
-    thContentH_ = (int)(y + (float)thScrollY_ - c.y + pad);
-    const int viewH = content.bottom - content.top;
-    const int pitch = std::max(1, (int)panelRowH());
+    thContentH_ = (int)(y + (float)thScrollY_ - body.y + pad);
+    if (thContentH_ < 0) thContentH_ = 0;
+    const int viewH = std::max(0, thBody_.bottom - thBody_.top);
+    const int pitch = std::max(1, thChipPitch_);
+    // The wheel snaps to whole chip rows, and that division drops a remainder
+    // shorter than one row. The import button lives in that tail. Lengthen
+    // the scroll so the last stop shows the button, with empty space under it.
+    if (viewH > 0 && thContentH_ > viewH) {
+        const int slack = (thContentH_ - viewH) % pitch;
+        if (slack) thContentH_ += pitch - slack;
+    }
     const int maxOff = std::max(0, ((thContentH_ - viewH) / pitch) * pitch);
     if (thScrollY_ > maxOff) { thScrollY_ = maxOff; markDirty(); }
-    panels::drawScrollbar(canvas, content, thContentH_, thScrollY_, metrics_.scale);
+    panels::drawScrollbar(canvas, thBody_, thContentH_, thScrollY_, metrics_.scale);
 }
 
 void PlayerWindow::drawSignalChain(Canvas& canvas, const LayoutRect& area) {
@@ -9746,6 +10876,10 @@ void PlayerWindow::applyTrackMetadata(int album, int track) {
     seekTotalMs_    = nt.durationMs > 0 ? nt.durationMs : 0;
     seekPosMs_      = 0;
     loadTransportArtTexture(albums_[album].artPath);
+    if (themePlaying_ && albums_[album].artPath != themeArtPath_) {
+        setThemeAlbum(album);
+        applyPlaybackTheme();
+    }
     // Follow the music only where the page was already following it. A queue
     // crossing into another record while the listener is reading a DIFFERENT
     // album's page would swap that page out from under them mid-sentence —
@@ -10207,13 +11341,21 @@ bool PlayerWindow::goBack() {
         albumWorld_ = AlbumWorld::Album;
         artistScrollY_ = 0;
         artistRowScroll_ = {};
+        artistLeaveCue_ = false;
         albumPagerArmed_ = false;
+        // The hand that was scrolling should not fall straight back in.
+        albumPager_ = {};
+        albumPager_.arriving = true;
+        albumPager_.tailUntilMs = steadyMs() + kAlbumPageGestureMs;
         invalidate();
         moved = true;
     } else if (trackPanelOpen_) {
         trackPanelOpen_ = false;
         albumWorld_ = AlbumWorld::Album;
         albumPagerArmed_ = false;
+        albumDiscIndex_ = 0;
+        albumDiscCount_ = 1;
+        albumPager_ = {};
         recalcLayout();
         invalidate();
         moved = true;
@@ -10273,8 +11415,26 @@ void PlayerWindow::applyViewState(const ViewState& s) {
     if (s.trackPanelOpen && s.selectedAlbum >= 0 &&
         s.selectedAlbum < (int)albums_.size()) {
         openAlbumView(s.selectedAlbum);
-        if (s.artistWorld && hasArtistWorldContent())
+        if (s.artistWorld && hasArtistWorldContent()) {
+            // This page is left from the last disc, at its end. Re-entering
+            // the artist page and then stepping back must land there.
             albumWorld_ = AlbumWorld::Artist;
+            std::vector<AlbumDiscSpan> discs;
+            collectDiscSpans(albums_[s.selectedAlbum].tracks, discs);
+            if (!discs.empty()) {
+                albumDiscIndex_ = (int)discs.size() - 1;
+                albumDiscCount_ = (int)discs.size();
+            }
+            // The way back from the artist page is the last disc, at its
+            // end. The strip under the tracks is part of that end, and its
+            // height is measured when the page is painted.
+            albumScrollToEnd_ = true;
+            trackScrollY_ = 0;
+            trackRowScroll_ = {};
+            artistScrollY_ = 0;
+            artistRowScroll_ = {};
+            artistLeaveCue_ = false;
+        }
     } else {
         trackPanelOpen_ = false;
         recalcLayout();
@@ -10478,6 +11638,7 @@ void PlayerWindow::destroyRendererForSurfaceLoss() {
     trackPanelArtTexAlbum_ = -1;
     transportArtTexPath_.clear();
     artistImgCachePath_.clear();
+    artistImgCachePx_ = 0;
     // Same rule, same trap: releaseOverlayArtTexture() clears handle AND key.
     // overlayArtPath_ is deliberately NOT cleared — that is CPU-side state
     // (which picture the scene is showing) and it must survive, so returning
@@ -10751,6 +11912,38 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
         click(rcSettingsAudio_);
         return true;
     }
+    // The other docked actions fill the strip. Apply used to be a short
+    // button at the right, so the same click — the left end of that strip —
+    // committed on every other submenu and did nothing here.
+    if (state == "32-audio-apply") {
+        click(rcNavSettings_); drawFrame();
+        click(rcSettingsAudio_);
+        drawFrame();
+        const auto savedBackend = db_.loadSetting("audio_backend");
+        const auto savedAlsa    = db_.loadSetting("alsa_device_id");
+        const auto savedUsbV    = db_.loadSetting("usb_vid");
+        const auto savedUsbP    = db_.loadSetting("usb_pid");
+        const auto savedJack    = db_.loadSetting("jack_port");
+        const auto savedBt      = db_.loadSetting("bt_device_path");
+        const int x = asBodyArea_.left + (int)metrics_.space(SP_LG) + 8;
+        const int y = (asBtnApply_.top + asBtnApply_.bottom) / 2;
+        onMouseMove(x, y);
+        onLButtonDown(x, y);
+        onLButtonUp(x, y);
+        const bool closed = activePanel_ == SettingsPanel::None &&
+                            x >= asBtnApply_.left && x < asBtnApply_.right;
+        if (!closed)
+            printf("[apply-probe] dock click %d,%d missed btn (%d,%d)-(%d,%d) panel %d\n",
+                   x, y, asBtnApply_.left, asBtnApply_.top,
+                   asBtnApply_.right, asBtnApply_.bottom, (int)activePanel_);
+        db_.saveSetting("audio_backend", savedBackend);
+        db_.saveSetting("alsa_device_id", savedAlsa);
+        db_.saveSetting("usb_vid", savedUsbV);
+        db_.saveSetting("usb_pid", savedUsbP);
+        db_.saveSetting("jack_port", savedJack);
+        db_.saveSetting("bt_device_path", savedBt);
+        return closed;
+    }
     if (state == "33-eq-settings") {
         click(rcNavSettings_); drawFrame();
         click(rcSettingsEq_);
@@ -10778,6 +11971,7 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
     if (state == "3d-theme-paper" || state == "3e-theme-hyper") {
         const char* id = state == "3d-theme-paper" ? "paper" : "hyper";
         captureRestoreTheme_ = db_.loadSetting("ui_theme");
+        const std::string savedMode = db_.loadSetting("ui_theme_mode");
         click(rcNavSettings_);
         drawFrame();
         click(rcSettingsThemes_);
@@ -10787,6 +11981,11 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
         for (int i = 0; i < themeCount(); i++)
             if (themeAt(i).id == id) idx = i;
         if (idx < 0 || idx >= (int)thRowRc_.size()) return false;
+        // The overview shows a sample. Paper and Hyper are reached by opening
+        // their part, where every theme of that part has a rect.
+        thGroup_ = (int)themeDaypartOf(themeAt(idx));
+        thScrollY_ = 0;
+        drawFrame();
         // Hyper sits further down once the list grew past one screen. A click
         // whose centre is outside the body never lands, so scroll the row's
         // top up to the body and draw once more before aiming.
@@ -10800,8 +11999,11 @@ bool PlayerWindow::captureGoTo(const std::string& state) {
         }
         if (idx >= (int)thRowRc_.size()) return false;
         click(thRowRc_[(size_t)idx]);
-        if (std::strcmp(activeThemeId(), id) != 0) return false;
+        // A chip writes both keys. Put them back before this returns; the
+        // shot still shows the click, and a miss must not leave Static saved.
         db_.saveSetting("ui_theme", captureRestoreTheme_);
+        db_.saveSetting("ui_theme_mode", savedMode);
+        if (std::strcmp(activeThemeId(), id) != 0) return false;
         captureThemeArmed_ = true;
         return true;
     }

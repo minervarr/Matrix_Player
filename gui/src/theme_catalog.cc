@@ -283,6 +283,7 @@ std::vector<Palette> gCatalog;
 std::string          gActiveId = "matrix";
 int                  gActiveIndex = 0;
 bool                 gBuilt = false;
+int                  gThemeSkips = 0;
 
 void resetToBuiltins() {
     gCatalog.clear();
@@ -803,6 +804,12 @@ bool applyTheme(const char* id) {
 }
 
 void checkBuiltinThemes() {
+    // Every check in this function is an assert. NDEBUG removes the assert
+    // and leaves the loop variable that existed only to feed it, which is
+    // -Wunused-variable in a Release build. The walk is therefore debug-only.
+    // player_view.cc calls this under the same guard; the symbol stays so a
+    // debug test can link it.
+#ifndef NDEBUG
     std::vector<std::string> closed;
     std::string cur;
     std::vector<std::string> ids;
@@ -822,6 +829,7 @@ void checkBuiltinThemes() {
     std::sort(ids.begin(), ids.end());
     assert(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
     assert(kBuiltinCount == 24);
+#endif
 }
 
 bool parseThemeText(const std::string& text, const std::string& fallbackId,
@@ -903,17 +911,19 @@ bool parseThemeText(const std::string& text, const std::string& fallbackId,
     return true;
 }
 
-int reloadImportedThemes(const std::string& dir) {
-    ensureBuilt();
-    resetToBuiltins();
+int loadThemeDir(const std::string& dir, bool createDir) {
     int added = 0;
     namespace fs = std::filesystem;
     std::error_code ec;
-    fs::create_directories(dir, ec);
-    if (ec) {
-        fprintf(stderr, "[Theme] could not create %s (%s)\n",
-                dir.c_str(), ec.message().c_str());
-        reindexActive();
+    if (createDir) {
+        fs::create_directories(dir, ec);
+        if (ec) {
+            fprintf(stderr, "[Theme] could not create %s (%s)\n",
+                    dir.c_str(), ec.message().c_str());
+            reindexActive();
+            return 0;
+        }
+    } else if (!fs::is_directory(dir, ec) || ec) {
         return 0;
     }
 
@@ -940,6 +950,7 @@ int reloadImportedThemes(const std::string& dir) {
         std::ifstream in(path);
         if (!in) {
             fprintf(stderr, "[Theme] %s: could not read\n", path.string().c_str());
+            ++gThemeSkips;
             continue;
         }
         const std::string text((std::istreambuf_iterator<char>(in)),
@@ -949,23 +960,36 @@ int reloadImportedThemes(const std::string& dir) {
         const std::string stem = path.stem().string();
         if (!parseThemeText(text, stem, parsed, error)) {
             fprintf(stderr, "[Theme] %s: %s\n", path.string().c_str(), error.c_str());
+            ++gThemeSkips;
             continue;
         }
         if (isBuiltinId(parsed.id)) {
             fprintf(stderr, "[Theme] %s: id \"%s\" is built in, left unchanged\n",
                     path.string().c_str(), parsed.id.c_str());
+            ++gThemeSkips;
             continue;
         }
         bool dup = false;
-        for (const Palette& have : imports)
+        for (const Palette& have : gCatalog)
             if (have.id == parsed.id) { dup = true; break; }
+        if (!dup) {
+            for (const Palette& have : imports)
+                if (have.id == parsed.id) { dup = true; break; }
+        }
         if (dup) {
-            fprintf(stderr, "[Theme] %s: id \"%s\" already imported\n",
-                    path.string().c_str(), parsed.id.c_str());
+            // A second file in this folder is a real collision. An id already
+            // loaded from an earlier folder is the listener's copy winning
+            // over the bundled one, and the page should not call that left out.
+            bool inBatch = false;
+            for (const Palette& have : imports)
+                if (have.id == parsed.id) { inBatch = true; break; }
+            if (inBatch) {
+                fprintf(stderr, "[Theme] %s: id \"%s\" already imported\n",
+                        path.string().c_str(), parsed.id.c_str());
+                ++gThemeSkips;
+            }
             continue;
         }
-        fprintf(stderr, "[Theme] loaded %s from %s\n",
-                parsed.id.c_str(), path.string().c_str());
         imports.push_back(std::move(parsed));
     }
     std::sort(imports.begin(), imports.end(),
@@ -973,7 +997,9 @@ int reloadImportedThemes(const std::string& dir) {
 
     // Insert so a group stays one run. An import that names an existing group
     // joins the end of that run; a new group is appended. Processing in id
-    // order keeps each of those runs sorted.
+    // order keeps each of those runs sorted. The page does not read this
+    // order — themeDisplayOrder does — but a group that splits in two would
+    // fail the catalogue's own contiguity check.
     for (Palette& p : imports) {
         int at = (int)gCatalog.size();
         for (int i = 0; i < (int)gCatalog.size(); ++i) {
@@ -986,6 +1012,1218 @@ int reloadImportedThemes(const std::string& dir) {
         gCatalog.insert(gCatalog.begin() + at, std::move(p));
         ++added;
     }
+    if (added > 0)
+        fprintf(stderr, "[Theme] %d from %s\n", added, dir.c_str());
     reindexActive();
     return added;
+}
+
+int reloadImportedThemes(const std::string& dir) {
+    ensureBuilt();
+    resetToBuiltins();
+    gThemeSkips = 0;
+    return loadThemeDir(dir, true);
+}
+
+int addImportedThemes(const std::string& dir, bool createDir) {
+    ensureBuilt();
+    return loadThemeDir(dir, createDir);
+}
+
+namespace {
+
+struct Lab {
+    double L = 0;
+    double a = 0;
+    double b = 0;
+};
+
+double linSrgb(int channel) {
+    const double s = (double)channel / 255.0;
+    return s <= 0.04045 ? s / 12.92
+                        : std::pow((s + 0.055) / 1.055, 2.4);
+}
+
+Lab oklabOf(ColorRef c) {
+    const double R = linSrgb(GetRValue(c));
+    const double G = linSrgb(GetGValue(c));
+    const double B = linSrgb(GetBValue(c));
+    const double l = 0.4122214708 * R + 0.5363325363 * G + 0.0514459929 * B;
+    const double m = 0.2119034982 * R + 0.6806995451 * G + 0.1073969566 * B;
+    const double s = 0.0883024619 * R + 0.2817188376 * G + 0.6299787005 * B;
+    const double l_ = std::cbrt(l);
+    const double m_ = std::cbrt(m);
+    const double s_ = std::cbrt(s);
+    Lab o;
+    o.L = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_;
+    o.a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_;
+    o.b = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_;
+    return o;
+}
+
+double labChroma(const Lab& o) { return std::hypot(o.a, o.b); }
+
+double labDist(const Lab& x, const Lab& y) {
+    const double dL = x.L - y.L;
+    const double da = x.a - y.a;
+    const double db = x.b - y.b;
+    return std::sqrt(dL * dL + da * da + db * db);
+}
+
+int axisBin(double v, bool lightness) {
+    double t = lightness ? v : (v + 0.4) / 0.8;
+    int i = (int)std::floor(t * 8.0);
+    if (i < 0) i = 0;
+    if (i > 7) i = 7;
+    return i;
+}
+
+int meanByte(uint64_t sum, int count) {
+    if (count <= 0) return 0;
+    int v = (int)std::lround((double)sum / (double)count);
+    if (v < 0) v = 0;
+    if (v > 255) v = 255;
+    return v;
+}
+
+bool themeListed(const char* id) {
+    if (!id || !id[0]) return false;
+    ensureBuilt();
+    for (const Palette& p : gCatalog)
+        if (p.id == id) return true;
+    return false;
+}
+
+std::string extLower(const std::filesystem::path& path) {
+    std::string ext = path.extension().string();
+    for (char& c : ext)
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    return ext;
+}
+
+}  // namespace
+
+int themeSkipCount() { return gThemeSkips; }
+
+bool themeIsBuiltinId(const char* id) {
+    return id && id[0] && isBuiltinId(id);
+}
+
+namespace {
+
+std::string canonDaypart(const std::string& group) {
+    size_t a = 0;
+    while (a < group.size() && (group[a] == ' ' || group[a] == '\t' || group[a] == '\r'))
+        ++a;
+    size_t b = group.size();
+    while (b > a && (group[b - 1] == ' ' || group[b - 1] == '\t' || group[b - 1] == '\r'))
+        --b;
+    std::string o;
+    o.reserve(b - a);
+    for (size_t i = a; i < b; ++i) {
+        char c = group[i];
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        o.push_back(c);
+    }
+    return o;
+}
+
+std::string foldThemeName(std::string s) {
+    for (char& c : s)
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    return s;
+}
+
+}  // namespace
+
+ThemeDaypart themeDaypartFromLuma(float luma) {
+    if (luma > kThemeMorningLuma) return ThemeDaypart::Morning;
+    if (luma > kThemeAfternoonLuma) return ThemeDaypart::Afternoon;
+    if (luma > kThemeEveningLuma) return ThemeDaypart::Evening;
+    return ThemeDaypart::Night;
+}
+
+bool themeDaypartFromName(const std::string& group, ThemeDaypart& out) {
+    const std::string g = canonDaypart(group);
+    if (g == "morning")   { out = ThemeDaypart::Morning;   return true; }
+    if (g == "afternoon") { out = ThemeDaypart::Afternoon; return true; }
+    if (g == "evening")   { out = ThemeDaypart::Evening;   return true; }
+    if (g == "night")     { out = ThemeDaypart::Night;     return true; }
+    return false;
+}
+
+ThemeDaypart themeDaypartOf(const Palette& p) {
+    ThemeDaypart named;
+    if (!isBuiltinId(p.id) && themeDaypartFromName(p.group, named))
+        return named;
+    return themeDaypartFromLuma(themeLuma(p.bgMain));
+}
+
+const char* themeDaypartId(ThemeDaypart d) {
+    switch (d) {
+    case ThemeDaypart::Morning:   return "morning";
+    case ThemeDaypart::Afternoon: return "afternoon";
+    case ThemeDaypart::Evening:   return "evening";
+    case ThemeDaypart::Night:     return "night";
+    }
+    return "night";
+}
+
+int themeSwatches(const Palette& p, ColorRef* out, int cap) {
+    if (!out || cap <= 0) return 0;
+    const ColorRef all[] = {
+        p.bgMain, p.bgTrack, p.bgSidebar, p.bgTransport,
+        p.textPrimary, p.textSecondary, p.textDim, p.textAlbum,
+        p.accent, p.hover, p.separator, p.inputBg, p.placeholder, p.tileMore,
+        p.error, p.warning, p.qDsd, p.qDxd, p.qHires, p.qStandard
+    };
+    int n = 0;
+    for (ColorRef c : all) {
+        bool seen = false;
+        for (int i = 0; i < n; ++i)
+            if (out[i] == c) { seen = true; break; }
+        if (seen) continue;
+        if (n >= cap) break;
+        out[n++] = c;
+    }
+    return n;
+}
+
+bool themeIsDay(const Palette& p) { return themeLuma(p.bgMain) > 0.45f; }
+
+bool themeAccentQuiet(const Palette& p) { return labChroma(oklabOf(p.accent)) < 0.04; }
+
+double themeAccentHue(const Palette& p) {
+    const Lab o = oklabOf(p.accent);
+    double h = std::atan2(o.b, o.a);
+    if (h < 0) h += 6.283185307179586;
+    return h;
+}
+
+void themeDisplayOrder(std::vector<int>& out) {
+    ensureBuilt();
+    out.resize(gCatalog.size());
+    for (int i = 0; i < (int)gCatalog.size(); ++i) out[(size_t)i] = i;
+    std::sort(out.begin(), out.end(), [](int ia, int ib) {
+        const Palette& a = gCatalog[(size_t)ia];
+        const Palette& b = gCatalog[(size_t)ib];
+        const int pa = (int)themeDaypartOf(a);
+        const int pb = (int)themeDaypartOf(b);
+        if (pa != pb) return pa < pb;
+        const std::string na = foldThemeName(a.name);
+        const std::string nb = foldThemeName(b.name);
+        if (na != nb) return na < nb;
+        return a.id < b.id;
+    });
+}
+
+// The nearest-theme match reads this. The cover palette does not: a coarse
+// bin cannot tell a sleeve's own marks apart. See paletteFromCover.
+struct CoverBin { int count = 0; uint64_t sr = 0, sg = 0, sb = 0; };
+struct CoverHist {
+    CoverBin bin[512]{};
+    int kept = 0;
+    ColorRef mean(int i) const {
+        const CoverBin& b = bin[i];
+        return RGB(meanByte(b.sr, b.count), meanByte(b.sg, b.count),
+                   meanByte(b.sb, b.count));
+    }
+};
+
+static CoverHist sampleCover(const uint8_t* rgba, int w, int h) {
+    CoverHist hist;
+    if (!rgba || w <= 0 || h <= 0) return hist;
+    const int stepX = std::max(1, w / 32);
+    const int stepY = std::max(1, h / 32);
+    for (int y = 0; y < h; y += stepY) {
+        for (int x = 0; x < w; x += stepX) {
+            const uint8_t* p = rgba + ((size_t)y * (size_t)w + (size_t)x) * 4u;
+            if (p[3] < 128) continue;
+            const Lab o = oklabOf(RGB(p[0], p[1], p[2]));
+            const int idx = axisBin(o.L, true) * 64
+                          + axisBin(o.a, false) * 8
+                          + axisBin(o.b, false);
+            CoverBin& bin = hist.bin[idx];
+            ++bin.count;
+            bin.sr += p[0];
+            bin.sg += p[1];
+            bin.sb += p[2];
+            ++hist.kept;
+        }
+    }
+    return hist;
+}
+
+CoverColors coverColorsFromRgba(const uint8_t* rgba, int w, int h) {
+    CoverColors out;
+    const CoverHist hist = sampleCover(rgba, w, h);
+    if (hist.kept < 16) return out;
+
+    int ground = -1;
+    for (int i = 0; i < 512; ++i) {
+        if (hist.bin[i].count == 0) continue;
+        if (ground < 0 || hist.bin[i].count > hist.bin[ground].count) ground = i;
+    }
+    if (ground < 0) return out;
+
+    auto meanOf = [&](int i) { return hist.mean(i); };
+    out.ground = meanOf(ground);
+    out.ready = true;
+
+    // A second mass steers the accent when it is a color the eye can name,
+    // or when it is ink (the black of a photograph, the white of a page).
+    // A tint between the two gates is a cast from the file: counting it
+    // would paint the accent pink on a sleeve that has no pink.
+    constexpr double kShare = 0.08;
+    constexpr double kColorChroma = 0.03;
+    constexpr double kInkChroma = 0.01;
+    const double share = (double)hist.kept * kShare;
+    int signal = -1;
+    double bestChroma = -1;
+    for (int i = 0; i < 512; ++i) {
+        if (i == ground || hist.bin[i].count <= 0) continue;
+        if ((double)hist.bin[i].count < share) continue;
+        const ColorRef mean = meanOf(i);
+        const double ch = labChroma(oklabOf(mean));
+        if (ch < kColorChroma) continue;
+        const bool better = signal < 0
+            || ch > bestChroma + 1e-9
+            || (std::abs(ch - bestChroma) <= 1e-9 && hist.bin[i].count > hist.bin[signal].count);
+        if (!better) continue;
+        signal = i;
+        bestChroma = ch;
+    }
+    if (signal < 0) {
+        for (int i = 0; i < 512; ++i) {
+            if (i == ground || hist.bin[i].count <= 0) continue;
+            if ((double)hist.bin[i].count < share) continue;
+            if (labChroma(oklabOf(meanOf(i))) >= kInkChroma) continue;
+            if (signal < 0 || hist.bin[i].count > hist.bin[signal].count) signal = i;
+        }
+    }
+    if (signal >= 0) {
+        out.hasSignal = true;
+        out.signal = meanOf(signal);
+    }
+    return out;
+}
+
+int matchTheme(const CoverColors& cover, const Palette* pals, int n) {
+    if (!cover.ready || !pals || n <= 0) return -1;
+    const bool day = themeLuma(cover.ground) > 0.45f;
+    const Lab ground = oklabOf(cover.ground);
+    const Lab signal = cover.hasSignal ? oklabOf(cover.signal) : Lab{};
+    // 0.35 keeps a real second color in the decision without letting it
+    // outvote the page. 0.08 is the charge for inventing a hue when the
+    // cover named none: an accent as loud as Enfocado Light's magenta
+    // (chroma ~0.23) costs about the OKLab step from pure white to Flexoki
+    // Light, so a white sleeve keeps black type and a warm sleeve still
+    // keeps its warm page.
+    constexpr double kAccentPull = 0.35;
+    constexpr double kNeutralAccent = 0.08;
+    int win = -1;
+    double best = 0;
+    for (int i = 0; i < n; ++i) {
+        if (themeIsDay(pals[i]) != day) continue;
+        const Lab accent = oklabOf(pals[i].accent);
+        double score = labDist(oklabOf(pals[i].bgMain), ground);
+        if (cover.hasSignal)
+            score += kAccentPull * labDist(accent, signal);
+        else
+            score += kNeutralAccent * labChroma(accent);
+        const bool better = win < 0
+            || score < best - 1e-9
+            || (std::abs(score - best) <= 1e-9 && pals[i].id < pals[win].id);
+        if (!better) continue;
+        win = i;
+        best = score;
+    }
+    return win;
+}
+
+const char* chooseTheme(ThemeMode mode, bool playing, bool coverReady,
+                        const char* matchId, const char* savedId,
+                        const char* heldId) {
+    if (mode == ThemeMode::Static)
+        return themeListed(savedId) ? savedId : "matrix";
+    if (!playing) return "matrix";
+    if (coverReady) return themeListed(matchId) ? matchId : "matrix";
+    return themeListed(heldId) ? heldId : "matrix";
+}
+
+double encodeLin(double c) {
+    if (c <= 0.0) return 0.0;
+    if (c >= 1.0) return 255.0;
+    const double s = c <= 0.0031308 ? 12.92 * c
+                                    : 1.055 * std::pow(c, 1.0 / 2.4) - 0.055;
+    const double clamped = std::min(1.0, std::max(0.0, s));
+    return std::lround(clamped * 255.0);
+}
+
+Rgb rgbFromOklab(Lab o) {
+    const double l_ = o.L + 0.3963377774 * o.a + 0.2158037573 * o.b;
+    const double m_ = o.L - 0.1055613458 * o.a - 0.0638541728 * o.b;
+    const double s_ = o.L - 0.0894841775 * o.a - 1.2914855480 * o.b;
+    const double l = l_ * l_ * l_;
+    const double m = m_ * m_ * m_;
+    const double s = s_ * s_ * s_;
+    const double r =  4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+    const double g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+    const double b = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
+    return { (int)encodeLin(r), (int)encodeLin(g), (int)encodeLin(b) };
+}
+
+double hueOf(const Lab& o) {
+    double h = std::atan2(o.b, o.a);
+    if (h < 0) h += 6.283185307179586;
+    return h;
+}
+
+double hueGap(double a, double b) {
+    double d = std::fabs(a - b);
+    if (d > 3.141592653589793) d = 6.283185307179586 - d;
+    return d;
+}
+
+// Lightness only. a and b stay, so a red stays red and cream type stays cream.
+// An exact source that already clears `need` is returned unchanged — a
+// round trip through OKLab would repaint a color the sleeve actually used.
+Rgb forceReadable(Rgb src, Rgb page, Rgb trans, double need, bool toWhite) {
+    if (contrastD(src, page) >= need && contrastD(src, trans) >= need)
+        return src;
+    const Lab o = oklabOf(pack(src));
+    const double dest = toWhite ? 1.0 : 0.0;
+    auto at = [&](double t) {
+        Lab x = o;
+        x.L = o.L + (dest - o.L) * t;
+        if (x.L < 0) x.L = 0;
+        if (x.L > 1) x.L = 1;
+        return x;
+    };
+    auto ok = [&](const Lab& x) {
+        const Rgb c = rgbFromOklab(x);
+        return contrastD(c, page) >= need && contrastD(c, trans) >= need;
+    };
+    if (!ok(at(1.0))) return rgbFromOklab(at(1.0));
+    double lo = 0, hi = 1;
+    Lab best = at(1.0);
+    for (int i = 0; i < 22; ++i) {
+        const double mid = (lo + hi) * 0.5;
+        const Lab x = at(mid);
+        if (ok(x)) { best = x; hi = mid; }
+        else lo = mid;
+    }
+    return rgbFromOklab(best);
+}
+
+// Walk lightness from `src` toward the page until contrast against the page
+// is as close as possible to `target`, without dropping under 4.52 on either
+// surface. Hue stays on `src`.
+Rgb pullReadable(Rgb src, Rgb page, Rgb trans, double target) {
+    const Lab from = oklabOf(pack(src));
+    const Lab to = oklabOf(pack(page));
+    Rgb best = src;
+    double bestErr = 1e9;
+    for (int i = 0; i <= 48; ++i) {
+        Lab o = from;
+        o.L = from.L + (to.L - from.L) * (i / 48.0);
+        const Rgb c = rgbFromOklab(o);
+        if (contrastD(c, page) < 4.52 || contrastD(c, trans) < 4.52) continue;
+        const double err = std::fabs(contrastD(c, page) - target);
+        if (err < bestErr) { bestErr = err; best = c; }
+    }
+    return best;
+}
+
+bool ladderFits(Rgb primary, Rgb secondary, Rgb dim, Rgb page, Rgb trans) {
+    const double cp = contrastD(primary, page);
+    const double cs = contrastD(secondary, page);
+    const double cd = contrastD(dim, page);
+    if (!(cp > cs && cs > cd)) return false;
+    if (distD(primary, secondary) < 28) return false;
+    if (distD(secondary, dim) < 22) return false;
+    if (contrastD(primary, trans) < 4.55) return false;
+    if (contrastD(secondary, trans) < 4.55) return false;
+    if (contrastD(dim, trans) < 4.55) return false;
+    if (cd < 4.55) return false;
+    return true;
+}
+
+bool buildLadder(Rgb ink, Rgb page, Rgb trans, bool light,
+                 Rgb& primary, Rgb& secondary, Rgb& dim, Rgb& album) {
+    primary = forceReadable(ink, page, trans, 8.0, !light);
+    if (contrastD(primary, page) < 4.52 || contrastD(primary, trans) < 4.52)
+        return false;
+    const double pc = contrastD(primary, page);
+    const double secTarget = std::max(6.2, std::min(pc - 2.6, 8.0));
+    secondary = pullReadable(primary, page, trans, secTarget);
+    const double sc = contrastD(secondary, page);
+    const double dimTarget = std::max(4.72, std::min(sc - 1.8, 5.15));
+    dim = pullReadable(secondary, page, trans, dimTarget);
+    album = forceReadable(primary, page, trans, std::min(15.0, pc + 1.0), !light);
+    if (contrastD(album, page) < 4.52) album = primary;
+    if (ladderFits(primary, secondary, dim, page, trans)) return true;
+    for (int k = 0; k < 8; ++k) {
+        secondary = pullReadable(secondary, page, trans,
+                                 std::max(4.8, contrastD(secondary, page) - 0.55));
+        dim = pullReadable(dim, page, trans,
+                           std::max(4.6, contrastD(dim, page) - 0.4));
+        if (ladderFits(primary, secondary, dim, page, trans)) return true;
+    }
+    return false;
+}
+
+Lab mixLab(Lab a, Lab b, double t) {
+    Lab o;
+    o.L = a.L + (b.L - a.L) * t;
+    o.a = a.a + (b.a - a.a) * t;
+    o.b = a.b + (b.b - a.b) * t;
+    return o;
+}
+
+double clamp01(double v) {
+    if (v < 0) return 0;
+    if (v > 1) return 1;
+    return v;
+}
+
+// One pigment found in the sleeve. `n` is area. `witness` counts regions
+// where this color is the brightest mark in that region, which is how a thin
+// gold line survives next to a field that outweighs it.
+struct CoverVoice {
+    double sr = 0, sg = 0, sb = 0;
+    double sL = 0, sa = 0, sbL = 0;
+    int n = 0;
+    int center = 0;
+    int rim = 0;
+    int witness = 0;
+    Rgb rgb{};
+    Lab lab{};
+};
+
+struct CoverPx {
+    Lab lab;
+    int r, g, b;
+    int cell;
+    int center;
+    int rim;
+    int peak;
+};
+
+constexpr int kCoverCells = 12;
+constexpr int kCoverPer = 10;
+constexpr int kVoiceCap = 36;
+
+void voiceMerge(CoverVoice& a, const CoverVoice& b) {
+    a.sr += b.sr;
+    a.sg += b.sg;
+    a.sb += b.sb;
+    a.sL += b.sL;
+    a.sa += b.sa;
+    a.sbL += b.sbL;
+    a.n += b.n;
+    a.center += b.center;
+    a.rim += b.rim;
+    a.witness += b.witness;
+}
+
+Lab voiceCenter(const CoverVoice& v) {
+    return Lab{ v.sL / v.n, v.sa / v.n, v.sbL / v.n };
+}
+
+double voiceTau(const Lab& a, const Lab& b) {
+    const double meanL = std::max(0.0, 0.5 * (a.L + b.L));
+    const bool neutral = labChroma(a) < 0.025 && labChroma(b) < 0.025;
+    // One pigment in daylight is about two just-noticeable OKLab steps.
+    // In the dark the eye stops splitting shades the metric still splits,
+    // so a black and the blue living inside it can be one voice. The cap
+    // stays under the distance of a red that actually leaves the black.
+    const double widen = meanL >= 0.35 ? 1.0 : (0.35 / std::max(meanL, 0.12));
+    double tau = (neutral ? 0.055 : 0.040) * std::min(widen, 2.2);
+    if (tau > 0.10) tau = 0.10;
+    return tau;
+}
+
+void voiceAdd(CoverVoice& v, const CoverPx& s) {
+    v.sr += s.r;
+    v.sg += s.g;
+    v.sb += s.b;
+    v.sL += s.lab.L;
+    v.sa += s.lab.a;
+    v.sbL += s.lab.b;
+    v.n += 1;
+    v.center += s.center;
+    v.rim += s.rim;
+}
+
+void voiceFinish(CoverVoice& v) {
+    if (v.n <= 0) return;
+    auto byte = [](double sum, int n) {
+        int c = (int)std::lround(sum / (double)n);
+        if (c < 0) c = 0;
+        if (c > 255) c = 255;
+        return c;
+    };
+    v.rgb = { byte(v.sr, v.n), byte(v.sg, v.n), byte(v.sb, v.n) };
+    v.lab = oklabOf(pack(v.rgb));
+}
+
+int nearestVoice(const Lab& lab, const std::vector<CoverVoice>& vs, double tau) {
+    int best = -1;
+    double bd = 1e9;
+    for (int i = 0; i < (int)vs.size(); ++i) {
+        if (vs[(size_t)i].n <= 0 && tau < 0) continue;
+        const Lab c = vs[(size_t)i].n > 0
+            ? Lab{ vs[(size_t)i].sL / vs[(size_t)i].n,
+                   vs[(size_t)i].sa / vs[(size_t)i].n,
+                   vs[(size_t)i].sbL / vs[(size_t)i].n }
+            : vs[(size_t)i].lab;
+        const double d = labDist(lab, c);
+        const double limit = tau < 0 ? 1e9 : voiceTau(lab, c);
+        if (tau >= 0 && d > limit) continue;
+        if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+}
+
+// Every twelfth of the sleeve is sampled, so a mark in a corner is not
+// skipped because a grid happened to step over it. A pixel that is the most
+// saturated point of its region, and clearly more saturated than that
+// region, is a witness: the same pigment witnessed twice is a real mark,
+// one noisy pixel is not.
+std::vector<CoverVoice> readCoverVoices(const uint8_t* rgba, int w, int h) {
+    std::vector<CoverVoice> empty;
+    if (!rgba || w <= 0 || h <= 0) return empty;
+    std::vector<CoverPx> px;
+    px.reserve((size_t)kCoverCells * kCoverCells * kCoverPer);
+    struct CellAcc { double sumC = 0; int n = 0; int peak = -1; double peakC = -1; };
+    CellAcc cells[(size_t)kCoverCells * kCoverCells];
+
+    for (int cy = 0; cy < kCoverCells; ++cy) {
+        const int y0 = (int)((long long)cy * h / kCoverCells);
+        const int y1 = (int)((long long)(cy + 1) * h / kCoverCells);
+        if (y1 <= y0) continue;
+        const int ys = std::max(1, (y1 - y0) / kCoverPer);
+        for (int cx = 0; cx < kCoverCells; ++cx) {
+            const int x0 = (int)((long long)cx * w / kCoverCells);
+            const int x1 = (int)((long long)(cx + 1) * w / kCoverCells);
+            if (x1 <= x0) continue;
+            const int xs = std::max(1, (x1 - x0) / kCoverPer);
+            CellAcc& cell = cells[(size_t)cy * kCoverCells + cx];
+            for (int y = y0; y < y1; y += ys) {
+                for (int x = x0; x < x1; x += xs) {
+                    const uint8_t* p = rgba + ((size_t)y * (size_t)w + (size_t)x) * 4u;
+                    if (p[3] < 128) continue;
+                    CoverPx s;
+                    s.r = p[0];
+                    s.g = p[1];
+                    s.b = p[2];
+                    s.lab = oklabOf(RGB(p[0], p[1], p[2]));
+                    s.cell = cy * kCoverCells + cx;
+                    const bool inCenter = x >= w / 4 && x < w - w / 4
+                                        && y >= h / 4 && y < h - h / 4;
+                    const bool onRim = x < w / 12 || x >= w - w / 12
+                                    || y < h / 12 || y >= h - h / 12;
+                    s.center = inCenter ? 1 : 0;
+                    s.rim = onRim ? 1 : 0;
+                    s.peak = 0;
+                    const double ch = labChroma(s.lab);
+                    cell.sumC += ch;
+                    cell.n += 1;
+                    if (ch > cell.peakC) {
+                        cell.peakC = ch;
+                        cell.peak = (int)px.size();
+                    }
+                    px.push_back(s);
+                }
+            }
+        }
+    }
+    if ((int)px.size() < 16) return empty;
+
+    for (const CellAcc& cell : cells) {
+        if (cell.n < 4 || cell.peak < 0) continue;
+        const double mean = cell.sumC / (double)cell.n;
+        if (cell.peakC >= 0.08 && cell.peakC >= mean + 0.04)
+            px[(size_t)cell.peak].peak = 1;
+    }
+
+    std::vector<CoverVoice> vs;
+    vs.reserve(kVoiceCap);
+    for (const CoverPx& s : px) {
+        int at = nearestVoice(s.lab, vs, 1);
+        if (at < 0) {
+            // A new hue that is more its own color than the closest pair
+            // already stored takes a slot. The pair collapses. Grain yields
+            // to a mark that shows up late in the picture.
+            if ((int)vs.size() >= kVoiceCap) {
+                int ia = -1, ib = -1;
+                double bd = 1e9;
+                for (int i = 0; i < (int)vs.size(); ++i) {
+                    for (int j = i + 1; j < (int)vs.size(); ++j) {
+                        const double d = labDist(voiceCenter(vs[(size_t)i]),
+                                                  voiceCenter(vs[(size_t)j]));
+                        if (d < bd) { bd = d; ia = i; ib = j; }
+                    }
+                }
+                const int near = nearestVoice(s.lab, vs, -1);
+                const double dn = near >= 0
+                    ? labDist(s.lab, voiceCenter(vs[(size_t)near])) : 1e9;
+                if (ia >= 0 && bd + 1e-9 < dn && bd < 0.12) {
+                    voiceMerge(vs[(size_t)ia], vs[(size_t)ib]);
+                    vs.erase(vs.begin() + ib);
+                    CoverVoice born;
+                    voiceAdd(born, s);
+                    vs.push_back(born);
+                    continue;
+                }
+                at = near;
+            } else {
+                CoverVoice born;
+                voiceAdd(born, s);
+                vs.push_back(born);
+                continue;
+            }
+        }
+        if (at >= 0) voiceAdd(vs[(size_t)at], s);
+    }
+
+    for (int pass = 0; pass < 3; ++pass) {
+        std::vector<CoverVoice> next(vs.size());
+        for (const CoverPx& s : px) {
+            const int at = nearestVoice(s.lab, vs, -1);
+            if (at >= 0) voiceAdd(next[(size_t)at], s);
+        }
+        vs.clear();
+        for (CoverVoice& v : next)
+            if (v.n > 0) vs.push_back(v);
+        if (vs.empty()) return empty;
+    }
+
+    bool counted[kVoiceCap][kCoverCells * kCoverCells] = {};
+    for (const CoverPx& s : px) {
+        if (!s.peak) continue;
+        const int at = nearestVoice(s.lab, vs, -1);
+        if (at < 0 || at >= kVoiceCap) continue;
+        if (counted[at][s.cell]) continue;
+        counted[at][s.cell] = true;
+        vs[(size_t)at].witness += 1;
+    }
+    for (CoverVoice& v : vs) voiceFinish(v);
+    return vs;
+}
+
+int pageVoice(const std::vector<CoverVoice>& vs) {
+    int best = -1;
+    for (int i = 0; i < (int)vs.size(); ++i) {
+        if (best < 0 || vs[(size_t)i].n > vs[(size_t)best].n) best = i;
+    }
+    return best;
+}
+
+double voiceShare(const CoverVoice& v, int total) {
+    return total > 0 ? (double)v.n / (double)total : 0;
+}
+
+// How loudly a pigment separates from the field it sits on.
+// OKLab chroma treats a red dot on black and a night blue on that same
+// black as cousins. The eye does not. Two things it actually uses: the
+// luminance step (the red has one, the night blue does not) and
+// colorfulness, which collapses as the pigment gets dark. A night blue
+// on black scores near 0.02. A red on that black scores near 0.38.
+// Anything under the floor is the field.
+constexpr double kNoticeFloor = 0.04;
+
+double voiceNotice(const Lab& lab, Rgb rgb, const Lab& page, Rgb pageRgb) {
+    const double gap = labDist(lab, page);
+    const double seen = labChroma(lab) * std::pow(std::max(lab.L, 0.0), 0.70);
+    const double lift = std::max(0.0, contrastD(rgb, pageRgb) - 1.0);
+    if (lift <= 0.0 || gap <= 0.0) return 0.0;
+    return gap * (0.20 + seen) * std::pow(lift, 0.72);
+}
+
+// A voice the eye cannot pick out of the page is the page. Folding it
+// in is what keeps a blue that lives inside the black from becoming a
+// second color. A red dot stays, because its notice clears the floor.
+void foldUnseen(std::vector<CoverVoice>& vs) {
+    if (vs.size() < 2) return;
+    const int page = pageVoice(vs);
+    if (page < 0) return;
+    const Lab pageLab = vs[(size_t)page].lab;
+    const Rgb pageRgb = vs[(size_t)page].rgb;
+    std::vector<CoverVoice> kept;
+    kept.reserve(vs.size());
+    CoverVoice ground = vs[(size_t)page];
+    for (int i = 0; i < (int)vs.size(); ++i) {
+        if (i == page) continue;
+        const CoverVoice& v = vs[(size_t)i];
+        if (voiceNotice(v.lab, v.rgb, pageLab, pageRgb) < kNoticeFloor) {
+            voiceMerge(ground, v);
+            continue;
+        }
+        kept.push_back(v);
+    }
+    voiceFinish(ground);
+    kept.push_back(std::move(ground));
+    vs.swap(kept);
+}
+
+// Notice is the sentence. Area and the middle of the sleeve break ties.
+// A gray is ink, not a mark, however bright. A single noisy pixel is
+// neither: four samples of one popping hue is a dot, one sample is grain.
+double voiceScore(const CoverVoice& v, const Lab& page, Rgb pageRgb, int total) {
+    const double share = voiceShare(v, total);
+    const double chroma = labChroma(v.lab);
+    if (chroma < 0.03) return -1;
+    const double notice = voiceNotice(v.lab, v.rgb, page, pageRgb);
+    if (notice < kNoticeFloor) return -1;
+    if (share < 0.008 && v.witness < 2 && v.n < 4) return -1;
+    double presence = share;
+    if (v.witness >= 2)
+        presence = std::max(presence, std::min(0.08, 0.015 * (double)v.witness));
+    else if (v.witness >= 1 && notice >= 0.12 && share < 0.02)
+        presence = std::max(presence, 0.018);
+    const double centerFrac = v.n > 0 ? (double)v.center / (double)v.n : 0;
+    const double rimFrac = v.n > 0 ? (double)v.rim / (double)v.n : 0;
+    double place = 1.0 + 0.50 * centerFrac;
+    if (rimFrac > 0.72 && share < 0.18) place *= 0.55;
+    return notice * std::pow(std::max(presence, 1e-6), 0.22) * place;
+}
+
+bool hueNear(const Lab& lab, double target, double window, double minChroma) {
+    if (labChroma(lab) < minChroma) return false;
+    return hueGap(hueOf(lab), target) <= window;
+}
+
+int findHueVoice(const std::vector<CoverVoice>& vs, int total, int page, int skip,
+                 double target, double window, double minShare) {
+    int best = -1;
+    for (int i = 0; i < (int)vs.size(); ++i) {
+        if (i == page || i == skip) continue;
+        const CoverVoice& v = vs[(size_t)i];
+        if (!hueNear(v.lab, target, window, 0.045)) continue;
+        if (voiceShare(v, total) < minShare && v.witness < 2) continue;
+        if (best < 0 || v.n > vs[(size_t)best].n) best = i;
+    }
+    return best;
+}
+
+Rgb readableVoice(const CoverVoice& v, Rgb page, Rgb trans, double need, bool toWhite,
+                  double maxMove) {
+    const Rgb pushed = forceReadable(v.rgb, page, trans, need, toWhite);
+    const Lab src = v.lab;
+    const Lab got = oklabOf(pack(pushed));
+    if (std::fabs(got.L - src.L) > maxMove && contrastD(v.rgb, page) < need)
+        return Rgb{-1, -1, -1};
+    if (labChroma(src) >= 0.05 && labChroma(got) < 0.035)
+        return Rgb{-1, -1, -1};
+    return pushed;
+}
+
+bool tuneMarks(Rgb track, Rgb accent, const std::vector<CoverVoice>& vs,
+               int total, int page, int accentIdx, Rgb& q0, Rgb& q1, Rgb& q2, Rgb& q3) {
+    const bool lightTrack = lumaD(track) > 0.45;
+    const Rgb pole = lightTrack ? Rgb{0, 0, 0} : Rgb{255, 255, 255};
+    const Rgb sem[4] = {
+        lightTrack ? Rgb{20, 20, 20} : Rgb{255, 255, 255},
+        lightTrack ? Rgb{140, 70, 0} : Rgb{255, 165, 0},
+        lightTrack ? Rgb{0, 105, 115} : Rgb{0, 255, 255},
+        lightTrack ? Rgb{120, 96, 0} : Rgb{255, 255, 0}
+    };
+    Rgb marks[4];
+    for (int m = 0; m < 4; ++m) {
+        Rgb chosen = sem[m];
+        if (m == 0 && !lightTrack) {
+            int paper = -1;
+            for (int i = 0; i < (int)vs.size(); ++i) {
+                if (i == page) continue;
+                const CoverVoice& v = vs[(size_t)i];
+                if (labChroma(v.lab) >= 0.06) continue;
+                if (v.lab.L < vs[(size_t)page].lab.L + 0.25) continue;
+                if (voiceShare(v, total) < 0.03) continue;
+                if (paper < 0 || v.n > vs[(size_t)paper].n) paper = i;
+            }
+            if (paper >= 0) chosen = vs[(size_t)paper].rgb;
+        } else if (m > 0) {
+            const Lab semLab = oklabOf(pack(sem[m]));
+            const int src = findHueVoice(vs, total, page, accentIdx,
+                                          hueOf(semLab), 0.40, 0.012);
+            if (src >= 0 && labChroma(semLab) >= 0.04) {
+                const double ch = labChroma(semLab);
+                const double ang = hueOf(vs[(size_t)src].lab);
+                Lab nudged = semLab;
+                nudged.a = std::cos(ang) * ch;
+                nudged.b = std::sin(ang) * ch;
+                chosen = rgbFromOklab(nudged);
+            }
+        }
+        marks[m] = pushUntil(chosen, pole, track, track, 3.05);
+    }
+    if (labChroma(oklabOf(pack(accent))) >= 0.04) {
+        for (Rgb& mark : marks) {
+            if (distD(mark, accent) >= 36) continue;
+            const Rgb pulled = pushUntil(mixD(mark, pole, 0.40), pole, track, track, 3.05);
+            mark = pulled;
+        }
+    }
+    for (int pass = 0; pass < 4; ++pass) {
+        bool spaced = true;
+        for (int i = 0; i < 4 && spaced; ++i)
+            for (int j = i + 1; j < 4; ++j)
+                if (distD(marks[i], marks[j]) < 24) spaced = false;
+        if (spaced) break;
+        for (int m = 0; m < 4; ++m)
+            marks[m] = pushUntil(sem[m], pole, track, track, 3.05);
+    }
+    for (int i = 0; i < 4; ++i) {
+        if (contrastD(marks[i], track) < 3.0) return false;
+        for (int j = i + 1; j < 4; ++j)
+            if (distD(marks[i], marks[j]) < 24) return false;
+    }
+    q0 = marks[0];
+    q1 = marks[1];
+    q2 = marks[2];
+    q3 = marks[3];
+    return true;
+}
+
+bool coverPaletteAt(const std::vector<CoverVoice>& vs, int total, int pageIdx,
+                    double shift, Palette& out) {
+    const CoverVoice& ground = vs[(size_t)pageIdx];
+    const bool light = lumaD(ground.rgb) > 0.45;
+    Lab pageLab = ground.lab;
+    Rgb pageRgb = ground.rgb;
+    if (shift > 0) {
+        const double dest = light ? 0.97 : 0.12;
+        pageLab.L = clamp01(ground.lab.L + (dest - ground.lab.L) * shift);
+        pageRgb = rgbFromOklab(pageLab);
+        pageLab = oklabOf(pack(pageRgb));
+    }
+
+    int inkIdx = -1;
+    double inkScore = -1;
+    for (int i = 0; i < (int)vs.size(); ++i) {
+        if (i == pageIdx) continue;
+        const CoverVoice& v = vs[(size_t)i];
+        if (labChroma(v.lab) >= 0.08) continue;
+        const double share = voiceShare(v, total);
+        if (share < 0.03 && v.witness < 2) continue;
+        const double gap = light ? (pageLab.L - v.lab.L) : (v.lab.L - pageLab.L);
+        if (gap < 0.15) continue;
+        const double score = gap * std::sqrt(std::max(share, 0.02));
+        if (score > inkScore) { inkScore = score; inkIdx = i; }
+    }
+    Rgb ink = light ? Rgb{0, 0, 0} : Rgb{255, 255, 255};
+    if (inkIdx >= 0) {
+        ink = vs[(size_t)inkIdx].rgb;
+    } else {
+        // No real ink. A small warm or cool pigment still tints the pole,
+        // so a black sleeve with cream type does not become pure white.
+        int tint = -1;
+        double tintGap = 0;
+        for (int i = 0; i < (int)vs.size(); ++i) {
+            if (i == pageIdx) continue;
+            const CoverVoice& v = vs[(size_t)i];
+            if (labChroma(v.lab) >= 0.08) continue;
+            const double gap = std::fabs(v.lab.L - pageLab.L);
+            if (gap > tintGap) { tintGap = gap; tint = i; }
+        }
+        if (tint >= 0 && tintGap >= 0.12) {
+            Lab o = oklabOf(pack(ink));
+            o.a = vs[(size_t)tint].lab.a * 0.35;
+            o.b = vs[(size_t)tint].lab.b * 0.35;
+            o.L = light ? 0.0 : 1.0;
+            const Rgb tinted = rgbFromOklab(o);
+            if (labChroma(oklabOf(pack(tinted))) < 0.08) ink = tinted;
+        }
+    }
+
+    std::vector<int> marks;
+    marks.reserve(vs.size());
+    for (int i = 0; i < (int)vs.size(); ++i) {
+        if (i == pageIdx) continue;
+        if (voiceScore(vs[(size_t)i], pageLab, pageRgb, total) < 0) continue;
+        marks.push_back(i);
+    }
+    std::sort(marks.begin(), marks.end(), [&](int a, int b) {
+        const double sa = voiceScore(vs[(size_t)a], pageLab, pageRgb, total);
+        const double sb = voiceScore(vs[(size_t)b], pageLab, pageRgb, total);
+        if (std::fabs(sa - sb) > 1e-12) return sa > sb;
+        if (vs[(size_t)a].n != vs[(size_t)b].n) return vs[(size_t)a].n > vs[(size_t)b].n;
+        return a < b;
+    });
+
+    int accentIdx = marks.empty() ? -1 : marks[0];
+    // A red that merely ties another mark is the error signal. A red that
+    // is the sleeve — clearly ahead of everything else — stays the accent.
+    if (accentIdx >= 0 && marks.size() >= 2
+        && hueNear(vs[(size_t)accentIdx].lab, 0.0, 0.50, 0.05)) {
+        const double top = voiceScore(vs[(size_t)accentIdx], pageLab, pageRgb, total);
+        for (size_t k = 1; k < marks.size(); ++k) {
+            const int alt = marks[k];
+            if (hueNear(vs[(size_t)alt].lab, 0.0, 0.50, 0.05)) continue;
+            const double altScore = voiceScore(vs[(size_t)alt], pageLab, pageRgb, total);
+            if (altScore >= top * 0.75 && top < altScore * 1.6) {
+                accentIdx = alt;
+                break;
+            }
+        }
+    }
+
+    int field2 = -1, field3 = -1;
+    for (int i = 0; i < (int)vs.size(); ++i) {
+        if (i == pageIdx) continue;
+        if (voiceShare(vs[(size_t)i], total) < 0.06) continue;
+        if (labDist(vs[(size_t)i].lab, pageLab) < 0.06) continue;
+        if (voiceNotice(vs[(size_t)i].lab, vs[(size_t)i].rgb, pageLab, pageRgb) < kNoticeFloor)
+            continue;
+        if (field2 < 0 || vs[(size_t)i].n > vs[(size_t)field2].n) {
+            field3 = field2;
+            field2 = i;
+        } else if (field3 < 0 || vs[(size_t)i].n > vs[(size_t)field3].n) {
+            field3 = i;
+        }
+    }
+    if (field3 >= 0 && field2 >= 0
+        && labDist(vs[(size_t)field3].lab, vs[(size_t)field2].lab) < 0.05)
+        field3 = -1;
+
+    auto admit = [&](const Lab& base, int field) {
+        if (field < 0) return base;
+        const double jump = std::fabs(vs[(size_t)field].lab.L - base.L);
+        double mt = 0.42;
+        if (jump > 0.35) mt = 0.28;
+        if (jump > 0.55) mt = 0.18;
+        Lab o = mixLab(base, vs[(size_t)field].lab, mt);
+        o.L = clamp01(o.L);
+        return o;
+    };
+    Lab trackLab = pageLab;
+    trackLab.L = clamp01(pageLab.L + (light ? -0.04 : 0.05));
+    trackLab = admit(trackLab, field2);
+    Lab sideLab = pageLab;
+    sideLab.L = clamp01(pageLab.L + (light ? -0.03 : 0.032));
+    sideLab = admit(sideLab, field3);
+    Lab transLab = pageLab;
+    transLab.L = clamp01(pageLab.L + (light ? -0.05 : 0.018));
+    if (!light) {
+        int dark = -1;
+        for (int i = 0; i < (int)vs.size(); ++i) {
+            if (i == pageIdx) continue;
+            if (vs[(size_t)i].lab.L > pageLab.L - 0.08) continue;
+            if (voiceShare(vs[(size_t)i], total) < 0.05) continue;
+            if (dark < 0 || vs[(size_t)i].n > vs[(size_t)dark].n) dark = i;
+        }
+        if (dark >= 0) transLab = mixLab(transLab, vs[(size_t)dark].lab, 0.35);
+    }
+    // The bar is its own surface. A second field the eye can separate
+    // from the page is admitted into it, less so when that field is a
+    // bright panel on a dark sleeve — the ladder still has to clear.
+    if (field2 >= 0) {
+        const double jump = std::fabs(vs[(size_t)field2].lab.L - transLab.L);
+        double mt = 0.50;
+        if (jump > 0.35) mt = 0.26;
+        if (jump > 0.55) mt = 0.14;
+        const double seen = voiceNotice(vs[(size_t)field2].lab, vs[(size_t)field2].rgb,
+                                         pageLab, pageRgb);
+        if (seen >= 0.08) transLab = mixLab(transLab, vs[(size_t)field2].lab, mt);
+    }
+    transLab.L = clamp01(transLab.L);
+
+    Rgb trackRgb = rgbFromOklab(trackLab);
+    Rgb sideRgb = rgbFromOklab(sideLab);
+    Rgb transRgb = rgbFromOklab(transLab);
+    Rgb primary{}, secondary{}, dim{}, album{};
+    bool ladder = false;
+    for (int n = 0; n < 6; ++n) {
+        if (buildLadder(ink, pageRgb, transRgb, light, primary, secondary, dim, album)
+            && contrastD(dim, transRgb) >= 4.55) {
+            ladder = true;
+            break;
+        }
+        Lab t = oklabOf(pack(transRgb));
+        t.L = clamp01(t.L + (light ? 0.05 : -0.05));
+        transRgb = rgbFromOklab(t);
+    }
+    if (!ladder) return false;
+    if (!ladderFits(primary, secondary, dim, pageRgb, transRgb)) return false;
+
+    const bool toWhite = !light;
+    int titleIdx = -1;
+    for (int id : marks) {
+        if (id == accentIdx) continue;
+        if (labChroma(vs[(size_t)id].lab) < 0.045) continue;
+        const Rgb tried = readableVoice(vs[(size_t)id], pageRgb, transRgb, 4.65, toWhite, 0.35);
+        if (tried.r < 0) continue;
+        if (distD(tried, primary) < 20) continue;
+        if (contrastD(tried, pageRgb) < 4.6) continue;
+        album = tried;
+        titleIdx = id;
+        break;
+    }
+
+    Rgb accent = ink;
+    if (accentIdx >= 0) {
+        const Rgb tried = readableVoice(vs[(size_t)accentIdx], pageRgb, transRgb, 4.55, toWhite, 0.55);
+        if (tried.r >= 0 && labChroma(oklabOf(pack(tried))) >= 0.04)
+            accent = tried;
+        else
+            accentIdx = -1;
+    }
+    accent = forceReadable(accent, pageRgb, transRgb, 4.55, toWhite);
+
+    int tileIdx = -1;
+    int ruleIdx = -1;
+    for (int id : marks) {
+        if (id == accentIdx || id == titleIdx) continue;
+        if (tileIdx < 0) tileIdx = id;
+        else if (ruleIdx < 0) { ruleIdx = id; break; }
+    }
+    if (tileIdx < 0) tileIdx = titleIdx >= 0 ? titleIdx : accentIdx;
+    int washIdx = -1;
+    for (int id : marks) {
+        if (id == accentIdx || id == titleIdx || id == tileIdx || id == ruleIdx) continue;
+        washIdx = id;
+        break;
+    }
+    // A second mark stays recognizable. Mixing it halfway back into the
+    // page was how two sleeves with different figures came out one wash.
+    Lab tileLab = mixLab(oklabOf(pack(accent)), pageLab, 0.55);
+    if (tileIdx >= 0)
+        tileLab = mixLab(vs[(size_t)tileIdx].lab, pageLab, 0.22);
+    if (ruleIdx < 0) ruleIdx = tileIdx;
+
+    Lab sepLab = mixLab(pageLab, oklabOf(pack(dim)), 0.22);
+    if (ruleIdx >= 0) sepLab = mixLab(sepLab, vs[(size_t)ruleIdx].lab, 0.34);
+    for (int n = 0; n < 8; ++n) {
+        if (contrastD(rgbFromOklab(sepLab), pageRgb) >= 1.25) break;
+        sepLab = mixLab(sepLab, oklabOf(pack(dim)), 0.18);
+    }
+
+    auto surface = [&](double dL, int tint, double amt) {
+        Lab o = pageLab;
+        o.L = clamp01(pageLab.L + dL);
+        if (tint >= 0) o = mixLab(o, vs[(size_t)tint].lab, amt);
+        return rgbFromOklab(o);
+    };
+    const int tint = tileIdx;
+    const int hoverTint = washIdx >= 0 ? washIdx : tint;
+    const Rgb hover = surface(light ? -0.06 : 0.08, hoverTint, washIdx >= 0 ? 0.34 : 0.22);
+    const Rgb inp = surface(light ? -0.03 : 0.045, tint, 0.18);
+    const Rgb ph = surface(light ? -0.05 : 0.065, ruleIdx >= 0 ? ruleIdx : tint, 0.14);
+
+    const double amberHue = hueOf(oklabOf(pack(Rgb{224, 180, 40})));
+    int redIdx = findHueVoice(vs, total, pageIdx, accentIdx, 0.0, 0.55, 0.012);
+    int amberIdx = findHueVoice(vs, total, pageIdx, accentIdx, amberHue, 0.70, 0.012);
+    Rgb errorC = redIdx >= 0 ? vs[(size_t)redIdx].rgb : Rgb{220, 70, 70};
+    Rgb warning = amberIdx >= 0 ? vs[(size_t)amberIdx].rgb : Rgb{224, 180, 40};
+    errorC = forceReadable(errorC, pageRgb, transRgb, 4.55, toWhite);
+    warning = forceReadable(warning, pageRgb, transRgb, 4.55, toWhite);
+    // A gold accent and the house amber are the same sentence. Walk the
+    // warning toward red, and the error toward the ink pole, until each
+    // stands apart from the accent. Hue moves; the role does not.
+    for (int n = 0; n < 4 && distD(warning, accent) < 48; ++n)
+        warning = forceReadable(mixD(Rgb{200, 55, 45}, warning, 0.35),
+                                pageRgb, transRgb, 4.55, toWhite);
+    for (int n = 0; n < 4 && distD(errorC, accent) < 48; ++n) {
+        const Rgb away = light ? Rgb{90, 0, 0} : Rgb{255, 255, 255};
+        errorC = forceReadable(mixD(errorC, away, 0.40), pageRgb, transRgb, 4.55, toWhite);
+    }
+    if (distD(errorC, accent) < 48 || distD(warning, accent) < 48) return false;
+    if (contrastD(errorC, pageRgb) < 4.5 || contrastD(errorC, transRgb) < 4.5) return false;
+    if (contrastD(warning, pageRgb) < 4.5 || contrastD(warning, transRgb) < 4.5) return false;
+
+    Rgb q0, q1, q2, q3;
+    if (!tuneMarks(trackRgb, accent, vs, total, pageIdx, accentIdx, q0, q1, q2, q3)) {
+        trackLab = pageLab;
+        trackLab.L = clamp01(pageLab.L + (light ? -0.04 : 0.05));
+        trackRgb = rgbFromOklab(trackLab);
+        if (!tuneMarks(trackRgb, accent, vs, total, pageIdx, accentIdx, q0, q1, q2, q3))
+            return false;
+    }
+
+    Palette built;
+    built.bgMain = pack(pageRgb);
+    built.bgTrack = pack(trackRgb);
+    built.bgSidebar = pack(sideRgb);
+    built.bgTransport = pack(transRgb);
+    built.textPrimary = pack(primary);
+    built.textSecondary = pack(secondary);
+    built.textDim = pack(dim);
+    built.textAlbum = pack(album);
+    built.accent = pack(accent);
+    built.hover = pack(hover);
+    built.separator = pack(rgbFromOklab(sepLab));
+    built.inputBg = pack(inp);
+    built.placeholder = pack(ph);
+    built.tileMore = pack(rgbFromOklab(tileLab));
+    built.error = pack(errorC);
+    built.warning = pack(warning);
+    built.qDsd = pack(q0);
+    built.qDxd = pack(q1);
+    built.qHires = pack(q2);
+    built.qStandard = pack(q3);
+    if (!paletteAcceptable(built)) return false;
+    if (themeContrast(built.textAlbum, built.bgMain) < 4.5f) return false;
+    if (themeChannelDist(built.accent, built.error) < 48) return false;
+    built.id = "cover";
+    built.name.clear();
+    built.blurb.clear();
+    built.group = themeDaypartId(themeDaypartFromLuma(themeLuma(built.bgMain)));
+    out = std::move(built);
+    return true;
+}
+
+bool paletteFromCover(const uint8_t* rgba, int w, int h, Palette& out) {
+    std::vector<CoverVoice> vs = readCoverVoices(rgba, w, h);
+    if (vs.empty()) return false;
+    foldUnseen(vs);
+    if (vs.empty()) return false;
+    int total = 0;
+    for (const CoverVoice& v : vs) total += v.n;
+    const int pageIdx = pageVoice(vs);
+    if (pageIdx < 0 || total < 16) return false;
+
+    // The page walks toward its own pole only as far as the ladder needs.
+    // Step 0 is the sleeve's color, exact, with no OKLab round trip.
+    for (int step = 0; step <= 6; ++step) {
+        Palette built;
+        if (!coverPaletteAt(vs, total, pageIdx, (step / 6.0) * 0.85, built))
+            continue;
+        out = std::move(built);
+        return true;
+    }
+    return false;
+}
+
+ThemeCopyResult copyThemeFiles(const std::string& fromDir, const std::string& toDir) {
+    ThemeCopyResult result;
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::create_directories(toDir, ec);
+    if (ec) return result;
+    fs::directory_iterator it(fs::path(fromDir), ec);
+    if (ec) return result;
+    std::vector<fs::path> files;
+    for (; it != fs::directory_iterator(); it.increment(ec)) {
+        if (ec) break;
+        std::error_code fec;
+        if (!it->is_regular_file(fec) || fec) continue;
+        const std::string ext = extLower(it->path());
+        if (ext == ".theme" || ext == ".toml")
+            files.push_back(it->path());
+    }
+    std::sort(files.begin(), files.end());
+    for (const fs::path& src : files) {
+        const fs::path dest = fs::path(toDir) / src.filename();
+        std::error_code existsEc;
+        if (fs::exists(dest, existsEc) && !existsEc) {
+            ++result.already;
+            continue;
+        }
+        std::error_code copyEc;
+        fs::copy_file(src, dest, copyEc);
+        if (!copyEc) ++result.copied;
+    }
+    return result;
 }

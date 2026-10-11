@@ -1,5 +1,6 @@
-# chirlu/soxr stays pinned. The CMake 3.22 and Clang fixes are ours, in
-# patches/soxr-modern-cmake.patch. Apply them once per working tree.
+# chirlu/soxr stays pinned. The CMake 3.10 / policy, C99, FENV_ACCESS and
+# calloc fixes are ours, in patches/soxr-modern-cmake.patch. Apply them
+# once per working tree.
 function(matrix_apply_soxr_patch repo_root)
     find_package(Git QUIET)
     if(NOT GIT_EXECUTABLE)

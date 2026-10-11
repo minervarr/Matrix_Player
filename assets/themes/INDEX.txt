@@ -1,0 +1,188 @@
+Matrix Player theme index
+The app reads the group line inside each file. This list is for a person.
+A source file that already says group = evening keeps evening; otherwise the background decides.
+
+Morning
+acme	acme	acme.theme
+Alabaster	alabaster	alabaster.theme
+Ayu Light	ayu-light	ayu-light.theme
+Enfocado Light	enfocado-light	enfocado-light.theme
+Everforest Light Hard	everforest-light-hard	everforest-light-hard.theme
+Flexoki Light	alacritty-flexoki-light	alacritty-flexoki-light.theme
+Github Light	github-light	github-light.theme
+Github Light Colorblind	github-light-colorblind	github-light-colorblind.theme
+Github Light Default	github-light-default	github-light-default.theme
+Github Light High Contrast	github-light-high-contrast	github-light-high-contrast.theme
+Github Light Tritanopia	github-light-tritanopia	github-light-tritanopia.theme
+modus-operandi	modus-operandi	modus-operandi.theme
+Night Owlish Light	night-owlish-light	night-owlish-light.theme
+NoctixLux	noctis-lux	noctis-lux.theme
+One Light	one-light	one-light.theme
+Tomorrow	tomorrow	tomorrow.theme
+
+Afternoon
+Ashes Light	ashes-light	ashes-light.theme
+Catppuccin Latte	alacritty-catppuccin-latte	alacritty-catppuccin-latte.theme
+Dawnfox	dawnfox	dawnfox.theme
+Dayfox	dayfox	dayfox.theme
+Everforest Light Medium	everforest-light	everforest-light.theme
+Everforest Light Medium	everforest-light-medium	everforest-light-medium.theme
+Everforest Light Soft	everforest-light-soft	everforest-light-soft.theme
+Gruvbox light	alacritty-gruvbox-light	alacritty-gruvbox-light.theme
+Gruvbox Material Hard Light	gruvbox-material-hard-light	gruvbox-material-hard-light.theme
+Gruvbox Material Medium Light	gruvbox-material-medium-light	gruvbox-material-medium-light.theme
+Kimbie Light	kimbie-light	kimbie-light.theme
+Nord light	nord-light	nord-light.theme
+Paper Theme	papertheme	papertheme.theme
+PaperColor - Light	papercolor-light	papercolor-light.theme
+Pencil Light	pencil-light	pencil-light.theme
+Rose Pine Dawn	alacritty-rose-pine-dawn	alacritty-rose-pine-dawn.theme
+Selenized Light	selenized-light	selenized-light.theme
+Seoul256 Light	seoul256-light	seoul256-light.theme
+Solarized Light	alacritty-solarized-light	alacritty-solarized-light.theme
+Solarized Osaka: Day	solarized-osaka-day	solarized-osaka-day.theme
+Tokyo Night Light	tokyo-night-light	tokyo-night-light.theme
+
+Evening
+Bluish	bluish	bluish.theme
+Catppuccin Frappe	catppuccin-frappe	catppuccin-frappe.theme
+Dim	low-contrast	low-contrast.theme
+Everforest Dark Medium	everforest-dark	everforest-dark.theme
+Everforest Dark Medium	everforest-dark-medium	everforest-dark-medium.theme
+Everforest Dark Soft	everforest-dark-soft	everforest-dark-soft.theme
+High Contrast	high-contrast	high-contrast.theme
+Mariana	mariana	mariana.theme
+Nord	alacritty-nord	alacritty-nord.theme
+Nordfox	nordfox	nordfox.theme
+Selenized Dark	selenized-dark	selenized-dark.theme
+Tango Dark	tango-dark	tango-dark.theme
+Zenburn	zenburn	zenburn.theme
+
+Night
+Afterglow	afterglow	afterglow.theme
+Alabaster Dark	alabaster-dark	alabaster-dark.theme
+Alacritty 0 12	alacritty-0-12	alacritty-0-12.theme
+Argonaut	argonaut	argonaut.theme
+Ashes Dark	ashes-dark	ashes-dark.theme
+Aura	aura	aura.theme
+Autumn	autumn	autumn.theme
+Ayu Dark	ayu-dark	ayu-dark.theme
+Ayu Mirage	ayu-mirage	ayu-mirage.theme
+Azu	azu	azu.theme
+Baitong	baitong	baitong.theme
+Base16 Default Dark	base16-default-dark	base16-default-dark.theme
+Blood Moon	blood-moon	blood-moon.theme
+Breeze	breeze	breeze.theme
+Campbell	campbell	campbell.theme
+Carbonfox	carbonfox	carbonfox.theme
+Catppuccin	alacritty-catppuccin	alacritty-catppuccin.theme
+Catppuccin Macchiato	catppuccin-macchiato	catppuccin-macchiato.theme
+Catppuccin Mocha	catppuccin-mocha	catppuccin-mocha.theme
+Challenger Deep	challenger-deep	challenger-deep.theme
+Chicago95	alacritty-chicago95	alacritty-chicago95.theme
+Citylights	citylights	citylights.theme
+Cobalt2	cobalt2	cobalt2.theme
+Cyber Punk Neon	cyber-punk-neon	cyber-punk-neon.theme
+Dark Plus	dark-plus	dark-plus.theme
+Dark Pride	dark-pride	dark-pride.theme
+Deep Space	deep-space	deep-space.theme
+Doom One	doom-one	doom-one.theme
+Dracula	alacritty-dracula	alacritty-dracula.theme
+Dracula+	dracula-plus	dracula-plus.theme
+Duskfox	duskfox	duskfox.theme
+Enfocado Dark	enfocado-dark	enfocado-dark.theme
+Everforest Dark Hard	everforest-dark-hard	everforest-dark-hard.theme
+Falcon	falcon	falcon.theme
+Flat Remix	flat-remix	flat-remix.theme
+Flexoki	alacritty-flexoki	alacritty-flexoki.theme
+Ganbaru	ganbaru	ganbaru.theme
+Ganbaru	ganbaru-matcha	ganbaru-matcha.theme
+Github Dark	github-dark	github-dark.theme
+Github Dark Colorblind	github-dark-colorblind	github-dark-colorblind.theme
+Github Dark Default	github-dark-default	github-dark-default.theme
+Github Dark Dimmed	github-dark-dimmed	github-dark-dimmed.theme
+Github Dark High Contrast	github-dark-high-contrast	github-dark-high-contrast.theme
+Github Dark Tritanopia	github-dark-tritanopia	github-dark-tritanopia.theme
+Gnome Terminal	gnome-terminal	gnome-terminal.theme
+Google	google	google.theme
+Gotham	gotham	gotham.theme
+Gruber Darker	gruber-darker	gruber-darker.theme
+Gruvbox dark	gruvbox-dark	gruvbox-dark.theme
+Gruvbox Material Dark Medium	gruvbox-material	gruvbox-material.theme
+Gruvbox Material Hard Dark	gruvbox-material-hard-dark	gruvbox-material-hard-dark.theme
+Gruvbox Material Medium Dark	gruvbox-material-medium-dark	gruvbox-material-medium-dark.theme
+Gruvbox Material Soft Dark	gruvbox-material-soft-dark	gruvbox-material-soft-dark.theme
+Hardhacker	hardhacker	hardhacker.theme
+Hatsunemiku	hatsunemiku	hatsunemiku.theme
+Horizon Dark	horizon-dark	horizon-dark.theme
+Hyper	alacritty-hyper	alacritty-hyper.theme
+Iceberg	iceberg	iceberg.theme
+Inferno	inferno	inferno.theme
+Iris	iris	iris.theme
+iTerm 2 default theme	iterm	iterm.theme
+iTerm 2 SolarDark theme	iterm-solardark	iterm-solardark.theme
+Kanagawa Dragon	kanagawa-dragon	kanagawa-dragon.theme
+Kanagawa Wave	kanagawa-wave	kanagawa-wave.theme
+Kimbie Dark	kimbie-dark	kimbie-dark.theme
+Kitty	kitty	kitty.theme
+Konsole Linux	konsole-linux	konsole-linux.theme
+Konsoles Dark Pastels	dark-pastels	dark-pastels.theme
+Linux	linux	linux.theme
+Marine Dark	marine-dark	marine-dark.theme
+Material Theme	material-theme	material-theme.theme
+Material Theme	material-theme-mod	material-theme-mod.theme
+Meliora	meliora	meliora.theme
+Miasma	miasma	miasma.theme
+Midnight Haze	midnight-haze	midnight-haze.theme
+modus-vivendi	modus-vivendi	modus-vivendi.theme
+Monokai	monokai	monokai.theme
+Monokai Charcoal	monokai-charcoal	monokai-charcoal.theme
+Monokai Pro	monokai-pro	monokai-pro.theme
+Moonfly	moonfly	moonfly.theme
+Moonlight Ii Vscode	moonlight-ii-vscode	moonlight-ii-vscode.theme
+Night Owl	alacritty-night-owl	alacritty-night-owl.theme
+Nightfly	nightfly	nightfly.theme
+Nightfox	nightfox	nightfox.theme
+Nordic	alacritty-nordic	alacritty-nordic.theme
+Nvim Dark	nvim-dark	nvim-dark.theme
+Oceanic Next	oceanic-next	oceanic-next.theme
+Omni	omni	omni.theme
+One Dark	one-dark	one-dark.theme
+Oxocarbon	oxocarbon	oxocarbon.theme
+Palenight	palenight	palenight.theme
+Panda	panda	panda.theme
+PaperColor - Dark	papercolor-dark	papercolor-dark.theme
+Pastel Dark	pastel-dark	pastel-dark.theme
+Pencil Dark	pencil-dark	pencil-dark.theme
+Pink Cat Boo	pink-cat-boo	pink-cat-boo.theme
+Rainbow	rainbow	rainbow.theme
+Remedy Dark	remedy-dark	remedy-dark.theme
+Rigel	rigel	rigel.theme
+Rose Pine	alacritty-rose-pine	alacritty-rose-pine.theme
+Rose Pine Moon	rose-pine-moon	rose-pine-moon.theme
+SeaShells	seashells	seashells.theme
+Smoooooth	smoooooth	smoooooth.theme
+Snazzy	snazzy	snazzy.theme
+Solarized Dark	solarized-dark	solarized-dark.theme
+Solarized Osaka	solarized-osaka	solarized-osaka.theme
+Sonokai	sonokai	sonokai.theme
+Spacegray	spacegray	spacegray.theme
+Synthwave 84	synthwave-84	synthwave-84.theme
+Taerminal	taerminal	taerminal.theme
+Tender	tender	tender.theme
+Terafox	terafox	terafox.theme
+Terminal.app	terminal-app	terminal-app.theme
+Thelovelace	thelovelace	thelovelace.theme
+Tokyo Night	alacritty-tokyo-night	alacritty-tokyo-night.theme
+Tokyo Night Enhanced	tokyo-night-enhanced	tokyo-night-enhanced.theme
+Tokyo Night Storm variant	tokyo-night-storm	tokyo-night-storm.theme
+Tomorrow Night	tomorrow-night	tomorrow-night.theme
+Tomorrow Night Blue	tomorrow-night-blue	tomorrow-night-blue.theme
+Tomorrow Night Bright	tomorrow-night-bright	tomorrow-night-bright.theme
+Tomorrow Night Eighties	tomorrow-night-eighties	tomorrow-night-eighties.theme
+Ubuntu	ubuntu	ubuntu.theme
+Vesper	vesper	vesper.theme
+Vscode	vscode	vscode.theme
+Wombat	wombat	wombat.theme
+Xterm	xterm	xterm.theme
+

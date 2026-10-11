@@ -16,6 +16,8 @@
 #include <cstdio>
 
 #include "grid_layout.hh"
+#include "album_pager.hh"
+#include "album_disc.hh"
 
 static int scrollDelta(int rawDelta, bool invert) {
     return invert ? -rawDelta : rawDelta;
@@ -149,6 +151,99 @@ int main() {
     // on a whole step, never a leftover pixel.
     assert(snapScroll(900, 400, 300, 44) == 88);   // maxRow = 100/44 = 2
     assert(snapScroll(900, 200, 300, 44) == 0);
+
+    // Album paging. The roll that arrives at a disc boundary does not turn
+    // the page, and neither do the notches that follow it without a gap.
+    // After that roll has been quiet, two detents close together turn on
+    // the second one — a single detent does not, and the turn does not
+    // restart a wait the next roll has to sit through.
+    {
+        AlbumPager p;
+        const int D = kAlbumWheelDetent;
+        const int G = kAlbumPageGestureMs;
+        assert(albumPagerWheel(p, -D, 0, true) == AlbumPagerResult::Stay);
+        assert(albumPagerWheel(p, -D, 50, false) == AlbumPagerResult::Stay);
+        assert(albumPagerWheel(p, -D, 100, false) == AlbumPagerResult::Stay);
+        // Still the arrival roll: a steady cadence never becomes the pair.
+        assert(albumPagerWheel(p, -D, 100 + G - 1, false) == AlbumPagerResult::Stay);
+
+        const int64_t quiet = p.tailUntilMs;
+        assert(albumPagerWheel(p, -D, quiet, false) == AlbumPagerResult::Stay);
+        assert(albumPagerWheel(p, -D, quiet + 80, false) == AlbumPagerResult::Turn);
+        // The rest of the turn's own roll is not the next page.
+        assert(albumPagerWheel(p, -D, quiet + 100, false) == AlbumPagerResult::Stay);
+        assert(albumPagerWheel(p, -2 * D, quiet + 120, false) == AlbumPagerResult::Stay);
+
+        const int64_t again = p.tailUntilMs;
+        // One event that already carries two detents turns immediately.
+        assert(albumPagerWheel(p, -2 * D, again, false) == AlbumPagerResult::Turn);
+
+        AlbumPager slow;
+        assert(albumPagerWheel(slow, D, 0, true) == AlbumPagerResult::Stay);
+        const int64_t t0 = slow.tailUntilMs;
+        assert(albumPagerWheel(slow, D, t0, false) == AlbumPagerResult::Stay);
+        // Farther apart than the gesture window: a new pair, not a turn.
+        assert(albumPagerWheel(slow, D, t0 + G + 1, false) == AlbumPagerResult::Stay);
+        assert(slow.accumulated == D);
+    }
+
+    // A disc page's height does not depend on the scroll offset. The old
+    // measurement was (cursor - scroll) + scroll. A 1<<30 stand-in is
+    // not exact at that magnitude: each 40 px row contributes 64, the
+    // measured page is a different one, and clamping it still leaves
+    // every row above the clip. The stand-in itself paints nothing.
+    {
+        const float header = 48.f, pad = 28.f;
+        const int pitch = 40, n = 18, view = 500;
+        const int real = albumDiscContentH(header, n, pitch, 0.f, pad);
+        assert(real == (int)(header + (float)n * (float)pitch + pad));
+
+        float scroll = (float)(1 << 30);
+        float y = (152.f + header) - scroll;   // listClipY - scroll
+        for (int i = 0; i < n; ++i) y += (float)pitch;
+        const int collapsed = (int)(y + scroll - 152.f + pad);
+        assert(collapsed != real);
+        const int end = albumDiscEndScroll(real, view, pitch);
+        assert(end > 0);
+        const int falseEnd = albumDiscEndScroll(collapsed, view, pitch);
+        assert(falseEnd != end);
+
+        // The stand-in offset paints nothing: every row is above the clip.
+        // The real end offset puts the last row wholly inside the list,
+        // under the sticky label. Pad is the same scale as the row, which
+        // is what keeps that row from being rejected by the whole-row clip.
+        auto whollyInside = [&](int scrollOff) {
+            int nVis = 0;
+            for (int i = 0; i < n; ++i) {
+                const int top = (int)header + i * pitch - scrollOff;
+                if (top >= (int)header && top + pitch <= view) ++nVis;
+            }
+            return nVis;
+        };
+        assert(whollyInside(1 << 30) == 0);
+        assert(whollyInside(falseEnd) == 0);
+        assert(whollyInside(end) > 0);
+        const int lastTop = (int)header + (n - 1) * pitch - end;
+        assert(lastTop >= (int)header);
+        assert(lastTop + pitch <= view);
+
+        // A page that fits does not scroll. The strip on the last disc
+        // lengthens the page, so its end sits further down.
+        assert(albumDiscEndScroll(albumDiscContentH(header, 3, pitch, 0.f, pad),
+                                  view, pitch) == 0);
+        const int bare = albumDiscEndScroll(
+            albumDiscContentH(header, 10, pitch, 0.f, pad), view, pitch);
+        const float strip = albumVariantStripH(3, 250.f, 100.f, 20.f,
+                                               180.f, 16.f, 30.f);
+        assert(strip == 30.f + 2.f * (180.f + 16.f));
+        const int withStrip = albumDiscEndScroll(
+            albumDiscContentH(header, 10, pitch, strip, pad), view, pitch);
+        assert(withStrip > bare);
+
+        // Re-placing the end offset does not move it.
+        assert(albumDiscEndScroll(real, view, pitch) == end);
+        assert(albumDiscContentH(header, n, pitch, strip, pad) > real);
+    }
 
     printf("scroll_test: all assertions passed\n");
     return 0;

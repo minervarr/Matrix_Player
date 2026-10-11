@@ -1,31 +1,40 @@
 # soxr pinned at 945b592 (https://github.com/chirlu/soxr). Not our repo.
-# CMake 3.22 policy warnings, C99 bool, and Clang fixes kept on our side.
+# CMake 3.10 minimum, CMP0069/CMP0127/CMP0075, C99 bool, FENV_ACCESS, and
+# calloc argument order. GCC and Clang both ignore STDC FENV_ACCESS and
+# warn; on x86 the quantiser is the fistp instruction. calloc(n, sizeof)
+# is the order GCC 14+ checks.
 # From Matrix_Player: git -C third_party/soxr apply ../../patches/soxr-modern-cmake.patch
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index ee48f6c..44d9dca 100644
+index ee48f6c..a3d67c9 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -2,6 +2,18 @@
+@@ -1,7 +1,23 @@
+ # SoX Resampler Library       Copyright (c) 2007-18 robs@users.sourceforge.net
  # Licence for this file: LGPL v2.1                  See LICENCE for details.
  
- cmake_minimum_required (VERSION 3.1 FATAL_ERROR)
-+# cmake_dependent_option below uses the original semicolon conditions.
-+# Unset CMP0127 warns on every configure from CMake 3.22 onward.
+-cmake_minimum_required (VERSION 3.1 FATAL_ERROR)
++cmake_minimum_required (VERSION 3.10 FATAL_ERROR)
++# 3.10 is the oldest minimum current CMake accepts without a deprecation
++# warning. It also selects CMP0069 NEW, so a Release build's
++# INTERPROCEDURAL_OPTIMIZATION is applied here instead of being ignored.
++# CMP0127 NEW still evaluates a semicolon-separated depends list as one
++# if() per entry, which is how every cmake_dependent_option below is
++# written. OLD is deprecated and warns on its own.
 +if (POLICY CMP0127)
-+  cmake_policy (SET CMP0127 OLD)
++  cmake_policy (SET CMP0127 NEW)
 +endif ()
 +# check_include_files runs while CMAKE_REQUIRED_LIBRARIES is set for lrint.
 +# Unset CMP0075 warns on CMake 3.12+. NEW links that list into the probe.
 +# libm is present wherever lrint needs it, and these are header probes, so
-+# the result does not change. OLD is itself deprecated.
++# the result does not change.
 +if (POLICY CMP0075)
 +  cmake_policy (SET CMP0075 NEW)
 +endif ()
  
  project (soxr C)
  set (DESCRIPTION_SUMMARY
-@@ -161,9 +173,9 @@ if (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
+@@ -161,9 +177,9 @@ if (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
    if (WITH_DEV_GPROF)
      set (PROJECT_CXX_FLAGS "${PROJECT_CXX_FLAGS} -pg")
    endif ()
@@ -177,27 +186,29 @@ index bb01a0d..13b4f78 100644
    set_target_properties (${LSR} PROPERTIES
      VERSION "${LSR_SO_VERSION}"
 diff --git a/src/data-io.c b/src/data-io.c
-index fb61675..fac6217 100644
+index fb61675..621ffa5 100644
 --- a/src/data-io.c
 +++ b/src/data-io.c
-@@ -63,7 +63,10 @@ void _soxr_deinterleave_f(float * * dest, /* Round/clipping not needed here */
+@@ -63,7 +63,12 @@ void _soxr_deinterleave_f(float * * dest, /* Round/clipping not needed here */
  
  
  #if defined FE_INVALID && defined FPU_RINT32 && defined __STDC_VERSION__
 -  #if __STDC_VERSION__ >= 199901L
-+  /* Clang ignores FENV_ACCESS and warns. GCC honours it, so rint sees
-+     the rounding mode. Omitting it on Clang keeps the code Clang already
-+     generates. */
-+  #if __STDC_VERSION__ >= 199901L && !defined __clang__
++  /* GCC and Clang both ignore STDC FENV_ACCESS and warn about the pragma.
++     On x86 the quantiser is the fistp instruction, which reads the x87
++     control word itself, so the pragma is not what makes that rounding
++     correct. Emit it only for a C99 compiler that actually implements it.
++     Clang defines __GNUC__, so this excludes both. */
++  #if __STDC_VERSION__ >= 199901L && !defined __GNUC__
      #pragma STDC FENV_ACCESS ON
    #endif
  #endif
-@@ -151,7 +154,7 @@ void _soxr_deinterleave_f(float * * dest, /* Round/clipping not needed here */
+@@ -151,7 +156,7 @@ void _soxr_deinterleave_f(float * * dest, /* Round/clipping not needed here */
  #endif
  
  #if defined FE_INVALID && defined FPU_RINT32 && defined __STDC_VERSION__
 -  #if __STDC_VERSION__ >= 199901L
-+  #if __STDC_VERSION__ >= 199901L && !defined __clang__
++  #if __STDC_VERSION__ >= 199901L && !defined __GNUC__
      #pragma STDC FENV_ACCESS OFF
    #endif
  #endif
@@ -216,3 +227,45 @@ index 782be1b..6056040 100644
    #define ____ \
      q1 = _mm_shuffle_ps(t=vLdu(input+2*j),vLdu(input+2*j+4),_MM_SHUFFLE(3,1,3,1)); \
      q2 = _mm_shuffle_ps(vLdu(input-2*j-4),vLdu(input-2*j-8),_MM_SHUFFLE(1,3,1,3)); \
+diff --git a/src/soxr.c b/src/soxr.c
+index c2861ac..e85cd50 100644
+--- a/src/soxr.c
++++ b/src/soxr.c
+@@ -393,7 +393,7 @@ soxr_t soxr_create(
+   else if (io_spec && (io_spec->itype | io_spec->otype) >= SOXR_SPLIT * 2)
+     error = "invalid io datatype(s)";
+ 
+-  if (!error && !(p = calloc(sizeof(*p), 1))) error = "malloc failed";
++  if (!error && !(p = calloc(1, sizeof(*p)))) error = "malloc failed";
+ 
+   if (p) {
+     control_block_t * control_block;
+@@ -530,9 +530,9 @@ static soxr_error_t initialise(soxr_t p)
+   size_t shared_size, channel_size;
+ 
+   resampler_sizes(&shared_size, &channel_size);
+-  p->channel_ptrs = calloc(sizeof(*p->channel_ptrs), p->num_channels);
++  p->channel_ptrs = calloc(p->num_channels, sizeof(*p->channel_ptrs));
+   p->shared = calloc(shared_size, 1);
+-  p->resamplers = calloc(sizeof(*p->resamplers), p->num_channels);
++  p->resamplers = calloc(p->num_channels, sizeof(*p->resamplers));
+   if (!p->shared || !p->channel_ptrs || !p->resamplers)
+     return fatal_error(p, "malloc failed");
+ 
+diff --git a/src/vr-coefs.c b/src/vr-coefs.c
+index a57bec8..52a1399 100644
+--- a/src/vr-coefs.c
++++ b/src/vr-coefs.c
+@@ -42,9 +42,9 @@ static void fir(int m, double l, double Fp0, double Fs0,
+   double Fp=Fp0/l, Fs=Fs0/l, weight=1/weight0, inc[2], Ws=1-Fs;
+   int N = (int)(l*m)-(l>1), R=(N+1)/2, NP=R+1, grid_size=1+density*R+1, pass=0;
+   int n1 = Ws>=(2*R-1)*Fp? 1:(int)(R*Fp/(Fp+Ws)+.5), n2=NP-n1, _1, i, j, k;
+-  int    * peak = calloc(sizeof(*peak), (size_t)(NP+1)), * P=peak, end[2];
+-  coef_t * coef = calloc(sizeof(*coef), (size_t)(NP));
+-  float  * E    = calloc(sizeof(*E   ), (size_t)(grid_size));
++  int    * peak = calloc((size_t)(NP+1), sizeof(*peak)), * P=peak, end[2];
++  coef_t * coef = calloc((size_t)(NP), sizeof(*coef));
++  float  * E    = calloc((size_t)(grid_size), sizeof(*E));
+   double d, n, e, f, mult, delta, sum, hi, lo, * A = (double*)E, *h=0;
+ 
+   if (!P || !coef || !E) goto END;

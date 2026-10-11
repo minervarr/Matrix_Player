@@ -2,7 +2,9 @@
 #include "core/variants.h"      // trackKey() — the identity history is keyed on
 #include "db_schema.h"
 #include "sqlite3.h"
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 
 static const char* SCHEMA = R"(
@@ -129,6 +131,18 @@ CREATE TABLE IF NOT EXISTS playback_state (
     position_ms INTEGER DEFAULT 0,
     volume      REAL    DEFAULT 1.0,
     saved_at    INTEGER DEFAULT 0
+);
+-- One generated palette per release. A new table, so it belongs here and
+-- not in MIGRATIONS[]: that array can only add a column. Empty is correct
+-- for a library Dynamic has never looked at. The blob is 20 native-endian
+-- uint32 colors; both platforms this ships on are little-endian.
+CREATE TABLE IF NOT EXISTS cover_themes (
+    album_key  TEXT PRIMARY KEY,
+    art_path   TEXT    NOT NULL,
+    art_size   INTEGER NOT NULL,
+    art_mtime  INTEGER NOT NULL,
+    generator  INTEGER NOT NULL,
+    colors     BLOB    NOT NULL
 );
 )";
 
@@ -885,6 +899,57 @@ bool Db::loadPlaybackState(PlaybackState& out) {
         out.positionMs = sqlite3_column_int(stmt, 1);
         out.volume     = (float)sqlite3_column_double(stmt, 2);
         found = !out.filePath.empty();
+    }
+    sqlite3_finalize(stmt);
+    return found;
+}
+
+void Db::saveCoverTheme(const CoverTheme& row) {
+    if (!impl_->db || row.albumKey.empty()) return;
+    const char* sql =
+        "INSERT INTO cover_themes "
+        "(album_key, art_path, art_size, art_mtime, generator, colors) "
+        "VALUES (?,?,?,?,?,?) "
+        "ON CONFLICT(album_key) DO UPDATE SET "
+        "art_path=excluded.art_path, art_size=excluded.art_size, "
+        "art_mtime=excluded.art_mtime, generator=excluded.generator, "
+        "colors=excluded.colors;";
+    sqlite3_stmt* stmt = nullptr;
+    sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr);
+    if (!stmt) return;
+    sqlite3_bind_text(stmt, 1, row.albumKey.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, row.artPath.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 3, (sqlite3_int64)row.artSize);
+    sqlite3_bind_int64(stmt, 4, (sqlite3_int64)row.artMtime);
+    sqlite3_bind_int(stmt, 5, row.generator);
+    sqlite3_bind_blob(stmt, 6, row.color, (int)sizeof(row.color), SQLITE_TRANSIENT);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+bool Db::loadCoverTheme(const std::string& albumKey, CoverTheme& out) {
+    if (!impl_->db || albumKey.empty()) return false;
+    const char* sql =
+        "SELECT art_path, art_size, art_mtime, generator, colors "
+        "FROM cover_themes WHERE album_key = ?;";
+    sqlite3_stmt* stmt = nullptr;
+    sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr);
+    if (!stmt) return false;
+    sqlite3_bind_text(stmt, 1, albumKey.c_str(), -1, SQLITE_TRANSIENT);
+    bool found = false;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        const void* blob = sqlite3_column_blob(stmt, 4);
+        const int bytes = sqlite3_column_bytes(stmt, 4);
+        if (blob && bytes == (int)sizeof(out.color)) {
+            auto* path = (const char*)sqlite3_column_text(stmt, 0);
+            out.albumKey  = albumKey;
+            out.artPath   = path ? path : "";
+            out.artSize   = (int64_t)sqlite3_column_int64(stmt, 1);
+            out.artMtime  = (int64_t)sqlite3_column_int64(stmt, 2);
+            out.generator = sqlite3_column_int(stmt, 3);
+            memcpy(out.color, blob, sizeof(out.color));
+            found = true;
+        }
     }
     sqlite3_finalize(stmt);
     return found;

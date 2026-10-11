@@ -138,7 +138,7 @@ void drawScrollbar(Canvas& canvas, const LayoutRect& listArea,
 std::vector<LayoutRect> layoutButtonRow(const LayoutRect& content, float pad,
                                         int count, float idealBtnW, float gap,
                                         float minBtnW, int by, int height,
-                                        bool alignRight) {
+                                        bool alignRight, bool fill) {
     std::vector<LayoutRect> out(std::max(0, count));
     if (count <= 0) return out;
     float x0 = content.left + pad, x1 = content.right - pad;
@@ -146,12 +146,15 @@ std::vector<LayoutRect> layoutButtonRow(const LayoutRect& content, float pad,
 
     float btnW = idealBtnW, useGap = gap;
     float total = count * btnW + (count - 1) * useGap;
-    if (total > avail) {
-        btnW = std::max(minBtnW, (avail - (count - 1) * useGap) / count);
+    // `fill` is the same split the shrink already uses, taken whenever the
+    // ideal cluster is narrower than the row as well as when it is wider.
+    // Slot 0 stays on the edge alignRight names; only the width changes.
+    if (fill || total > avail) {
+        btnW = std::max(minBtnW, (avail - (count - 1) * useGap) / (float)count);
         total = count * btnW + (count - 1) * useGap;
         if (total > avail) {
-            useGap = (count > 1) ? std::max(0.0f, (avail - count * minBtnW) / (count - 1)) : 0.0f;
-            btnW = std::max(0.0f, (avail - (count - 1) * useGap) / count);
+            useGap = (count > 1) ? std::max(0.0f, (avail - count * minBtnW) / (float)(count - 1)) : 0.0f;
+            btnW = std::max(0.0f, (avail - (count - 1) * useGap) / (float)count);
         }
     }
 

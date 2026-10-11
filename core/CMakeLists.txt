@@ -9,6 +9,7 @@ add_library(matrix_core STATIC
     src/library.cpp
     src/variants.cpp
     src/facets.cpp
+    src/credits.cpp
     src/db.cpp
     src/db_stats.cpp
     src/stats.cpp
@@ -110,6 +111,17 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         target_compile_options(facets_test PRIVATE /W3 /utf-8)
     else()
         target_compile_options(facets_test PRIVATE -Wall)
+    endif()
+
+    # ── credits_test ───────────────────────────────────────────────────────
+    # Who a release names. Links src/credits.cpp and nothing else — the FLAC
+    # read is library.cpp, and this target must not need a file on disk.
+    add_executable(credits_test tests/credits_test.cc src/credits.cpp)
+    target_include_directories(credits_test PRIVATE include)
+    if(MSVC)
+        target_compile_options(credits_test PRIVATE /W3 /utf-8)
+    else()
+        target_compile_options(credits_test PRIVATE -Wall)
     endif()
 
     # ── streamer_db_test ───────────────────────────────────────────────────

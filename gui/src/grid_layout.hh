@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <vector>
+
 // ── The album grid's shape, and how it scrolls ──────────────────────────────
 //
 // Two decisions, both pure arithmetic, both pinned by grid_layout_test.
@@ -43,7 +46,9 @@ struct Shape {
 
 // usableW/usableH: the grid rect minus its side pads. tilePitch: the target
 // column stride. artMargin: air reserved around the art in its cell.
-// textBand: height of the text block under the art (title lines + byline).
+// textBand: room reserved under the art. Playlists pass their name block.
+// The album grid passes the same margin it leaves beside a cover, because
+// that grid draws the picture and nothing under it.
 // minArt: the smallest legible artwork; a column or a row is dropped rather
 // than going below it.
 Shape computeShape(int usableW, int usableH, int tilePitch, int artMargin,
@@ -79,5 +84,18 @@ struct RowScroll {
 // re-anchored, which is what keeps a drag's distance equal to travel / pitch
 // rows, no more and no less.
 bool scrollRows(RowScroll& s, float dpx, int pitch, int maxRow);
+
+// One release, as the grid orders it. `year` 0 means the file named no year.
+struct ReleaseKey {
+    std::string artist;
+    int year = 0;
+};
+
+// `indices` are positions into `keys`. Artists with more of these releases
+// come first (the count is this set, so the Albums filter and the Singles
+// filter each rank their own shelves). Within an artist the older year
+// comes first. An unknown year follows every dated release by that artist.
+// ASCII case and surrounding spaces do not split one artist into two.
+void orderByArtist(std::vector<int>& indices, const std::vector<ReleaseKey>& keys);
 
 } // namespace grid

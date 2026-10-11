@@ -13,6 +13,7 @@
 #include "core/library.h"
 #include "core/variants.h"
 #include "core/facets.h"
+#include "core/credits.h"
 #include "core/decoder.h"
 #include "core/db.h"
 #include "core/streamer_db.h"
@@ -21,6 +22,7 @@
 #include "ui_orientation.hh"
 #include "rail_layout.hh"
 #include "grid_layout.hh"
+#include "album_pager.hh"
 #include "bar_a.hh"
 #include "img_decode.hh"
 #ifdef _WIN32
@@ -433,6 +435,9 @@ private:
     static int snapScroll(int offset, int contentH, int viewH, int pitch);
     void scrollDiscrete(grid::RowScroll& s, int& offsetPx, int delta,
                         int pitch, int contentH, int viewH);
+    // trackScrollY_ and trackRowScroll_ are one position. A disc change
+    // writes both, or the next notch restarts from a stale row.
+    void syncTrackScroll(int y);
     // The album grid: scrollDiscrete on gridRowScroll_ / gridScrollY_,
     // pitch gridStepY_. Kept as a one-liner so onMouseWheel stays short.
     void scrollGridRows(int delta);
@@ -461,13 +466,62 @@ private:
     // Settings page opens it; a pick applies immediately and is saved.
     void onThemesSettings();
     void drawThemes(Canvas& canvas, const LayoutRect& area);
-    LayoutRect thCloseRc_{}, thBody_{};
+    void reloadAllThemes();
+    void applyPlaybackTheme();
+    void themePlaybackEnded();
+    void noteCoverColors(const std::string& path, const uint8_t* rgba, int w, int h);
+    void setThemeAlbum(int album);
+    void rememberCoverTheme(const std::string& path, const uint8_t* rgba, int w, int h);
+    bool takeCoverPalette(Palette& out);
+    void openThemeImport();
+    LayoutRect thCloseRc_{}, thBody_{}, thModeRc_{}, thImportRc_{};
+    LayoutRect thPlusRc_[4]{};
     std::vector<LayoutRect> thRowRc_;
     bool thHoverClose_ = false;
+    bool thHoverMode_ = false;
+    bool thHoverImport_ = false;
     int  thHoverRow_ = -1;
+    int  thHoverPlus_ = -1;
+    // -1 is the four-group page. 0..3 is one part, Morning through Night.
+    int  thGroup_ = -1;
     int  thScrollY_ = 0;
     int  thContentH_ = 0;
+    int  thChipPitch_ = 1;
+    // The four samples stay put until Themes is opened again or the row
+    // width changes. Return from a part must show the same previews.
+    uint32_t thSampleSeed_ = 1;
+    uint32_t thSampleBuiltSeed_ = 0;
+    int  thSampleCount_ = -1;
+    int  thSampleW_ = -1;
+    std::vector<int> thShown_[4];
+    bool thPlusOn_[4]{};
     grid::RowScroll thRowScroll_;
+    // themePlaying_ is set only after output_->start() succeeds. onStop and
+    // the drain-idle end both clear it. isPlaying_ stays true across that
+    // drain, so Dynamic watches this flag. themeHeldId_ is the catalogue
+    // palette the current playback already matched, when the cover could not
+    // grow one of its own. themeHeldCover_ is that grown palette. Neither is
+    // saved as ui_theme. The row in cover_themes is.
+    bool themeDynamic_ = false;
+    bool themePlaying_ = false;
+    std::string themeSavedId_;
+    std::string themeHeldId_;
+    std::string themeArtPath_;
+    std::string themeAlbumKey_;
+    std::string themeAlbumLabel_;
+    std::string themeCoverName_;
+    bool themeHeldCover_ = false;
+    Palette themeHeldPalette_;
+    int themeAlready_ = 0;
+    std::unordered_map<std::string, CoverColors> coverColors_;
+    struct CoverThemeMem {
+        int64_t artSize = 0;
+        int64_t artMtime = 0;
+        bool tried = false;
+        bool ok = false;
+        Palette palette;
+    };
+    std::unordered_map<std::string, CoverThemeMem> coverThemeByPath_;
 
     void openSearch();
     void closeSearch();
@@ -827,8 +881,11 @@ private:
     bool eqHoverTabAll_ = false, eqHoverTabMine_ = false;
     bool eqHoverPin_ = false, eqHoverRemove_ = false;
 
-    // Folder picker (also reached via "Add Music Folder")
+    // Folder picker (also reached via "Add Music Folder", and by Import Themes).
+    // fpForThemes_ is that second visit: Select copies theme files and Return
+    // lands back on Themes. Cleared as the picker leaves.
     std::string fpCurrentDir_;
+    bool fpForThemes_ = false;
     std::vector<std::string> fpEntries_;   // subfolder names only, sorted
     bool fpHasParent_  = false;
     int  fpHoverRow_   = -1;
@@ -842,13 +899,12 @@ private:
     // from a fixed target column count and the available width (see
     // recalcLayout()) — these defaults only seed the very first layout pass.
     //
-    // gridRowGap_: vertical gap below a tile's art reserved for its text
-    // block — two title lines plus the artist line. Computed per layout
-    // pass from the ACTUAL text sizes: the old fixed 64px was calibrated
-    // for the reference window and overlapped the next row's art on taller
-    // monitors where text scales up (artist descenders clipped by the art
-    // below — the 1920x1200 "Anaima y" bug).
-    //
+    // gridRowGap_: air under a cover on the album grid, or the playlist
+    // section's name block. The album grid draws no title. The old block
+    // (two title lines plus the artist line) was calibrated from the text
+    // sizes because a fixed 64px overlapped the next row's art on taller
+    // monitors. Playlists still carry that block, because a generated list
+    // has no cover of its own to be the label.
     int   gridRowGap_ = 64;
     int gridScrollY_     = 0;
     int gridTileSize_    = 180;
@@ -992,20 +1048,37 @@ private:
     LayoutRect rcAlbumList_ = {};
     int  albumWorldContentH_  = 0;
     int  artistWorldContentH_ = 0;
-    // True after a gesture has already RESTED on the last album-world row.
-    // The next toward-end delta is what opens the artist page. A single
-    // drag that merely arrives at the end must not also leave it — that is
-    // the sensitivity the listener reported. Wheel notches are each a
-    // gesture, so this is only load-bearing on touch (armed from onDragEnd).
+    // True after a touch has already RESTED on a disc boundary (the end,
+    // when another disc or the artist page follows; the start, when a
+    // previous disc does). The next toward-that-boundary drag is what
+    // turns the page. The stroke that merely arrives must not also leave.
+    // A wheel has no lift. albumPager_ is that gap: two detents, close
+    // together, after the roll that arrived has gone quiet. See album_pager.hh.
     bool albumPagerArmed_ = false;
+    AlbumPager albumPager_{};
+    // The up-arrow on the artist page. It is not part of the portrait.
+    // Set when a scroll has come to rest at the top — the boundary the
+    // next gesture crosses back into the track list — and cleared as soon
+    // as the page moves down into the text, or when the page is entered.
+    // The track list's down-arrow is the same idea: visible at the end,
+    // absent while the list still has somewhere to go.
+    bool artistLeaveCue_ = false;
+    // Which disc page the album view is showing. One disc at a time; the
+    // next is a triangle under the list, not another block below this one.
+    int albumDiscIndex_ = 0;
+    int albumDiscCount_ = 1;
+    // The next album-world paint lands at the end of this disc, including
+    // the variant strip, whose height is only known once the page is
+    // measured. Resolved before any row is painted. Restoring the artist
+    // page's way back is what sets it.
+    bool albumScrollToEnd_ = false;
     // Height of the pinned DISC n bar at the top of the list, 0 when the
     // album is a single disc. Written by drawAlbumView; hit-testing reads
     // it so a click on the sticky label is not a track.
     int  albumDiscStickyH_ = 0;
     // Scroll-0 window Y of each track row, one entry per album.tracks index,
-    // rewritten by the album view's draw block. Rows are no longer on a fixed
-    // i*trackRowHeight_ grid (a "DISC n" separator shifts everything below
-    // it), so trackPanelHitTest() reads this instead of dividing.
+    // rewritten by the album view's draw block. Only the disc on screen has
+    // a real top; every other track is -1 and must not hit-test.
     std::vector<int> trackRowTop_;
 
     // Album view sidecar content (loaded by loadAlbumViewContent()).
@@ -1015,6 +1088,21 @@ private:
     std::string              artistBioText_;
     std::vector<std::string> albumDescLines_;
     std::vector<std::string> artistBioLines_;
+    // People named on this release, grouped by the kind of work they did.
+    // creditSpans_ is the wrapped draw cache, rebuilt with the bio lines.
+    // A heading names an act. A line is one role's names; `role` is the
+    // caption drawn on that line's right. A roleLine is that caption dropped
+    // under the names when the column cannot hold both.
+    std::vector<credits::CreditLine> albumCredits_;
+    struct CreditSpan {
+        bool heading = false;
+        bool roleLine = false;
+        bool lead = false;             // arrangement drawn at the music weight
+        credits::Act act = credits::Act::Music;
+        std::string line;
+        std::string role;
+    };
+    std::vector<CreditSpan> creditSpans_;
     float                    albumTextWrapW_ = -1.0f;
     TextureHandle            artistImgTex_ = kInvalidTexture;
     // Where the artist photo landed this frame, written by drawAlbumView (same
@@ -1392,6 +1480,7 @@ private:
     // is what keeps a quick A→B album switch from painting A's artist under B.
     std::string artistImgRequestPath_;
     std::string artistImgCachePath_;
+    int         artistImgCachePx_ = 0;   // edge of the texture above; 0 if none
 
     // The fullscreen art SCENE decodes asynchronously for the same reason the
     // album-view artist does: the source is often a multi-megabyte JPEG, and
