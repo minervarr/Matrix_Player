@@ -21,10 +21,10 @@
 # and stays beside the executable in every configuration.
 # MATRIX_STATE_HOME is declared and forwarded in the ROOT CMakeLists.txt now:
 # app_paths.cc lives in app_shell, which CMake reads before this file, so the
-# forwarding has to happen before add_subdirectory(framework/app_shell).
+# forwarding has to happen before add_subdirectory(framework/vk_canvas/app_shell).
 
 # app_paths.cc, ui_metrics.cc, ui_orientation.cc and both desktop hosts are
-# NOT here any more: they moved to framework/app_shell, which this target links.
+# NOT here any more: they moved to framework/vk_canvas/app_shell, which this target links.
 # Which half of bt_codec.hh this build gets. ae_bluetooth exists only when
 # audio_engine found sd-bus and libsbc (see its CMakeLists.txt), so this is the
 # same "only offer what this build actually has" rule the Audio Settings panel
@@ -87,7 +87,7 @@ if(WIN32)
         UNICODE
         _UNICODE)
 
-    add_dependencies(matrix_player compile_shared_shaders compile_vk_canvas_shaders generate_ui_min_text_size)
+    add_dependencies(matrix_player compile_shared_shaders compile_shared_compute_shaders compile_vk_canvas_shaders generate_ui_min_text_size)
 
     target_link_libraries(matrix_player PRIVATE
         app_shell
@@ -180,7 +180,7 @@ else()
     # address zero"), not bugs to fix by editing that source.
     target_link_options(matrix_player PRIVATE -Wno-stringop-overflow -Wno-stringop-overread)
 
-    add_dependencies(matrix_player compile_shared_shaders compile_vk_canvas_shaders generate_ui_min_text_size)
+    add_dependencies(matrix_player compile_shared_shaders compile_shared_compute_shaders compile_vk_canvas_shaders generate_ui_min_text_size)
 
     find_package(Threads REQUIRED)
     target_link_libraries(matrix_player PRIVATE
@@ -270,7 +270,7 @@ add_custom_target(copy_shader_assets ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_BINARY_DIR}/assets
         $<TARGET_FILE_DIR:matrix_player>/assets
-    DEPENDS compile_shared_shaders compile_vk_canvas_shaders
+    DEPENDS compile_shared_shaders compile_shared_compute_shaders compile_vk_canvas_shaders
     COMMENT "Copying compiled shaders next to the executables")
 add_dependencies(copy_shader_assets matrix_player)
 
@@ -285,7 +285,7 @@ matrix_copy_shipped_fonts(matrix_player ${CMAKE_SOURCE_DIR}
 add_executable(theme_pack ${CMAKE_SOURCE_DIR}/tools/theme_pack/main.cc
                           src/theme_catalog.cc)
 target_include_directories(theme_pack PRIVATE
-    src ${CMAKE_SOURCE_DIR}/framework/app_shell)
+    src ${CMAKE_SOURCE_DIR}/framework/vk_canvas/app_shell)
 if(NOT MSVC)
     target_compile_options(theme_pack PRIVATE -Wall)
 endif()
@@ -303,7 +303,7 @@ endif()
 # ---------------------------------------------------------------------------
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # ui_metrics_test and ui_orientation_test moved WITH their code, to
-    # framework/app_shell/tests/ — they test app_shell's modules, so they
+    # framework/vk_canvas/app_shell/tests/ — they test app_shell's modules, so they
     # belong to app_shell. Run them from build/<tree>/app_shell_build/.
 
     # rail_layout_test links the REAL src/rail_layout.cc. Bar A's geometry is
@@ -314,9 +314,9 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # ui_orientation.cc comes from app_shell now, still COMPILED rather than
     # linked: this stays a pure-logic test with no library behind it.
     add_executable(rail_layout_test src/rail_layout_test.cc src/rail_layout.cc
-                                    ${CMAKE_SOURCE_DIR}/framework/app_shell/ui_orientation.cc)
+                                    ${CMAKE_SOURCE_DIR}/framework/vk_canvas/app_shell/ui_orientation.cc)
     target_include_directories(rail_layout_test PRIVATE
-        src ${CMAKE_SOURCE_DIR}/framework/app_shell)
+        src ${CMAKE_SOURCE_DIR}/framework/vk_canvas/app_shell)
     if(NOT WIN32)
         target_compile_options(rail_layout_test PRIVATE -Wall)
     endif()
@@ -327,7 +327,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # beyond src/: ui_icons.hh forward-declares Canvas/Color instead of
     # including canvas.hh, precisely so this stays a pure-logic test.
     add_executable(ui_icons_test src/ui_icons_test.cc src/ui_icons.cc)
-    target_include_directories(ui_icons_test PRIVATE src ${CMAKE_SOURCE_DIR}/framework/app_shell)
+    target_include_directories(ui_icons_test PRIVATE src ${CMAKE_SOURCE_DIR}/framework/vk_canvas/app_shell)
     if(NOT WIN32)
         target_compile_options(ui_icons_test PRIVATE -Wall)
     endif()
@@ -343,7 +343,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # audio backends; links the REAL grid_layout.cc so the snap rule cannot
     # drift. Pure-logic, same as its siblings.
     add_executable(scroll_test src/scroll_test.cc src/grid_layout.cc)
-    target_include_directories(scroll_test PRIVATE src ${CMAKE_SOURCE_DIR}/framework/app_shell)
+    target_include_directories(scroll_test PRIVATE src ${CMAKE_SOURCE_DIR}/framework/vk_canvas/app_shell)
     if(NOT MSVC)
         target_compile_options(scroll_test PRIVATE -Wall)
     endif()
@@ -370,7 +370,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # Links the REAL src/terminus_glyph.cc; the Canvas half is a separate TU
     # (terminus_glyph_draw.cc), same split as ui_icons.cc / ui_icons_draw.cc.
     add_executable(terminus_glyph_test src/terminus_glyph_test.cc src/terminus_glyph.cc)
-    target_include_directories(terminus_glyph_test PRIVATE src ${CMAKE_SOURCE_DIR}/framework/app_shell)
+    target_include_directories(terminus_glyph_test PRIVATE src ${CMAKE_SOURCE_DIR}/framework/vk_canvas/app_shell)
     if(NOT MSVC)
         target_compile_options(terminus_glyph_test PRIVATE -Wall)
     endif()
@@ -380,7 +380,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # involved and the staircase cannot drift back into a vector circle
     # without this failing.
     add_executable(pixel_marks_test src/panels/pixel_marks_test.cc src/terminus_glyph.cc)
-    target_include_directories(pixel_marks_test PRIVATE src ${CMAKE_SOURCE_DIR}/framework/app_shell)
+    target_include_directories(pixel_marks_test PRIVATE src ${CMAKE_SOURCE_DIR}/framework/vk_canvas/app_shell)
     if(NOT MSVC)
         target_compile_options(pixel_marks_test PRIVATE -Wall)
     endif()
@@ -388,13 +388,13 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # theme_test — the built-in palettes, and a .theme / Alacritty file
     # joining that list. Links the real catalogue. No Canvas.
     add_executable(theme_test src/theme_test.cc src/theme_catalog.cc)
-    target_include_directories(theme_test PRIVATE src ${CMAKE_SOURCE_DIR}/framework/app_shell)
+    target_include_directories(theme_test PRIVATE src ${CMAKE_SOURCE_DIR}/framework/vk_canvas/app_shell)
     if(NOT MSVC)
         target_compile_options(theme_test PRIVATE -Wall)
     endif()
 
     add_executable(ui_text_test src/ui_text_test.cc)
-    target_include_directories(ui_text_test PRIVATE src ${CMAKE_SOURCE_DIR}/framework/app_shell)
+    target_include_directories(ui_text_test PRIVATE src ${CMAKE_SOURCE_DIR}/framework/vk_canvas/app_shell)
     if(NOT WIN32)
         target_compile_options(ui_text_test PRIVATE -Wall)
     endif()
@@ -412,12 +412,12 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
             src/ui_icons_draw.cc)
         target_include_directories(icon_preview PRIVATE
             src
-            ${CMAKE_SOURCE_DIR}/framework/app_shell
+            ${CMAKE_SOURCE_DIR}/framework/vk_canvas/app_shell
             ${CMAKE_BINARY_DIR}/generated
             ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/linux)
         target_compile_options(icon_preview PRIVATE -Wall)
         add_dependencies(icon_preview
-            compile_shared_shaders compile_vk_canvas_shaders generate_ui_min_text_size)
+            compile_shared_shaders compile_shared_compute_shaders compile_vk_canvas_shaders generate_ui_min_text_size)
         target_link_libraries(icon_preview PRIVATE
             app_shell
             vk_canvas_core
@@ -489,7 +489,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 
         target_compile_options(matrix_ui_capture PRIVATE -Wall)
         add_dependencies(matrix_ui_capture
-            compile_shared_shaders compile_vk_canvas_shaders generate_ui_min_text_size)
+            compile_shared_shaders compile_shared_compute_shaders compile_vk_canvas_shaders generate_ui_min_text_size)
 
         find_package(Threads REQUIRED)
         target_link_libraries(matrix_ui_capture PRIVATE

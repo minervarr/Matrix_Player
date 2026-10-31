@@ -5,6 +5,7 @@
 #include "log_util.h"
 #include "ui_fonts.hh"
 #include "ui_icons.hh"
+#include "ui_min_text_size.gen.h"   // kMinReadableTextSizePx, emitted by the build
 #include "bar_a.hh"
 #include "terminus_glyph.hh"
 #include "art_texture.hh"
@@ -2102,7 +2103,7 @@ void PlayerWindow::recalcLayout() {
     // computeUiMetrics()'s comment. Identical to the old `(float)H` for every
     // window wider than tall, which is every window that existed before the
     // vertical layout.
-    metrics_ = computeUiMetrics((float)std::min(safeW, safeH));
+    metrics_ = computeUiMetrics((float)std::min(safeW, safeH), kMinReadableTextSizePx);
 
     // Every fixed-pixel value below is authored at the 1080 reference height
     // and passed through metrics_.space() — see ui_metrics.hh. Values that used

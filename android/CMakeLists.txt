@@ -141,12 +141,18 @@ vce_compile_slang(compile_shared_shaders
     ${REPO_ROOT}/framework/vk_canvas/first_party/vulkan_font_engine/shaders_src
     composite_vert
     composite_frag
-    tiling
-    coverage
     msdf_vert
     msdf_frag
     glyph_area
     glyph_resolve
+)
+# Compute entry points need the explicit stage; see the desktop CMakeLists.
+vce_compile_slang_stage(compile_shared_compute_shaders
+    ${MATRIX_ANDROID_SHADER_DIR}
+    ${REPO_ROOT}/framework/vk_canvas/first_party/vulkan_font_engine/shaders_src
+    compute
+    tiling
+    coverage
 )
 vce_compile_slang(compile_vk_canvas_shaders
     ${MATRIX_ANDROID_SHADER_DIR}
@@ -226,10 +232,10 @@ add_subdirectory(${REPO_ROOT}/third_party/soxr ${CMAKE_BINARY_DIR}/soxr)
 # of this app's own Android code is src/main.cc, six lines of which construct
 # the desktop PlayerWindow and run it.
 # Same name the desktop passes, so the logcat tag stays "matrix_player" — see
-# framework/app_shell/app_main.hh.
+# framework/vk_canvas/app_shell/app_main.hh.
 set(APP_SHELL_APP_NAME "matrix_player" CACHE STRING "" FORCE)
 set(APP_SHELL_NATIVE_APP_GLUE_DIR ${NATIVE_APP_GLUE} CACHE PATH "" FORCE)
-add_subdirectory(${REPO_ROOT}/framework/app_shell ${CMAKE_BINARY_DIR}/app_shell)
+add_subdirectory(${REPO_ROOT}/framework/vk_canvas/app_shell ${CMAKE_BINARY_DIR}/app_shell)
 
 # gui/src: the WHOLE app, not a selection of portable pieces. player_view.cc
 # includes no OS header — its only platform coupling is the Host interface
@@ -324,7 +330,7 @@ target_link_libraries(matrix_player_android
     soxr
     vk_canvas_core)
 
-add_dependencies(matrix_player_android compile_shared_shaders compile_vk_canvas_shaders)
+add_dependencies(matrix_player_android compile_shared_shaders compile_shared_compute_shaders compile_vk_canvas_shaders)
 
 # Keep the glue's NativeActivity entry point alive against linker GC (same
 # rule framework/vk_canvas/platform/android/CMakeLists.txt already documents).

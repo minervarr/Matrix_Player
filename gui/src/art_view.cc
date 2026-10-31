@@ -4,6 +4,7 @@
 #include "ui_icons.hh"
 #include "art_texture.hh"
 #include "ui_metrics.hh"
+#include "ui_min_text_size.gen.h"   // kMinReadableTextSizePx, emitted by the build
 #include "theme.hh"
 #include "host.hh"
 #include <cstdio>
@@ -300,7 +301,8 @@ void ArtWindow::openFonts(const std::string& boldPath, const std::string& italic
     std::vector<uint32_t> cps;
     for (uint32_t cp = 0x0020; cp <= 0x00FF; cp++) cps.push_back(cp);
     const int body = (int)(computeUiMetrics((float)std::min(renderer_->width(),
-                                                            renderer_->height()))
+                                                            renderer_->height()),
+                                            kMinReadableTextSizePx)
                                .text.body + 0.5f);
     if (msdfFont_.ensureGlyphs(cps, {body}) > 0 || !renderer_->msdfReady())
         renderer_->initMsdf(msdfFont_);
@@ -421,7 +423,8 @@ void ArtWindow::drawFrame() {
         // album-art window actually exists for. computeUiMetrics() is a free
         // function, so this window can use the same scale without a PlayerWindow.
         canvas.textCentered("No artwork", canvas.w() * 0.5f, canvas.h() * 0.5f,
-                            computeUiMetrics(std::min(canvas.w(), canvas.h())).text.body,
+                            computeUiMetrics(std::min(canvas.w(), canvas.h()),
+                                             kMinReadableTextSizePx).text.body,
                             toColor(CLR_TEXT_DIM));
     }
     renderer_->draw(frameCurves_, /*overlay_rotation_deg=*/0, frameImages_, {}, msdfQuads_,

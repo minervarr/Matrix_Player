@@ -89,7 +89,7 @@ android {
             // between. The native half (os/activity_bridge.cc) is already
             // linked via app_shell_android — only the Java half was missing,
             // which is why showKeyboard() was a silent no-op.
-            java.srcDirs += '../../framework/app_shell/platform/android/java'
+            java.srcDirs += '../../framework/vk_canvas/app_shell/platform/android/java'
         }
     }
 

@@ -44,6 +44,7 @@
 #include "ui_fonts.hh"
 #include "ui_icons.hh"
 #include "ui_metrics.hh"
+#include "ui_min_text_size.gen.h"   // kMinReadableTextSizePx, emitted by the build
 
 namespace {
 
@@ -188,7 +189,7 @@ private:
         if (msdfFont_.valid()) c.useMsdf(&msdfFont_, &quads_);
 
         c.clear(toColor(background()));
-        const UiMetrics m = computeUiMetrics(c.h());
+        const UiMetrics m = computeUiMetrics(c.h(), kMinReadableTextSizePx);
         const Color fg = toColor(foreground());
         const Color dim = toColor(bg_ == 2 ? 0x606060 : CLR_TEXT_DIM);
 

@@ -285,7 +285,7 @@ add_subdirectory(third_party/soxr)
 # ---------- app_shell (the application shell: Host + where files live) ------
 # The Host/AppView seam and its three implementations, plus app_paths,
 # ui_metrics and ui_orientation. Lifted out of gui/ so a second application can
-# LINK it instead of copying it — see framework/app_shell/CLAUDE.md.
+# LINK it instead of copying it — see framework/vk_canvas/app_shell/CLAUDE.md.
 #
 # Must come before core/ and gui/: both include its headers.
 #
@@ -307,18 +307,17 @@ set(APP_SHELL_APP_ID       "matrix-player" CACHE STRING "" FORCE)
 if(MATRIX_STATE_HOME)
     set(APP_SHELL_STATE_HOME "${MATRIX_STATE_HOME}" CACHE STRING "" FORCE)
 endif()
-add_subdirectory(framework/app_shell app_shell_build)
+add_subdirectory(framework/vk_canvas/app_shell app_shell_build)
 
 # ---------- The faces that actually SHIP ------------------------------------
 # One list, shared with the Android build (which does not read this file).
 include(${CMAKE_SOURCE_DIR}/cmake/MatrixFonts.cmake)
 
 # ---------- min_text_size (build-time UI text-size floor generator) ----------
-# The recipe now belongs to app_shell (its ui_metrics.hh is what includes the
-# generated header); this call is the part that is genuinely OURS — the list of
-# faces, which must be exactly the ones gui/src/ui_fonts.hh loads, because the
-# emitted floor is the WORST case across them and a face left out here could
-# render below it.
+# The recipe lives in app_shell/cmake; this call is the part that is genuinely
+# OURS — the list of faces, which must be exactly the ones gui/src/ui_fonts.hh
+# loads, because the emitted floor is the WORST case across them and a face left
+# out here could render below it.
 include(AppShellMinTextSize)
 app_shell_generate_min_text_size(
     ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-Regular.otf
@@ -326,11 +325,9 @@ app_shell_generate_min_text_size(
     ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-Italic.otf
     ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCMMono10-Regular.otf)
 
-# app_shell's ui_metrics.cc INCLUDES the header that call just declared, so it
-# has to wait for it. Stated here rather than inside app_shell's own
-# CMakeLists.txt because the target does not exist yet when CMake reads that
-# file — the consumer owns the font list, so the consumer owns the ordering.
-add_dependencies(app_shell generate_ui_min_text_size)
+# app_shell no longer includes the generated header: ui_metrics takes the floor
+# as an argument. An app that wants the measured constant can still include it;
+# this consumer does not, so app_shell needs no dependency on the generator.
 
 # ---------- shaders (compile next to the exe) ----------
 # vk_canvas's FileAssetReader reads <exe dir>/assets/shaders/, same convention
@@ -350,12 +347,20 @@ vce_compile_slang(compile_shared_shaders
     ${CMAKE_SOURCE_DIR}/framework/vk_canvas/first_party/vulkan_font_engine/shaders_src
     composite_vert
     composite_frag
-    tiling
-    coverage
     msdf_vert
     msdf_frag
     glyph_area
     glyph_resolve
+)
+# tiling and coverage are compute shaders. Slang cannot infer the stage from
+# their signature, so they need the explicit-stage helper; the graphics entry
+# points above carry [shader(...)] attributes.
+vce_compile_slang_stage(compile_shared_compute_shaders
+    ${CMAKE_BINARY_DIR}/assets/shaders
+    ${CMAKE_SOURCE_DIR}/framework/vk_canvas/first_party/vulkan_font_engine/shaders_src
+    compute
+    tiling
+    coverage
 )
 vce_compile_slang(compile_vk_canvas_shaders
     ${CMAKE_BINARY_DIR}/assets/shaders
@@ -370,7 +375,7 @@ vce_compile_slang(compile_vk_canvas_shaders
 # The probe reads those SPIR-V files at runtime. The targets above are
 # declared after vk_canvas/core, so the dependency has to be stated here.
 if(TARGET text_edge_probe)
-    add_dependencies(text_edge_probe compile_shared_shaders compile_vk_canvas_shaders)
+    add_dependencies(text_edge_probe compile_shared_shaders compile_shared_compute_shaders compile_vk_canvas_shaders)
 endif()
 
 # ---------- matrix_core (portable library: scan/db/eq/decode) ----------
