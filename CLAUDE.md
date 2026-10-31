@@ -395,12 +395,13 @@ Any non-interactive invocation (mode flag passed, or stdin not a TTY — e.g. CI
 defaults to Release/Universal. Extra args after the flags above pass straight
 through to `cmake` (e.g. `-DMATRIX_ARCH_LEVEL=v4`, `-DMATRIX_BUILD_AB_TEST=ON`).
 
-`vk_canvas`'s `VceShaders.cmake` resolves `slangc` from `$VULKAN_SDK/bin/slangc`,
-falling back to a hardcoded **Windows** path if unset (that cmake file belongs to the
-vk_canvas submodule — never patched in place). `scripts/linux/build.sh` already probes
-for a `slangc` on `PATH` or at a couple of known locations and passes
-`-DVCE_SLANGC=...` automatically; pass it yourself if your `slangc` lives elsewhere:
-`scripts/linux/build.sh -DVCE_SLANGC=/path/to/slangc`.
+`vk_canvas`'s `VceShaders.cmake` has a hardcoded **Windows** SDK path as its fallback
+(that cmake file belongs to the vk_canvas submodule — never patched in place). Both
+top-level projects therefore call `cmake/MatrixSlangc.cmake` first, which resolves
+`slangc` from (in order) `-DVCE_SLANGC`, `$SLANGC`, `PATH`, `$VULKAN_SDK`, the two Arch
+prefixes (`/opt/shader-slang{,-bin}/bin`) and any installed Windows SDK. A plain
+`cmake -S . -B build` works without `VULKAN_SDK`; pass
+`-DVCE_SLANGC=/path/to/slangc` only if the compiler lives somewhere unusual.
 
 Output: `build/linux/gui/matrix_player` (plus `matrix_player.log` and `eq_profiles.json`/
 `fonts/`/`assets/` copied next to it by the build's POST_BUILD steps).
@@ -1848,7 +1849,7 @@ silent-handover claim.
 ### Building it
 
 ```bash
-cd android && VULKAN_SDK=/opt/shader-slang sh gradlew assembleDebug --no-daemon
+cd android && sh gradlew assembleDebug --no-daemon
 # SUCCESSFUL is not enough — check the APK carries its assets, and the app:
 unzip -l app/build/outputs/apk/debug/app-arm64-v8a-debug.apk | grep -c "assets/fonts/"   # 11
 # ...and the AutoEQ catalogue, or the EQ panel lists nothing (see below):

@@ -95,7 +95,7 @@ headers and libraries and not `matrix_player`.
 |---|---|
 | `-DMATRIX_STATE_HOME=.matrix_player` | The whole reason a read-only `/opt` install works. |
 | `-DMATRIX_ARCH_LEVEL=` *(per variant)* | Empty for universal; `v3`/`v4`/`znver4` otherwise. |
-| `-DVCE_SLANGC=...` | `slangc` is required at build time; no `.spv` is committed, and `VceShaders.cmake` otherwise falls back to a hardcoded Windows path. AUR has it as `shader-slang-bin` (`/opt/shader-slang-bin/bin/slangc`, not on `PATH`). |
+| `-DVCE_SLANGC=...` | `slangc` is required at build time; no `.spv` is committed. `cmake/MatrixSlangc.cmake` now probes `PATH`, `$VULKAN_SDK` and `/opt/shader-slang{,-bin}/bin`, so the explicit flag is only an override for an unusual prefix. |
 | `-DAUDIO_ENGINE_BUILD_TOOLS=OFF` | Defaults to ON and would build eight smoke-test executables nothing packages. |
 
 **`-march=native` is deliberately never used.** It bakes in whatever the build

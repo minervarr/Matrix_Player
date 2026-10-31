@@ -127,6 +127,14 @@ add_subdirectory(${REPO_ROOT}/framework/vk_canvas/core ${CMAKE_BINARY_DIR}/vk_ca
 # app/src/main/assets/shaders/ so AGP packages it into the APK, same
 # convention vk_canvas's own Android demo uses for its own (smaller) list.
 set(MATRIX_ANDROID_SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/app/src/main/assets/shaders)
+# Resolve slangc portably BEFORE VceShaders.cmake runs. Its own fallback is a
+# hardcoded C:/VulkanSDK/<version>/Bin/slangc.exe, which is never right on this
+# (Linux, distro vulkan-devel) build host and is stale on Windows too. The
+# shared module probes PATH, $VULKAN_SDK, the two AUR prefixes and any installed
+# Windows SDK; a stale VCE_SLANGC from a reused app/.cxx tree is ignored.
+# Override with -DVCE_SLANGC=/path/to/slangc or $SLANGC.
+include(${REPO_ROOT}/cmake/MatrixSlangc.cmake)
+matrix_resolve_slangc()
 include(${REPO_ROOT}/framework/vk_canvas/cmake/VceShaders.cmake)
 vce_compile_slang(compile_shared_shaders
     ${MATRIX_ANDROID_SHADER_DIR}

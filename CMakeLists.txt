@@ -336,6 +336,14 @@ add_dependencies(app_shell generate_ui_min_text_size)
 # vk_canvas's FileAssetReader reads <exe dir>/assets/shaders/, same convention
 # as the library's own demo. composite/tiling/coverage/msdf are canonically
 # owned by the font engine submodule; overlay/image/shape are vk_canvas's own.
+#
+# slangc is resolved before VceShaders.cmake because that file's own default is
+# a hardcoded Windows SDK path; see cmake/MatrixSlangc.cmake. This also means a
+# plain `cmake -S . -B build` works on Linux without VULKAN_SDK or an explicit
+# -DVCE_SLANGC, and scripts/linux/build.sh no longer has to be the only path
+# that knows where the compiler is.
+include(cmake/MatrixSlangc.cmake)
+matrix_resolve_slangc()
 include(framework/vk_canvas/cmake/VceShaders.cmake)
 vce_compile_slang(compile_shared_shaders
     ${CMAKE_BINARY_DIR}/assets/shaders

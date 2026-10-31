@@ -313,8 +313,10 @@ Ninguna de estas se anuncia con un error claro:
 - **`optional::value_or({})` no compila con libc++** (la libstdc++ de GCC lo acepta como
   extensión). No hay tipo del que deducir `U&&`. Igual: `decltype(x)::value_type` necesita
   `typename`. El NDK destapa código no portable que Linux escondía.
-- **`VceShaders.cmake` cae a una ruta fija de Windows** si `$VULKAN_SDK` no existe. Pasa
-  `-DVCE_SLANGC=` explícito desde Gradle.
+- **`VceShaders.cmake` cae a una ruta fija de Windows** si `$VULKAN_SDK` no existe.
+  `cmake/MatrixSlangc.cmake` (compartido por el build de escritorio y el de Android)
+  resuelve `slangc` desde `PATH`, `$VULKAN_SDK` o los prefijos de Arch antes de incluir
+  ese archivo. Ya no hace falta pasar `-DVCE_SLANGC=` desde Gradle.
 - **LTO se desactiva sola bajo el NDK** (`ld.gold` no encuentra `LLVMgold.so`). Sale un
   error rojo por consola y la build continúa correctamente; no lo persigas.
 
@@ -328,7 +330,7 @@ scripts/linux/build.sh --debug -DSTREAMER_GUI=ON -DVCE_SLANGC=/opt/shader-slang/
 build/linux_debug/gui/streamer_gui --selftest      # debe decir: ok (117 assertions)
 
 # streamer, Android
-cd android && VULKAN_SDK=/opt/shader-slang sh gradlew assembleDebug --no-daemon
+cd android && sh gradlew assembleDebug --no-daemon
 # y comprobar que el APK lleva los assets, no solo que la build diga SUCCESSFUL:
 unzip -l app/build/outputs/apk/debug/app-arm64-v8a-debug.apk | grep -cE "assets/fonts/"   # 9
 ```
