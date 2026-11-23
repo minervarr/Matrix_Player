@@ -8,6 +8,12 @@ set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 set(NATIVE_APP_GLUE ${ANDROID_NDK}/sources/android/native_app_glue)
 
+# soxr: prepare the patched copy before matrix_core is configured, because
+# matrix_core's public include directory points at it. The target itself is
+# added later, below. See patches/ApplySoxr.cmake.
+include(${REPO_ROOT}/patches/ApplySoxr.cmake)
+matrix_prepare_soxr_source("${REPO_ROOT}" SOXR_SOURCE_DIR)
+
 # audio_engine: ae_core/ae_usb/ae_flac/ae_aaudio/ae_mediacodec linked directly
 # as C++ targets (no C ABI — this app's own native code is C++, no JNI
 # language boundary to cross). AUDIO_ENGINE_BUILD_TOOLS is desktop-only
@@ -214,17 +220,17 @@ configure_file(${UI_MIN_TEXT_SIZE_SRC} ${UI_MIN_TEXT_SIZE_DIR}/ui_min_text_size.
 # using the same AMotionEvent_* primitives instead.
 set(VK_CANVAS_ANDROID_PLATFORM ${REPO_ROOT}/framework/vk_canvas/platform/android)
 
-# soxr: the resampler player_view.cc uses for the Reference EQ path. Portable
-# C, add_subdirectory'd exactly as the desktop root CMakeLists.txt does — it is
-# not optional here, because the app being compiled IS the desktop app.
-include(${REPO_ROOT}/patches/ApplySoxr.cmake)
-matrix_apply_soxr_patch("${REPO_ROOT}")
-list(APPEND CMAKE_MODULE_PATH "${REPO_ROOT}/third_party/soxr/cmake/Modules")
+# soxr: the resampler player_view.cc uses for the Reference EQ path. The
+# patched copy was prepared at the top of this file (matrix_core advertises its
+# src/ include directory, and matrix_core is configured earlier); add the
+# target here with the same options the desktop root CMakeLists.txt uses. It is
+# not optional: the app being compiled IS the desktop app.
+list(APPEND CMAKE_MODULE_PATH "${SOXR_SOURCE_DIR}/cmake/Modules")
 set(BUILD_TESTS       OFF CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES    OFF CACHE BOOL "" FORCE)
 set(WITH_OPENMP       OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-add_subdirectory(${REPO_ROOT}/third_party/soxr ${CMAKE_BINARY_DIR}/soxr)
+add_subdirectory(${SOXR_SOURCE_DIR} ${CMAKE_BINARY_DIR}/soxr)
 
 # app_shell: the Host seam, the third Host, and the Android JNI plumbing that
 # used to live in src/ here (android_host, launch_intent, safe_area,

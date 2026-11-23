@@ -271,16 +271,19 @@ else()
 endif()
 
 # ---------- soxr resampler ----------
+# The pinned submodule stays untouched; the modernisation patch is applied to
+# a copy under the build tree (see patches/ApplySoxr.cmake). SOXR_SOURCE_DIR is
+# the patched copy, and core/ advertises its src/ directory.
 include(${CMAKE_CURRENT_SOURCE_DIR}/patches/ApplySoxr.cmake)
-matrix_apply_soxr_patch("${CMAKE_CURRENT_SOURCE_DIR}")
+matrix_prepare_soxr_source("${CMAKE_CURRENT_SOURCE_DIR}" SOXR_SOURCE_DIR)
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/third_party/soxr/cmake/Modules")
+list(APPEND CMAKE_MODULE_PATH "${SOXR_SOURCE_DIR}/cmake/Modules")
 set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(WITH_OPENMP OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(WITH_LSR_BINDINGS OFF CACHE BOOL "" FORCE)
-add_subdirectory(third_party/soxr)
+add_subdirectory("${SOXR_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/soxr-build")
 
 # ---------- app_shell (the application shell: Host + where files live) ------
 # The Host/AppView seam and its three implementations, plus app_paths,

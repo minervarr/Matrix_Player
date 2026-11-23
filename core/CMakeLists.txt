@@ -23,7 +23,7 @@ add_library(matrix_core STATIC
 target_include_directories(matrix_core PUBLIC
     include
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party
-    ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/soxr/src)
+    ${SOXR_SOURCE_DIR}/src)
 
 # arc_fs is PUBLIC because core/include/core/streamer_db.h's search-path helper
 # is arc::fs::ancestorsUpTo() — the header names it, so a consumer needs it too.

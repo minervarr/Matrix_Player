@@ -67,7 +67,7 @@ if(WIN32)
     target_include_directories(matrix_player PRIVATE
         src
         ${CMAKE_SOURCE_DIR}/third_party
-        ${CMAKE_SOURCE_DIR}/third_party/soxr/src
+        ${SOXR_SOURCE_DIR}/src
         ${CMAKE_BINARY_DIR}/generated
         ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/windows)
 
@@ -161,7 +161,7 @@ else()
     target_include_directories(matrix_player PRIVATE
         src
         ${CMAKE_SOURCE_DIR}/third_party
-        ${CMAKE_SOURCE_DIR}/third_party/soxr/src
+        ${SOXR_SOURCE_DIR}/src
         ${CMAKE_BINARY_DIR}/generated
         ${CMAKE_SOURCE_DIR}/framework/audio_engine
         ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/linux)
@@ -477,7 +477,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         target_include_directories(matrix_ui_capture PRIVATE
             src
             ${CMAKE_SOURCE_DIR}/third_party
-            ${CMAKE_SOURCE_DIR}/third_party/soxr/src
+            ${SOXR_SOURCE_DIR}/src
             ${CMAKE_BINARY_DIR}/generated
             ${CMAKE_SOURCE_DIR}/framework/vk_canvas/platform/linux
             # bluez_a2dp.h, reached the same way matrix_player reaches it: the
