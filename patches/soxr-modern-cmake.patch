@@ -3,7 +3,7 @@
 # calloc argument order. GCC and Clang both ignore STDC FENV_ACCESS and
 # warn; on x86 the quantiser is the fistp instruction. calloc(n, sizeof)
 # is the order GCC 14+ checks.
-# From Matrix_Player: git -C third_party/soxr apply ../../patches/soxr-modern-cmake.patch
+# Applied to a build-tree copy by patches/ApplySoxr.cmake; the submodule stays pristine.
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index ee48f6c..a3d67c9 100644
