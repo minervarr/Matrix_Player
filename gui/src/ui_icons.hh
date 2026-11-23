@@ -2,11 +2,13 @@
 #include "layout_rect.hh"
 #include "ui_icons.gen.h"   // generated: kIconCp*, kIconBoxEm, kIconCodepoints
 
-// UI icons drawn as glyphs from the shared MTSDF atlas.
+// UI icons drawn as glyphs from the shared raster atlas.
 //
-// The artwork lives in assets/fonts/icons/matrix-icons.otf (built from
-// tools/icon_font/icons/*.svg by tools/icon_font/build_icon_font.py) and is
-// baked into the same atlas as the UI text by PlayerWindow::bakeIconGlyphs().
+// The artwork is authored in tools/icon_font/icons/*.svg and built by
+// tools/icon_font/build_icon_font.py into two outputs that belong together:
+// the codepoints/boxes in ui_icons.gen.h and the font bytes compiled into the
+// binary from that same header. Nothing is opened from the filesystem at
+// runtime; a package cannot ship the codepoints without the outlines.
 // Drawing an icon is therefore one more text quad in a pass that already runs
 // every frame: arbitrary curves, tinted at draw time, no extra GPU pass and no
 // per-frame Bezier work.

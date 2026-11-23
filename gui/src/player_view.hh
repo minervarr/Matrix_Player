@@ -657,11 +657,11 @@ private:
     // Real window/monitor/message-pump handle — see host.hh.
     std::unique_ptr<Host> host_;
 
-    // Transport/UI icons are glyphs in the shared MTSDF atlas, baked from
-    // assets/fonts/icons/matrix-icons.otf — real curves, tinted at draw time,
-    // no extra GPU pass and no texture uploads. See ui_icons.hh, and
-    // drawUiIcon() in player_view.cc for the primitive fallback used when the
-    // icon font is missing.
+    // Transport/UI icons are glyphs in the shared raster atlas, baked from
+    // the face compiled into the binary (ui_icons.gen.h) — real curves, tinted
+    // at draw time, no extra GPU pass and no texture uploads. See ui_icons.hh,
+    // and drawUiIcon() in player_view.cc for the primitive fallback used when
+    // the icon face is unavailable.
 
     // Orientation state. `orientation_` is the POLICY (automatic, or a manual
     // choice that sticks); `curOrientation_` is the ANSWER for the window as it

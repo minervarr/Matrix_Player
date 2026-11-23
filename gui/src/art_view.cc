@@ -1,6 +1,7 @@
 #include "art_view.hh"
 #include "app_paths.hh"
 #include "ui_fonts.hh"
+#include "ui_icons.hh"
 #include "art_texture.hh"
 #include "ui_metrics.hh"
 #include "theme.hh"
@@ -68,7 +69,7 @@ bool ArtWindow::create(Host*, const RasterFont* shareFontsWith) {
     uiFont_.load(fontPath.c_str());
 
     openFonts(toUtf8Path(ui_fonts::bold()), toUtf8Path(ui_fonts::italic()),
-              toUtf8Path(ui_fonts::mono()), toUtf8Path(ui_fonts::icons()),
+              toUtf8Path(ui_fonts::mono()),
               toUtf8Path("fonts/"), fontPath, shareFontsWith);
 
     return true;
@@ -180,7 +181,7 @@ bool ArtWindow::create(Host* host, const RasterFont* shareFontsWith) {
     uiFont_.load(fontPath.c_str());
 
     openFonts(exeDir + ui_fonts::bold(), exeDir + ui_fonts::italic(),
-              exeDir + ui_fonts::mono(), exeDir + ui_fonts::icons(),
+              exeDir + ui_fonts::mono(),
               exeDir + "fonts/", fontPath, shareFontsWith);
 
     return true;
@@ -259,7 +260,7 @@ void ArtWindow::onKey(const KeyEvent& e) {
 // cache now and none is wanted: this window draws a handful of labels, so its
 // atlas is a few dozen cells that bake in well under a millisecond.
 void ArtWindow::openFonts(const std::string& boldPath, const std::string& italicPath,
-                          const std::string& monoPath, const std::string& iconPath,
+                          const std::string& monoPath,
                           const std::string& fontsDir, const std::string& regularPath,
                           const RasterFont* shareFontsWith) {
     // Only the FACE OPENING is shareable. The seeding at the bottom is not: it
@@ -274,7 +275,11 @@ void ArtWindow::openFonts(const std::string& boldPath, const std::string& italic
         msdfFont_.addStyle(loader, italicPath.c_str(), FontStyle::Italic);
         msdfFont_.addStyle(loader, monoPath.c_str(),   FontStyle::Math);
 
-        msdfFont_.addOverride(loader, iconPath.c_str());
+        // Same compiled-in face as PlayerWindow — see the comment there.
+        if (!msdfFont_.addOverrideFromMemory(kIconFontOtf, kIconFontOtfSize))
+            std::fprintf(stderr,
+                         "[Fonts] embedded icon face failed to load; "
+                         "icons will use primitive shapes\n");
         // Same serif chain and the same matched Bold cuts as PlayerWindow — see
         // there for why these faces and not the sans/calligraphic ones bundled
         // beside them.

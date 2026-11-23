@@ -42,7 +42,11 @@ bool drawUiIconGlyph(Canvas& c, const LayoutRect& rc, UiIcon icon, const Color& 
     if (!font) return false;
 
     const unsigned cp = uiIconCodepoint(icon);
-    if (cp == 0 || !font->hasCodepoint(cp)) return false;
+    // hasOverride(), not hasCodepoint(): New Computer Modern maps U+E000
+    // onward to its own ligature glyphs, so ordinary coverage would answer
+    // "yes" and draw f_b/f_f_h where the icon belongs. Only a face registered
+    // with addOverride() may draw an icon.
+    if (cp == 0 || !font->hasOverride(cp)) return false;
 
     const IconPlacement p = uiIconPlacement(rc, icon);
     if (p.sizePx <= 0.0f) return false;

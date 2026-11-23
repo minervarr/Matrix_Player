@@ -23,7 +23,9 @@ inline const char* italic()  { return "fonts/newcomputermodern/NewCM10-Italic.ot
 // that must not jitter as digits change) — this app never renders math.
 inline const char* mono()    { return "fonts/newcomputermodern/NewCMMono10-Regular.otf"; }
 
-// The icon font, baked into the same atlas (see ui_icons.hh).
+// The icon font as a FILE, for icon_preview and other tooling. The shipped
+// player compiles the same bytes into the binary through ui_icons.gen.h, so a
+// package that omits this file cannot leave the UI without icons.
 inline const char* icons()   { return "fonts/icons/matrix-icons.otf"; }
 
 // Cache filename, fingerprinted by the icon geometry. BARE — no directory

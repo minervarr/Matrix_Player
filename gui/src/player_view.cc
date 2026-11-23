@@ -473,7 +473,15 @@ bool PlayerWindow::create(std::unique_ptr<Host> injectedHost) {
             // Here it only decides which face wins a codepoint two of them
             // both have, but the order is kept because it is still the right
             // priority.
-            msdfFont_.addOverride(loader, (exeDir + ui_fonts::icons()).c_str());
+            //
+            // The face comes from ui_icons.gen.h, not from fonts/icons/. It is
+            // 1.8 KB and its codepoints are compiled into that same header, so
+            // shipping the bytes separately let a packager omit one half of an
+            // interface that only works as a pair.
+            if (!msdfFont_.addOverrideFromMemory(kIconFontOtf, kIconFontOtfSize))
+                std::fprintf(stderr,
+                             "[Fonts] embedded icon face failed to load; "
+                             "icons will use primitive shapes\n");
 
             // Song / Mincho / Batang: the Ming-Mincho-Myeongjo serif tradition,
             // with the stroke contrast and terminal serifs that make them read

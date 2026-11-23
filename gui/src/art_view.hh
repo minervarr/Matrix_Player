@@ -152,7 +152,7 @@ private:
     // create() call it. See its definition for why this window keeps its own
     // RasterFont rather than sharing PlayerWindow's.
     void openFonts(const std::string& boldPath, const std::string& italicPath,
-                   const std::string& monoPath, const std::string& iconPath,
+                   const std::string& monoPath,
                    const std::string& fontsDir, const std::string& regularPath,
                    const RasterFont* shareFontsWith = nullptr);
 

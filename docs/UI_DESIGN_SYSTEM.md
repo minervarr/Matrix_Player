@@ -345,16 +345,17 @@ state is `CLR_ACCENT`.
 
 ## 7. Iconography
 
-Icons are **glyphs in the shared MTSDF atlas** — the same atlas, shader and
+Icons are **glyphs in the shared raster atlas** — the same atlas, shader and
 draw pass as the UI text. Not images: they carry no colour, cost no extra GPU
 pass, and are tinted at draw time exactly like text. Same approach Apple uses
 for SF Symbols.
 
 Artwork is authored in Inkscape as SVG (`tools/icon_font/icons/*.svg`) and
-packaged into `assets/fonts/icons/matrix-icons.otf` by
-`tools/icon_font/build_icon_font.py`. `PlayerWindow::bakeIconGlyphs()` bakes it
-into the atlas at Private Use Area codepoints; `drawUiIconGlyph`
-(`ui_icons_draw.cc`) draws it.
+built by `tools/icon_font/build_icon_font.py` into
+`assets/icons/matrix-icons.otf` plus `gui/src/ui_icons.gen.h`. The font bytes
+are compiled into the binary from that header, so no runtime file has to be
+packaged beside it. `PlayerWindow::refreshGlyphs()` bakes the Private Use Area
+codepoints into the atlas; `drawUiIconGlyph` (`ui_icons_draw.cc`) draws them.
 
 | Icon | Shape |
 |---|---|

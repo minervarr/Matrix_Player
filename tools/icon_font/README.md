@@ -1,10 +1,12 @@
 # UI icon font
 
-Icons are authored as SVGs here and packaged into `matrix-icons.otf`, which is
-baked into the app's shared MTSDF atlas alongside the UI text. Drawing an icon
-is then one more text quad in a pass that already runs every frame — arbitrary
-curves, tinted at draw time, no extra GPU pass, no texture uploads, and none of
-the per-frame Bézier cost that makes real-time vector rendering expensive.
+Icons are authored as SVGs here and built into `assets/icons/matrix-icons.otf`.
+The same generator embeds the font bytes into `gui/src/ui_icons.gen.h`, so the
+player compiles the face into the binary instead of opening a runtime file.
+Drawing an icon is then one more text quad in a pass that already runs every
+frame — arbitrary curves, tinted at draw time, no extra GPU pass, no texture
+uploads, and none of the per-frame Bézier cost that makes real-time vector
+rendering expensive.
 
 Same idea as Apple's SF Symbols, which ships as a font for the same reasons.
 
